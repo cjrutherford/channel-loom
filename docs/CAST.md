@@ -42,8 +42,9 @@ series, and the app icon as artwork.
 
 1. Open the [Google Cast SDK Developer Console](https://cast.google.com/publish).
 2. Add a **Styled Media Receiver**.
-3. Set the title to `Awesome TV`, upload the logo and background, and choose a
-   dark theme.
+3. Set the title to `Awesome TV`, upload the logo and background from
+   `deploy/cast/` (`awesome-tv-cast-logo.png`,
+   `awesome-tv-cast-background.png`), and choose a dark theme.
 4. Copy the generated **App ID**.
 5. Set it and restart the app:
 
