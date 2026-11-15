@@ -1,7 +1,7 @@
 # Status and remaining work
 
 Date: 2026-11-15
-Running: `http://100.120.253.100:8409` (Tailscale only)
+Running: `http://192.168.1.153:8409` (LAN), `http://100.120.253.100:8409` (Tailscale), `https://nirvana.tail5a4a0.ts.net:8447` (Tailscale HTTPS)
 
 ## Current state
 

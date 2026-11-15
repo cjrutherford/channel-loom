@@ -80,7 +80,8 @@ Cast is a first-class playback target, not an afterthought.
 - The playlist is rewritten with absolute segment URLs and works with the
   Chromecast Default Media Receiver.
 - `AWESOMETV_CAST_BASE_URL` selects the address a Cast device can reach (LAN or
-  public). If unset, the configured public URL is used.
+  public). If unset, the configured public URL is used. The current deployment
+  uses `http://192.168.1.153:8409` for LAN Cast.
 
 #### Frontend
 
