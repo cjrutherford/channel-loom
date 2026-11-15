@@ -167,3 +167,5 @@ Recommended order:
 - Cache budget and secret-key recovery policy.
 - P2P discovery, pairing, share scope, numbering, re-sharing policy.
 - Cast base URL (LAN vs public) for the deployment.
+- Public reverse proxy setup: `deploy/nginx/` points
+  `atv.christopherrutherford.net` at the app.
