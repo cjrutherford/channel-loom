@@ -1579,10 +1579,15 @@ pub async fn trim_precache_queue(pool: &SqlitePool, keep: i64) -> Result<u64> {
     Ok(result.rows_affected())
 }
 
-pub async fn next_queued_precache(pool: &SqlitePool) -> Result<Option<PrecacheEntry>> {
+pub async fn next_queued_precache(
+    pool: &SqlitePool,
+    not_before_ms: i64,
+) -> Result<Option<PrecacheEntry>> {
     let row = sqlx::query(
-        "SELECT * FROM precache_entries WHERE status = 'queued' ORDER BY deadline_ms, start_ms LIMIT 1",
+        "SELECT * FROM precache_entries WHERE status = 'queued' AND deadline_ms >= ? \
+         ORDER BY deadline_ms, start_ms LIMIT 1",
     )
+    .bind(not_before_ms)
     .fetch_optional(pool)
     .await?;
     Ok(row.as_ref().map(precache_row))

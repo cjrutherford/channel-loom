@@ -107,7 +107,7 @@ impl Precache {
 
     async fn tick_inner(self: &Arc<Self>) -> Result<()> {
         let now = db::now_ms();
-        let stale = db::prune_precache_queue(&self.pool, now - 600_000).await?;
+        let stale = db::prune_precache_queue(&self.pool, now).await?;
         if stale > 0 {
             tracing::debug!(stale, "precache dropped expired queue entries");
         }
@@ -286,7 +286,7 @@ impl Precache {
                 tokio::time::sleep(Duration::from_secs(20)).await;
                 continue;
             }
-            let Some(entry) = db::next_queued_precache(&self.pool).await? else {
+            let Some(entry) = db::next_queued_precache(&self.pool, db::now_ms()).await? else {
                 return Ok(());
             };
             db::set_precache_status(&self.pool, &entry.media_id, "running", entry.bytes, None)
