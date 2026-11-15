@@ -21,4 +21,11 @@ A clean-room, modern replacement for [ErsatzTV](https://ersatztv.org/): turn a p
 - [ADRs](docs/adr/)
 - [Clean-room policy](docs/CLEAN-ROOM.md)
 
+## Serving
+
+- `/` — public live viewer: channel rail, HLS player, and guide.
+- `/admin` — login-gated broadcast console.
+- `/api/v1/public/*` — read-only viewer APIs; all other `/api/v1/*` routes require auth.
+- `/iptv/channels.m3u`, `/iptv/xmltv.xml`, `/discover.json` — IPTV and HDHomeRun endpoints.
+
 Created in [T3 Code](https://t3.codes).

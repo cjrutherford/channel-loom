@@ -1,6 +1,6 @@
 # Cloud source design
 
-Status: shared core and Google Drive adapter implemented. Interactive OAuth, provider webhooks, and the public viewer split remain deferred until a public hostname exists.
+Status: shared core and Google Drive adapter implemented. Interactive OAuth and provider webhooks remain deferred. The public live/guide viewer and protected `/admin` console are deployed.
 
 ## Decisions
 
@@ -327,8 +327,8 @@ all adapters target it:
    - cursors/delta, webhooks, subscriptions
 4. **S3-compatible + WebDAV**
    - list/range/proxy; S3 event notifications optional; WebDAV polling
-5. **Public viewer/admin split**
-   - public live + guide, protected `/admin`, webhook route, exposure
+5. **Public viewer/admin split** — done
+   - public live + guide at `/`, protected `/admin`, public read-only APIs
 6. **Hardening**
    - rate limits, retries/backoff, provider quotas, observability, cache metrics
 
@@ -423,7 +423,7 @@ all adapters target it:
 ### Deferred / known limits
 
 - Interactive Google OAuth consent and callback.
-- Provider webhooks and the public viewer/admin split.
+- Provider webhooks.
 - Dropbox, OneDrive, S3, and WebDAV adapters.
 - Real Google service-account validation (the code path compiles but was tested
   only with access-token/mock credentials).

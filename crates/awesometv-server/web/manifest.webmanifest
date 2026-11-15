@@ -1,7 +1,7 @@
 {
   "name": "Awesome TV",
   "short_name": "Awesome TV",
-  "description": "Live channels, guide, and broadcast control for Awesome TV.",
+  "description": "Live channels and guide from Awesome TV.",
   "id": "/",
   "start_url": "/",
   "scope": "/",
@@ -33,19 +33,13 @@
     {
       "name": "Live TV",
       "short_name": "Live",
-      "url": "/?app=live#on-air",
-      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
-    },
-    {
-      "name": "TV Mode",
-      "short_name": "TV",
-      "url": "/?app=tv#tv",
+      "url": "/",
       "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
     },
     {
       "name": "Guide",
       "short_name": "Guide",
-      "url": "/?app=guide#guide",
+      "url": "/#guide",
       "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
     }
   ]

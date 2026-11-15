@@ -20,6 +20,8 @@ pub struct Media {
     pub height: Option<i64>,
     pub video_codec: Option<String>,
     pub audio_codec: Option<String>,
+    #[serde(default)]
+    pub size_bytes: Option<i64>,
     #[serde(skip)]
     pub chapters: Vec<Chapter>,
 }
@@ -248,6 +250,7 @@ pub async fn init(data_dir: &Path) -> Result<SqlitePool> {
             height INTEGER,
             video_codec TEXT,
             audio_codec TEXT,
+            size_bytes INTEGER,
             chapters_probed INTEGER NOT NULL DEFAULT 0,
             created_at INTEGER NOT NULL
         );
@@ -347,6 +350,29 @@ pub async fn init(data_dir: &Path) -> Result<SqlitePool> {
             provider TEXT PRIMARY KEY,
             client_id TEXT,
             secret_blob TEXT
+        );
+        "#,
+    )
+    .execute(&pool)
+    .await?;
+
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS precache_entries (
+            media_id TEXT PRIMARY KEY,
+            source_path TEXT NOT NULL,
+            source_size INTEGER NOT NULL,
+            source_mtime INTEGER NOT NULL,
+            cache_path TEXT,
+            mode TEXT NOT NULL,
+            status TEXT NOT NULL,
+            bytes INTEGER NOT NULL DEFAULT 0,
+            error TEXT,
+            start_ms INTEGER NOT NULL DEFAULT 0,
+            created_ms INTEGER NOT NULL,
+            updated_ms INTEGER NOT NULL,
+            last_used_ms INTEGER NOT NULL DEFAULT 0,
+            deadline_ms INTEGER NOT NULL DEFAULT 0
         );
         "#,
     )
@@ -730,6 +756,19 @@ pub async fn init(data_dir: &Path) -> Result<SqlitePool> {
             sqlx::query(statement).execute(&pool).await?;
         }
     }
+    let precache_columns = sqlx::query("PRAGMA table_info(precache_entries)")
+        .fetch_all(&pool)
+        .await?;
+    let has_deadline = precache_columns
+        .iter()
+        .any(|row| row.get::<String, _>("name") == "deadline_ms");
+    if !has_deadline {
+        sqlx::query(
+            "ALTER TABLE precache_entries ADD COLUMN deadline_ms INTEGER NOT NULL DEFAULT 0",
+        )
+        .execute(&pool)
+        .await?;
+    }
     let media_columns = sqlx::query("PRAGMA table_info(media_items)")
         .fetch_all(&pool)
         .await?;
@@ -742,6 +781,14 @@ pub async fn init(data_dir: &Path) -> Result<SqlitePool> {
         )
         .execute(&pool)
         .await?;
+    }
+    let has_size_bytes = media_columns
+        .iter()
+        .any(|row| row.get::<String, _>("name") == "size_bytes");
+    if !has_size_bytes {
+        sqlx::query("ALTER TABLE media_items ADD COLUMN size_bytes INTEGER")
+            .execute(&pool)
+            .await?;
     }
     let block_columns = sqlx::query("PRAGMA table_info(channel_blocks)")
         .fetch_all(&pool)
@@ -830,8 +877,8 @@ pub async fn init(data_dir: &Path) -> Result<SqlitePool> {
 pub async fn upsert_media(pool: &SqlitePool, media: &Media) -> Result<()> {
     sqlx::query(
         r#"
-        INSERT INTO media_items (id, path, title, kind, duration_ms, width, height, video_codec, audio_codec, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO media_items (id, path, title, kind, duration_ms, width, height, video_codec, audio_codec, size_bytes, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(path) DO UPDATE SET
             title = excluded.title,
             kind = excluded.kind,
@@ -839,7 +886,8 @@ pub async fn upsert_media(pool: &SqlitePool, media: &Media) -> Result<()> {
             width = excluded.width,
             height = excluded.height,
             video_codec = excluded.video_codec,
-            audio_codec = excluded.audio_codec
+            audio_codec = excluded.audio_codec,
+            size_bytes = excluded.size_bytes
         "#,
     )
     .bind(&media.id)
@@ -851,6 +899,7 @@ pub async fn upsert_media(pool: &SqlitePool, media: &Media) -> Result<()> {
     .bind(media.height)
     .bind(&media.video_codec)
     .bind(&media.audio_codec)
+    .bind(media.size_bytes)
     .bind(now_ms())
     .execute(pool)
     .await?;
@@ -859,7 +908,7 @@ pub async fn upsert_media(pool: &SqlitePool, media: &Media) -> Result<()> {
 
 pub async fn list_media(pool: &SqlitePool) -> Result<Vec<Media>> {
     let rows = sqlx::query(
-        "SELECT id, path, title, kind, duration_ms, width, height, video_codec, audio_codec FROM media_items ORDER BY kind, title COLLATE NOCASE",
+        "SELECT id, path, title, kind, duration_ms, width, height, video_codec, audio_codec, size_bytes FROM media_items ORDER BY kind, title COLLATE NOCASE",
     )
     .fetch_all(pool)
     .await?;
@@ -875,6 +924,7 @@ pub async fn list_media(pool: &SqlitePool) -> Result<Vec<Media>> {
             height: row.get("height"),
             video_codec: row.get("video_codec"),
             audio_codec: row.get("audio_codec"),
+            size_bytes: row.get("size_bytes"),
             chapters: Vec::new(),
         })
         .collect())
@@ -1139,7 +1189,7 @@ pub async fn collection_media_paths(
     collection_id: &str,
 ) -> Result<Vec<(String, String)>> {
     let rows = sqlx::query(
-        "SELECT m.id, m.path FROM collection_items ci JOIN media_items m ON m.id = ci.media_id WHERE ci.collection_id = ? ORDER BY ci.position",
+        "SELECT m.id, m.path FROM collection_items ci JOIN media_items m ON m.id = ci.media_id WHERE ci.collection_id = ? AND m.path NOT LIKE '%.iso' ORDER BY ci.position",
     )
     .bind(collection_id)
     .fetch_all(pool)
@@ -1161,6 +1211,7 @@ fn media_from_row(row: sqlx::sqlite::SqliteRow) -> Media {
         height: row.get("height"),
         video_codec: row.get("video_codec"),
         audio_codec: row.get("audio_codec"),
+        size_bytes: row.get("size_bytes"),
         chapters: Vec::new(),
     }
 }
@@ -1170,7 +1221,8 @@ pub async fn media_by_reference(pool: &SqlitePool, reference: &str) -> Result<Op
     if reference.is_empty() {
         return Ok(None);
     }
-    let columns = "id, path, title, kind, duration_ms, width, height, video_codec, audio_codec";
+    let columns =
+        "id, path, title, kind, duration_ms, width, height, video_codec, audio_codec, size_bytes";
     let by_id = sqlx::query(&format!(
         "SELECT {columns} FROM media_items WHERE id = ? LIMIT 1"
     ))
@@ -1300,6 +1352,287 @@ pub async fn count_channel_items(pool: &SqlitePool, channel_id: &str) -> Result<
         .fetch_one(pool)
         .await?;
     Ok(row.get::<i64, _>("count") as usize)
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PrecacheEntry {
+    pub media_id: String,
+    pub title: String,
+    pub source_path: String,
+    pub source_size: i64,
+    pub source_mtime: i64,
+    pub cache_path: Option<String>,
+    pub mode: String,
+    pub status: String,
+    pub bytes: i64,
+    pub error: Option<String>,
+    pub start_ms: i64,
+    pub created_ms: i64,
+    pub updated_ms: i64,
+    pub last_used_ms: i64,
+    pub deadline_ms: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct UpcomingMedia {
+    pub media_id: String,
+    pub path: String,
+    pub duration_ms: i64,
+    pub size_bytes: i64,
+    pub start_ms: i64,
+}
+
+fn precache_row(row: &sqlx::sqlite::SqliteRow) -> PrecacheEntry {
+    use sqlx::Row;
+    PrecacheEntry {
+        media_id: row.get("media_id"),
+        title: row.try_get("title").unwrap_or_default(),
+        source_path: row.get("source_path"),
+        source_size: row.get("source_size"),
+        source_mtime: row.get("source_mtime"),
+        cache_path: row.get("cache_path"),
+        mode: row.get("mode"),
+        status: row.get("status"),
+        bytes: row.get("bytes"),
+        error: row.get("error"),
+        start_ms: row.get("start_ms"),
+        created_ms: row.get("created_ms"),
+        updated_ms: row.get("updated_ms"),
+        last_used_ms: row.get("last_used_ms"),
+        deadline_ms: row.get("deadline_ms"),
+    }
+}
+
+/// Distinct media that will air in the window, with its earliest start time.
+pub async fn upcoming_media(
+    pool: &SqlitePool,
+    from_ms: i64,
+    to_ms: i64,
+) -> Result<Vec<UpcomingMedia>> {
+    let rows = sqlx::query(
+        "SELECT ci.media_id, m.path, m.duration_ms, COALESCE(m.size_bytes, 0) AS size_bytes, ci.start_ms \
+         FROM channel_items ci JOIN media_items m ON m.id = ci.media_id \
+         WHERE ci.start_ms >= ? AND ci.start_ms <= ? AND m.kind NOT IN ('music', 'image') \
+         ORDER BY ci.start_ms",
+    )
+    .bind(from_ms)
+    .bind(to_ms)
+    .fetch_all(pool)
+    .await?;
+    use sqlx::Row;
+    Ok(rows
+        .into_iter()
+        .map(|row| UpcomingMedia {
+            media_id: row.get("media_id"),
+            path: row.get("path"),
+            duration_ms: row.get("duration_ms"),
+            size_bytes: row.get("size_bytes"),
+            start_ms: row.get("start_ms"),
+        })
+        .collect())
+}
+
+pub async fn precache_entry(pool: &SqlitePool, media_id: &str) -> Result<Option<PrecacheEntry>> {
+    let row = sqlx::query("SELECT * FROM precache_entries WHERE media_id = ? LIMIT 1")
+        .bind(media_id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row.as_ref().map(precache_row))
+}
+
+pub async fn precache_ready_path(pool: &SqlitePool, media_id: &str) -> Result<Option<String>> {
+    let row = sqlx::query(
+        "SELECT cache_path FROM precache_entries WHERE media_id = ? AND status = 'ready' AND cache_path IS NOT NULL LIMIT 1",
+    )
+    .bind(media_id)
+    .fetch_optional(pool)
+    .await?;
+    use sqlx::Row;
+    Ok(row.map(|row| row.get::<String, _>("cache_path")))
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn upsert_precache(
+    pool: &SqlitePool,
+    media_id: &str,
+    source_path: &str,
+    source_size: i64,
+    source_mtime: i64,
+    cache_path: &str,
+    mode: &str,
+    start_ms: i64,
+    deadline_ms: i64,
+) -> Result<()> {
+    let now = now_ms();
+    sqlx::query(
+        "INSERT INTO precache_entries \
+         (media_id, source_path, source_size, source_mtime, cache_path, mode, status, bytes, error, start_ms, created_ms, updated_ms, last_used_ms, deadline_ms) \
+         VALUES (?, ?, ?, ?, ?, ?, 'queued', 0, NULL, ?, ?, ?, 0, ?) \
+         ON CONFLICT(media_id) DO UPDATE SET \
+           source_path = excluded.source_path, source_size = excluded.source_size, \
+           source_mtime = excluded.source_mtime, cache_path = excluded.cache_path, \
+           mode = excluded.mode, status = 'queued', bytes = 0, error = NULL, \
+           start_ms = excluded.start_ms, deadline_ms = excluded.deadline_ms, updated_ms = excluded.updated_ms",
+    )
+    .bind(media_id)
+    .bind(source_path)
+    .bind(source_size)
+    .bind(source_mtime)
+    .bind(cache_path)
+    .bind(mode)
+    .bind(start_ms)
+    .bind(now)
+    .bind(now)
+    .bind(deadline_ms)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn set_precache_status(
+    pool: &SqlitePool,
+    media_id: &str,
+    status: &str,
+    bytes: i64,
+    error: Option<&str>,
+) -> Result<()> {
+    sqlx::query(
+        "UPDATE precache_entries SET status = ?, bytes = ?, error = ?, updated_ms = ? WHERE media_id = ?",
+    )
+    .bind(status)
+    .bind(bytes)
+    .bind(error)
+    .bind(now_ms())
+    .bind(media_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn set_precache_progress(pool: &SqlitePool, media_id: &str, bytes: i64) -> Result<()> {
+    sqlx::query("UPDATE precache_entries SET bytes = ?, updated_ms = ? WHERE media_id = ?")
+        .bind(bytes)
+        .bind(now_ms())
+        .bind(media_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn touch_precache(pool: &SqlitePool, media_id: &str) -> Result<()> {
+    sqlx::query("UPDATE precache_entries SET last_used_ms = ? WHERE media_id = ?")
+        .bind(now_ms())
+        .bind(media_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn list_precache(pool: &SqlitePool) -> Result<Vec<PrecacheEntry>> {
+    let rows = sqlx::query(
+        "SELECT p.*, COALESCE(m.title, p.media_id) AS title FROM precache_entries p \
+         LEFT JOIN media_items m ON m.id = p.media_id ORDER BY p.start_ms",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.iter().map(precache_row).collect())
+}
+
+pub async fn precache_statuses(
+    pool: &SqlitePool,
+) -> Result<std::collections::HashMap<String, (String, i64)>> {
+    let rows = sqlx::query("SELECT media_id, status, updated_ms FROM precache_entries")
+        .fetch_all(pool)
+        .await?;
+    use sqlx::Row;
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            (
+                row.get::<String, _>("media_id"),
+                (
+                    row.get::<String, _>("status"),
+                    row.get::<i64, _>("updated_ms"),
+                ),
+            )
+        })
+        .collect())
+}
+
+pub async fn prune_precache_queue(pool: &SqlitePool, cutoff_ms: i64) -> Result<u64> {
+    let result =
+        sqlx::query("DELETE FROM precache_entries WHERE status = 'queued' AND start_ms < ?")
+            .bind(cutoff_ms)
+            .execute(pool)
+            .await?;
+    Ok(result.rows_affected())
+}
+
+pub async fn trim_precache_queue(pool: &SqlitePool, keep: i64) -> Result<u64> {
+    let result = sqlx::query(
+        "DELETE FROM precache_entries WHERE status = 'queued' AND media_id NOT IN (\
+         SELECT media_id FROM precache_entries WHERE status = 'queued' ORDER BY deadline_ms, start_ms LIMIT ?)",
+    )
+    .bind(keep)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected())
+}
+
+pub async fn next_queued_precache(pool: &SqlitePool) -> Result<Option<PrecacheEntry>> {
+    let row = sqlx::query(
+        "SELECT * FROM precache_entries WHERE status = 'queued' ORDER BY deadline_ms, start_ms LIMIT 1",
+    )
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.as_ref().map(precache_row))
+}
+
+pub async fn reset_running_precache(pool: &SqlitePool) -> Result<()> {
+    sqlx::query(
+        "UPDATE precache_entries SET status = 'queued', updated_ms = ? WHERE status = 'running'",
+    )
+    .bind(now_ms())
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn ready_precache_sizes(pool: &SqlitePool) -> Result<Vec<(String, i64, i64)>> {
+    let rows = sqlx::query(
+        "SELECT media_id, bytes, last_used_ms FROM precache_entries WHERE status = 'ready'",
+    )
+    .fetch_all(pool)
+    .await?;
+    use sqlx::Row;
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            (
+                row.get::<String, _>("media_id"),
+                row.get::<i64, _>("bytes"),
+                row.get::<i64, _>("last_used_ms"),
+            )
+        })
+        .collect())
+}
+
+pub async fn delete_precache(pool: &SqlitePool, media_id: &str) -> Result<Option<String>> {
+    let entry = precache_entry(pool, media_id).await?;
+    sqlx::query("DELETE FROM precache_entries WHERE media_id = ?")
+        .bind(media_id)
+        .execute(pool)
+        .await?;
+    Ok(entry.and_then(|entry| entry.cache_path))
+}
+
+pub async fn set_media_size(pool: &SqlitePool, media_id: &str, size_bytes: i64) -> Result<()> {
+    sqlx::query("UPDATE media_items SET size_bytes = ? WHERE id = ?")
+        .bind(size_bytes)
+        .bind(media_id)
+        .execute(pool)
+        .await?;
+    Ok(())
 }
 
 pub async fn media_path(pool: &SqlitePool, media_id: &str) -> Result<Option<String>> {
@@ -1470,7 +1803,7 @@ pub async fn collection_detail(pool: &SqlitePool, id: &str) -> Result<Option<Col
         .await?;
     let Some(row) = row else { return Ok(None) };
     let items = sqlx::query(
-        "SELECT m.id, m.path, m.title, m.kind, m.duration_ms, m.width, m.height, m.video_codec, m.audio_codec FROM collection_items ci JOIN media_items m ON m.id = ci.media_id WHERE ci.collection_id = ? ORDER BY ci.position",
+        "SELECT m.id, m.path, m.title, m.kind, m.duration_ms, m.width, m.height, m.video_codec, m.audio_codec, m.size_bytes FROM collection_items ci JOIN media_items m ON m.id = ci.media_id WHERE ci.collection_id = ? AND m.path NOT LIKE '%.iso' ORDER BY ci.position",
     )
     .bind(id)
     .fetch_all(pool)
@@ -1486,6 +1819,7 @@ pub async fn collection_detail(pool: &SqlitePool, id: &str) -> Result<Option<Col
         height: row.get("height"),
         video_codec: row.get("video_codec"),
         audio_codec: row.get("audio_codec"),
+        size_bytes: row.get("size_bytes"),
         chapters: Vec::new(),
     })
     .collect();

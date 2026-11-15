@@ -6,6 +6,7 @@ mod db;
 mod engine;
 mod external;
 mod jellyfin;
+mod precache;
 mod programming;
 mod scan;
 mod scripted;
@@ -17,6 +18,7 @@ use anyhow::Context;
 use crate::api::{AppState, LoginThrottle};
 use crate::config::Config;
 use crate::engine::Engine;
+use crate::precache::Precache;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -59,6 +61,8 @@ async fn main() -> anyhow::Result<()> {
         cloud.clone(),
         config.stream_max_kbps,
     ));
+    let precache = Arc::new(Precache::new(&config, pool.clone()));
+    precache.start();
     let state = AppState {
         config: config.clone(),
         pool,
@@ -66,11 +70,25 @@ async fn main() -> anyhow::Result<()> {
         cloud: cloud.clone(),
         sessions: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
         login_throttle: Arc::new(tokio::sync::Mutex::new(LoginThrottle::default())),
+        precache: precache.clone(),
     };
     let prewarm = engine.clone();
     tokio::spawn(async move {
         prewarm.prewarm().await;
     });
+    if config.producer_max_lag_seconds > 0 {
+        let guard = engine.clone();
+        let max_lag_ms = config.producer_max_lag_seconds * 1000;
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+                let restarted = guard.resync_lagging(max_lag_ms).await;
+                if restarted > 0 {
+                    tracing::info!(restarted, "producer lag guard restarted channels");
+                }
+            }
+        });
+    }
     let app = api::router(state);
 
     let listener = tokio::net::TcpListener::bind((config.bind.as_str(), config.port))

@@ -223,6 +223,7 @@ impl CloudManager {
                         height: probe.as_ref().and_then(|probe| probe.height),
                         video_codec: probe.as_ref().and_then(|probe| probe.video_codec.clone()),
                         audio_codec: probe.as_ref().and_then(|probe| probe.audio_codec.clone()),
+                        size_bytes: None,
                         chapters: Vec::new(),
                     };
                     if let Err(error) = db::upsert_media(&self.pool, &media).await {
@@ -269,6 +270,25 @@ impl CloudManager {
         let kind = db::media_kind(&self.pool, media_id)
             .await?
             .unwrap_or_else(|| "other".into());
+        // Prefer a locally precached copy so playback does not depend on the
+        // source mount's real-time read throughput.
+        if let Some(path) = db::precache_ready_path(&self.pool, media_id).await? {
+            if tokio::fs::metadata(&path).await.is_ok() {
+                let _ = db::touch_precache(&self.pool, media_id).await;
+                return Ok(ResolvedMedia {
+                    location: path,
+                    kind,
+                });
+            }
+            let _ = db::set_precache_status(
+                &self.pool,
+                media_id,
+                "failed",
+                0,
+                Some("cached file is missing"),
+            )
+            .await;
+        }
         let Some(cloud) = db::cloud_media(&self.pool, media_id).await? else {
             let path = db::media_path(&self.pool, media_id)
                 .await?

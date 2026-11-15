@@ -80,6 +80,7 @@ struct Runner {
     item_key: String,
     playlist: PathBuf,
     startup_ms: u128,
+    last_access_ms: i64,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -112,6 +113,42 @@ impl Engine {
             cloud,
             max_kbps,
         }
+    }
+
+    /// Stop producers that have drifted too far behind the wall clock. The next
+    /// playlist request restarts them at the current schedule offset. Cached
+    /// items stay around 8–12 s behind and never trip this.
+    pub async fn resync_lagging(&self, max_lag_ms: i64) -> usize {
+        let mut runners = self.runners.lock().await;
+        let now = now_ms();
+        let stale: Vec<(String, String, i64)> = runners
+            .iter()
+            .filter_map(|(id, runner)| {
+                // Only resync channels someone is actually watching; idle
+                // producers are allowed to drift.
+                if now - runner.last_access_ms > 120_000 {
+                    return None;
+                }
+                let lag = playlist_lag_ms(&runner.playlist)?;
+                (lag > max_lag_ms).then(|| (id.clone(), runner.channel_number.clone(), lag))
+            })
+            .collect();
+        let mut restarted = 0;
+        for (channel_id, number, lag) in stale {
+            if let Some(mut runner) = runners.remove(&channel_id) {
+                tracing::warn!(
+                    channel = %number,
+                    lag_ms = lag,
+                    "producer lag guard: restarting at the live offset"
+                );
+                stop(&mut runner);
+                if let Some(dir) = runner.playlist.parent() {
+                    clear_hls_dir(dir);
+                }
+                restarted += 1;
+            }
+        }
+        restarted
     }
 
     pub fn uptime_ms(&self) -> u128 {
@@ -492,6 +529,22 @@ impl Engine {
                 if let Err(error) = engine.ensure_inner(&channel).await {
                     tracing::warn!(channel = %channel.number, %error, "supervisor ensure failed");
                 }
+                let idle = {
+                    let runners = engine.runners.lock().await;
+                    runners
+                        .get(&channel.id)
+                        .is_some_and(|runner| now_ms() - runner.last_access_ms > 120_000)
+                };
+                if idle && !channel.stream.prewarm {
+                    let mut runners = engine.runners.lock().await;
+                    if let Some(mut runner) = runners.remove(&channel.id) {
+                        tracing::info!(channel = %channel.number, "stopped idle producer");
+                        stop(&mut runner);
+                    }
+                    drop(runners);
+                    engine.supervisors.lock().await.remove(&channel.id);
+                    return;
+                }
             }
         });
     }
@@ -502,7 +555,12 @@ impl Engine {
     /// explicit boundary handling.
     pub async fn ensure(self: &Arc<Self>, channel: &Channel) -> Result<PathBuf> {
         self.start_supervisor(channel.clone()).await;
-        self.ensure_inner(channel).await
+        let playlist = self.ensure_inner(channel).await?;
+        let mut runners = self.runners.lock().await;
+        if let Some(runner) = runners.get_mut(&channel.id) {
+            runner.last_access_ms = now_ms();
+        }
+        Ok(playlist)
     }
 
     async fn ensure_inner(&self, channel: &Channel) -> Result<PathBuf> {
@@ -599,6 +657,7 @@ impl Engine {
                 item_key,
                 playlist: playlist.clone(),
                 startup_ms,
+                last_access_ms: now_ms(),
             },
         );
         Ok(playlist)
@@ -621,6 +680,9 @@ fn start_producer(
     max_kbps: i64,
 ) -> Result<(PathBuf, Child)> {
     let playlist = out_dir.join("index.m3u8");
+    // Drop the previous run's segments so a viewer cannot be served a stale
+    // playlist while the restarted producer fills.
+    clear_hls_dir(out_dir);
     let log_dir = data_dir.join("logs");
     std::fs::create_dir_all(&log_dir)?;
     let log_path = log_dir.join(format!("channel-{}.log", channel.number));
@@ -668,7 +730,7 @@ fn start_producer(
     if media_kind == "image" {
         command.arg("-loop").arg("1").arg("-framerate").arg("30");
     }
-    command.arg("-i").arg(media);
+    command.arg("-i").arg(media_input(media));
     let animated_watermark = watermark.filter(|path| is_animated_watermark(path));
     if let Some(watermark) = animated_watermark {
         command
@@ -1169,6 +1231,35 @@ fn stop_child(child: &mut Child) {
     let _ = child.wait();
 }
 
+fn playlist_lag_ms(path: &Path) -> Option<i64> {
+    let body = std::fs::read_to_string(path).ok()?;
+    let target_ms = body
+        .lines()
+        .find_map(|line| line.strip_prefix("#EXT-X-TARGETDURATION:"))
+        .and_then(|value| value.trim().parse::<f64>().ok())?
+        * 1000.0;
+    let last = body
+        .lines()
+        .filter_map(|line| line.strip_prefix("#EXT-X-PROGRAM-DATE-TIME:"))
+        .next_back()?
+        .trim();
+    let normalized =
+        if last.len() >= 5 && matches!(&last[last.len() - 5..last.len() - 4], "+" | "-") {
+            let base = &last[..last.len() - 5];
+            let sign = &last[last.len() - 5..last.len() - 4];
+            let hours = &last[last.len() - 4..last.len() - 2];
+            let minutes = &last[last.len() - 2..];
+            format!("{base}{sign}{hours}:{minutes}")
+        } else {
+            last.to_string()
+        };
+    let parsed =
+        time::OffsetDateTime::parse(&normalized, &time::format_description::well_known::Rfc3339)
+            .ok()?;
+    let age_ms = (time::OffsetDateTime::now_utc() - parsed).whole_milliseconds() as i64;
+    Some(age_ms + target_ms as i64)
+}
+
 fn clear_hls_dir(dir: &Path) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
@@ -1238,6 +1329,18 @@ struct StreamProbe {
     hdr: bool,
 }
 
+fn media_input(path: &Path) -> String {
+    if path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("iso"))
+    {
+        format!("bluray:{}", path.display())
+    } else {
+        path.display().to_string()
+    }
+}
+
 fn probe_streams(path: &Path, stream: &crate::db::StreamSettings) -> StreamProbe {
     let output = Command::new("ffprobe")
         .arg("-v")
@@ -1245,7 +1348,7 @@ fn probe_streams(path: &Path, stream: &crate::db::StreamSettings) -> StreamProbe
         .arg("-print_format")
         .arg("json")
         .arg("-show_streams")
-        .arg(path)
+        .arg(media_input(path))
         .output();
     let Ok(output) = output else {
         return StreamProbe::default();
@@ -1637,15 +1740,17 @@ fn animated_watermark_filter(
 fn base_chain(channel: &Channel, subtitle: Option<&Path>, tonemap: bool) -> String {
     let width = even(channel.stream.width);
     let height = even(channel.stream.height);
-    let mut chain = String::new();
+    // Scale before tonemapping. Tonemapping a 4K HDR source at full resolution
+    // is far too expensive for real-time encoding; doing it at the output size
+    // keeps the producer at 1x.
+    let mut chain = format!(
+        "scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={FPS}"
+    );
     if tonemap {
         chain.push_str(
-            "zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p,",
+            ",zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p",
         );
     }
-    chain.push_str(&format!(
-        "scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={FPS}"
-    ));
     if let Some(subtitle) = subtitle {
         chain.push_str(&format!(
             ",subtitles='{}':force_style='FontSize=24,Outline=2'",

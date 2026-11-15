@@ -13,13 +13,14 @@ Running: `https://atv.christopherrutherford.net` (public), `http://192.168.1.153
 | Programming | Weekly blocks, block templates, classic sequences, chapter-aware/manual mid-rolls, scripted YAML, external playout JSON, and date-range alternate schedules |
 | Graphics | Per-channel text bug, static or animated image/video watermark, and lower third; captured in block templates |
 | Streams | Resolution, preset, CRF, audio bitrate, global/per-channel languages, subtitles, HDR tonemap, software/VAAPI, segment size, prebuffer, cache depth, and startup prewarm |
+| Precache | 24 h look-ahead, 100 GB LRU, raw copy or 720p proxy for slow sources; status and removal in the admin Sources view |
 | Playback | HLS + MPEG-TS/HDHomeRun; trimmed in/out playback; catch-up restart; rolling DVR buffer; music/image items; subtitles, overlays, HDR tonemap, VAAPI; slate fallback |
-| Auth | Session login/logout with `Secure` cookies behind TLS, per-IP login throttling (10 failures / 15 min); Basic auth retained for API clients |
+| Auth | Public viewer at `/`; admin console at `/admin` (login-gated shell, session cookies marked `Secure` behind TLS, per-IP login throttling, Basic auth for API clients) |
 | Backups | Create/list/download, staged restore on restart |
 | Sources | Jellyfin import configured; Emby import implemented (no live instance configured) |
 | UI | Broadcast-control console plus a 10-foot TV mode with large video, channel strip, keyboard navigation, and live clocks |
 | Apps | Installable PWA over Tailscale Serve HTTPS; Android TV wrapper APK; Tauri desktop wrapper scaffold |
-| Cast | Cast button, signed Cast HLS playlist/segments, Default Media Receiver, configurable Cast base URL |
+| Cast | Cast button in the public viewer and admin, signed Cast HLS playlist/segments, Default Media Receiver, configurable Cast base URL |
 | CI | Rust, Docker, Android TV APK, Tauri desktop bundle, PWA asset validation |
 | Runtime | Docker on Ubuntu 26.04 with FFmpeg 8.0.1 and VAAPI device passthrough |
 
@@ -69,16 +70,54 @@ Two public-path constraints were found and addressed:
   unauthenticated, and that jail is disabled; the app throttles its own login
   attempts instead.
 
-The public viewer/admin split is still pending, so the hostname currently
-serves the protected admin console.
+The public viewer/admin split is in place:
+
+| Route | Access |
+|---|---|
+| `/` | Public live viewer: channel rail, HLS player, 6-hour guide |
+| `/api/v1/public/channels`, `/api/v1/public/guide` | Public, read-only projections |
+| `/channel/*`, `/cast/*`, `/catchup/*`, `/dvr/*` | Public signed media routes |
+| `/admin` | Login-gated console; anonymous requests receive the login page |
+| `/api/v1/*` admin routes | Session or Basic auth required |
+
+## Precache
+
+The media share is a 100 Mbps CIFS mount that sustains roughly 7 MB/s with
+~160 ms attribute latency. Direct playback of 4K remuxes (80 Mbps) cannot keep
+up, so the producer drifts further behind real time.
+
+The precache service reads the channel guide 24 hours ahead and stages upcoming
+media in `/data/precache`:
+
+| Source rate | Mode |
+|---|---|
+| At or below about 31 Mbps | Byte-for-byte local copy |
+| Larger (4K remuxes) | 4 Mbps / 720p H.264 proxy, tonemapped when HDR |
+
+- `AWESOMETV_PRECACHE_MAX_GB=100` LRU budget, 24 h look-ahead, 32-entry queue.
+- Jobs are scheduled by deadline (air time minus estimated read time), so a
+  multi-hour 4K proxy starts early enough instead of waiting behind near-term
+  episodes.
+- One job at a time. Copies throttle to about 1.3 MB/s while a live producer
+  reads the mount; proxy transcodes are preempted and re-queued when a live
+  reader appears.
+- `resolve_media_input` prefers a ready cache entry, so cached items produce at
+  1x and hold an 8–12 s HLS edge instead of drifting.
+- A 4K item that cannot finish before its airing stays uncached for that
+  airing; the proxy is used on the next airing.
+- `.iso` Blu-ray images are excluded from scheduling; convert them to MKV for
+  playout.
+- `AWESOMETV_PRODUCER_MAX_LAG_SECONDS=0` disables the optional lag-restart
+  guard by default. The cache keeps active producers within the guard threshold.
+- The admin Sources view shows ready/queued/failed entries and removes them.
 
 ## Cloud sources
 
 The shared cloud-source core and Google Drive reference adapter are implemented:
 service-account/access-token auth, encrypted secrets, folder browsing, scan-time
 ffprobe, signed byte proxy, hybrid stream/cache, and Library integration.
-Interactive OAuth, provider webhooks, the public viewer/admin split, and the
-Dropbox/OneDrive/S3/WebDAV adapters are deferred.
+Interactive OAuth, provider webhooks, and the Dropbox/OneDrive/S3/WebDAV
+adapters are deferred.
 
 See [`docs/CLOUD-SOURCES.md`](CLOUD-SOURCES.md) for the architecture,
 [`docs/CLOUD-COMPLETION.md`](CLOUD-COMPLETION.md) for the remaining work, and

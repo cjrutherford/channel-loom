@@ -20,7 +20,7 @@ use tokio_util::io::ReaderStream;
 use crate::backup;
 use crate::cloud::CloudManager;
 use crate::config::Config;
-use crate::db::{self, Channel, Media};
+use crate::db::{self, Channel, ChannelItem, Media};
 use crate::engine::Engine;
 use crate::external;
 use crate::jellyfin;
@@ -140,6 +140,7 @@ pub struct AppState {
     pub cloud: Arc<CloudManager>,
     pub sessions: Arc<Mutex<HashMap<String, Session>>>,
     pub login_throttle: Arc<Mutex<LoginThrottle>>,
+    pub precache: Arc<crate::precache::Precache>,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -151,6 +152,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/sources/emby/sync", post(emby_sync))
         .route("/api/v1/stats", get(stats))
         .route("/api/v1/metrics", get(metrics))
+        .route("/api/v1/precache", get(precache_status))
+        .route("/api/v1/precache/{media_id}", delete(remove_precache))
         .route(
             "/api/v1/settings/language",
             get(language_settings).put(update_language_settings),
@@ -243,7 +246,13 @@ pub fn router(state: AppState) -> Router {
         ));
 
     let public = Router::new()
-        .route("/", get(index))
+        .route("/", get(public_index))
+        .route("/admin", get(admin_index))
+        .route("/admin/", get(admin_index))
+        .route("/admin/login", get(admin_index))
+        .route("/api/v1/public/channels", get(public_channels))
+        .route("/api/v1/public/guide", get(public_guide))
+        .route("/api/v1/public/channels/{number}/cast", post(public_cast))
         .route("/manifest.webmanifest", get(manifest))
         .route("/sw.js", get(service_worker))
         .route("/icons/{file}", get(icon))
@@ -372,7 +381,7 @@ async fn login(
 }
 
 async fn logout(State(state): State<AppState>, request: Request) -> Response {
-    if let Some(token) = session_token(&request) {
+    if let Some(token) = session_token(request.headers()) {
         state.sessions.lock().await.remove(&token);
     }
     let mut response = StatusCode::NO_CONTENT.into_response();
@@ -393,7 +402,7 @@ async fn logout(State(state): State<AppState>, request: Request) -> Response {
 
 async fn auth_me(State(state): State<AppState>, request: Request) -> Json<serde_json::Value> {
     let username =
-        session_token(&request)
+        session_token(request.headers())
             .and_then(|token| {
                 state.sessions.try_lock().ok().and_then(|sessions| {
                     sessions.get(&token).map(|session| session.username.clone())
@@ -444,8 +453,27 @@ async fn icon(Path(file): Path<String>) -> Result<Response, ApiError> {
         .into_response())
 }
 
-async fn index() -> Html<&'static str> {
-    Html(include_str!("../web/index.html"))
+async fn public_index() -> Html<&'static str> {
+    Html(include_str!("../web/public.html"))
+}
+
+/// The admin console shell is only sent to authenticated callers. Anonymous
+/// visitors get the login page instead, so the admin JavaScript and markup are
+/// not handed out publicly.
+async fn admin_index(State(state): State<AppState>, request: Request) -> Response {
+    let authorized = request_is_authorized(&state, request.headers()).await;
+    let mut response = if authorized {
+        Html(include_str!("../web/index.html")).into_response()
+    } else {
+        Html(include_str!("../web/login.html")).into_response()
+    };
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+        .headers_mut()
+        .insert("x-robots-tag", HeaderValue::from_static("noindex"));
+    response
 }
 
 async fn health() -> &'static str {
@@ -473,6 +501,99 @@ async fn public_config(State(state): State<AppState>) -> Json<PublicConfig> {
         emby_configured: !state.config.emby_api_key.trim().is_empty(),
         cast_base_url: cast_base(&state.config),
     })
+}
+
+#[derive(Serialize)]
+struct PublicItem {
+    title: String,
+    start_ms: i64,
+    end_ms: i64,
+    kind: String,
+}
+
+impl From<ChannelItem> for PublicItem {
+    fn from(item: ChannelItem) -> Self {
+        Self {
+            title: item.title,
+            start_ms: item.start_ms,
+            end_ms: item.end_ms,
+            kind: item.kind,
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct PublicChannel {
+    number: String,
+    name: String,
+    now: Option<PublicItem>,
+    next: Option<PublicItem>,
+}
+
+#[derive(Serialize)]
+struct PublicGuideChannel {
+    number: String,
+    name: String,
+    items: Vec<PublicItem>,
+}
+
+/// Public projection of the channel lineup. Deliberately omits stream,
+/// graphics, and media identifiers so the viewer cannot read admin config.
+async fn public_channels(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<PublicChannel>>, ApiError> {
+    let views = db::list_channel_views(&state.pool).await?;
+    Ok(Json(
+        views
+            .into_iter()
+            .map(|view| PublicChannel {
+                number: view.number,
+                name: view.name,
+                now: view.now.map(PublicItem::from),
+                next: view.next.map(PublicItem::from),
+            })
+            .collect(),
+    ))
+}
+
+#[derive(Deserialize)]
+struct PublicGuideQuery {
+    #[serde(default = "default_guide_hours")]
+    hours: i64,
+}
+
+fn default_guide_hours() -> i64 {
+    6
+}
+
+async fn public_guide(
+    State(state): State<AppState>,
+    Query(query): Query<PublicGuideQuery>,
+) -> Result<Json<Vec<PublicGuideChannel>>, ApiError> {
+    let now = db::now_ms();
+    let hours = query.hours.clamp(1, 24);
+    let channels = db::list_channels(&state.pool).await?;
+    let mut guide = Vec::with_capacity(channels.len());
+    for channel in channels {
+        let items = db::guide_items(
+            &state.pool,
+            &channel.id,
+            // The viewer floors its guide window to the previous hour, so look
+            // back two hours to avoid a gap at the left edge.
+            now - 2 * 3_600_000,
+            now + hours * 3_600_000,
+        )
+        .await?
+        .into_iter()
+        .map(PublicItem::from)
+        .collect();
+        guide.push(PublicGuideChannel {
+            number: channel.number,
+            name: channel.name,
+            items,
+        });
+    }
+    Ok(Json(guide))
 }
 
 #[derive(Serialize)]
@@ -692,6 +813,42 @@ struct Stats {
     channels: usize,
     jellyfin_configured: bool,
     emby_configured: bool,
+}
+
+async fn precache_status(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let entries = db::list_precache(&state.pool).await?;
+    let ready_bytes: i64 = entries
+        .iter()
+        .filter(|entry| entry.status == "ready")
+        .map(|entry| entry.bytes)
+        .sum();
+    let running_bytes: i64 = entries
+        .iter()
+        .filter(|entry| entry.status == "running")
+        .map(|entry| entry.bytes)
+        .sum();
+    let queued = entries
+        .iter()
+        .filter(|entry| entry.status == "queued")
+        .count();
+    Ok(Json(serde_json::json!({
+        "enabled": state.config.precache_enabled,
+        "max_bytes": state.config.precache_max_gb.max(0) * 1_000_000_000i64,
+        "ready_bytes": ready_bytes,
+        "running_bytes": running_bytes,
+        "queued": queued,
+        "entries": entries,
+    })))
+}
+
+async fn remove_precache(
+    State(state): State<AppState>,
+    Path(media_id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    state.precache.remove(&media_id).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn stats(State(state): State<AppState>) -> Result<Json<Stats>, ApiError> {
@@ -1642,13 +1799,7 @@ struct CastResponse {
     channel: String,
 }
 
-async fn start_cast(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-) -> Result<Json<CastResponse>, ApiError> {
-    let channel = db::channel_by_id(&state.pool, &id)
-        .await?
-        .ok_or_else(|| ApiError::not_found("channel not found"))?;
+fn cast_response(state: &AppState, channel: &Channel) -> CastResponse {
     let now = db::now_ms() / 1000;
     let expires = now + 4 * 60 * 60;
     let token = state
@@ -1659,12 +1810,34 @@ async fn start_cast(
         cast_base(&state.config),
         channel.number
     );
-    Ok(Json(CastResponse {
+    CastResponse {
         media_url,
         content_type: "application/vnd.apple.mpegurl".into(),
-        title: channel.name,
-        channel: channel.number,
-    }))
+        title: channel.name.clone(),
+        channel: channel.number.clone(),
+    }
+}
+
+async fn start_cast(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<CastResponse>, ApiError> {
+    let channel = db::channel_by_id(&state.pool, &id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("channel not found"))?;
+    Ok(Json(cast_response(&state, &channel)))
+}
+
+/// Public cast discovery. The returned URL is signed and short-lived, so this
+/// is equivalent to handing out the public HLS stream for one channel.
+async fn public_cast(
+    State(state): State<AppState>,
+    Path(number): Path<String>,
+) -> Result<Json<CastResponse>, ApiError> {
+    let channel = db::channel_by_number(&state.pool, &number)
+        .await?
+        .ok_or_else(|| ApiError::not_found("channel not found"))?;
+    Ok(Json(cast_response(&state, &channel)))
 }
 
 #[derive(Deserialize)]
@@ -2080,9 +2253,8 @@ async fn ts_stream(
         .into_response())
 }
 
-async fn basic_auth(State(state): State<AppState>, request: Request, next: Next) -> Response {
-    let basic_ok = request
-        .headers()
+async fn request_is_authorized(state: &AppState, headers: &HeaderMap) -> bool {
+    let basic_ok = headers
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.strip_prefix("Basic "))
@@ -2100,7 +2272,7 @@ async fn basic_auth(State(state): State<AppState>, request: Request, next: Next)
                 )
         });
 
-    let session_ok = if let Some(token) = session_token(&request) {
+    let session_ok = if let Some(token) = session_token(headers) {
         let mut sessions = state.sessions.lock().await;
         match sessions.get(&token) {
             Some(session) if session.expires_ms > db::now_ms() => true,
@@ -2114,16 +2286,19 @@ async fn basic_auth(State(state): State<AppState>, request: Request, next: Next)
         false
     };
 
-    if basic_ok || session_ok {
+    basic_ok || session_ok
+}
+
+async fn basic_auth(State(state): State<AppState>, request: Request, next: Next) -> Response {
+    if request_is_authorized(&state, request.headers()).await {
         next.run(request).await
     } else {
         (StatusCode::UNAUTHORIZED, "Authentication required\n").into_response()
     }
 }
 
-fn session_token(request: &Request) -> Option<String> {
-    request
-        .headers()
+fn session_token(headers: &HeaderMap) -> Option<String> {
+    headers
         .get(header::COOKIE)
         .and_then(|value| value.to_str().ok())
         .and_then(|cookies| {

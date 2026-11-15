@@ -638,6 +638,7 @@ mod tests {
             height: None,
             video_codec: None,
             audio_codec: None,
+            size_bytes: None,
             chapters: Vec::new(),
         }
     }

@@ -167,6 +167,7 @@ fn process_item(
             .and_then(|stream| stream.get("Codec"))
             .and_then(|value| value.as_str())
             .map(str::to_string),
+        size_bytes: None,
         chapters: Vec::new(),
     };
     Ok(Some(media))

@@ -25,6 +25,14 @@ pub struct Config {
     pub default_subtitle_language: String,
     pub cast_base_url: String,
     pub stream_max_kbps: i64,
+    pub precache_enabled: bool,
+    pub precache_dir: PathBuf,
+    pub precache_max_gb: i64,
+    pub precache_ahead_hours: i64,
+    pub precache_proxy_kbps: i64,
+    pub precache_proxy_height: i64,
+    pub precache_copy_mbps: i64,
+    pub producer_max_lag_seconds: i64,
 }
 
 impl Config {
@@ -76,6 +84,36 @@ impl Config {
             .ok()
             .and_then(|value| value.parse().ok())
             .unwrap_or(0);
+        let precache_enabled = env::var("AWESOMETV_PRECACHE_ENABLED")
+            .map(|value| !matches!(value.trim(), "0" | "false" | "no"))
+            .unwrap_or(true);
+        let precache_dir = env::var("AWESOMETV_PRECACHE_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| data_dir.join("precache"));
+        let precache_max_gb = env::var("AWESOMETV_PRECACHE_MAX_GB")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(100);
+        let precache_ahead_hours = env::var("AWESOMETV_PRECACHE_AHEAD_HOURS")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(24);
+        let precache_proxy_kbps = env::var("AWESOMETV_PRECACHE_PROXY_KBPS")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(4000);
+        let precache_proxy_height = env::var("AWESOMETV_PRECACHE_PROXY_HEIGHT")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(720);
+        let precache_copy_mbps = env::var("AWESOMETV_PRECACHE_COPY_MBPS")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(7);
+        let producer_max_lag_seconds = env::var("AWESOMETV_PRODUCER_MAX_LAG_SECONDS")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(0);
 
         Self {
             bind,
@@ -98,6 +136,14 @@ impl Config {
             default_subtitle_language,
             cast_base_url,
             stream_max_kbps,
+            precache_enabled,
+            precache_dir,
+            precache_max_gb,
+            precache_ahead_hours,
+            precache_proxy_kbps,
+            precache_proxy_height,
+            precache_copy_mbps,
+            producer_max_lag_seconds,
         }
     }
 }

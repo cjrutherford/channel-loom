@@ -130,3 +130,7 @@ jobs:
           test -f crates/awesometv-server/web/icons/apple-touch-icon.png
           grep -q 'manifest.webmanifest' crates/awesometv-server/web/index.html
           grep -q 'serviceWorker.register' crates/awesometv-server/web/index.html
+          test -f crates/awesometv-server/web/public.html
+          test -f crates/awesometv-server/web/login.html
+          grep -q '/api/v1/public/channels' crates/awesometv-server/web/public.html
+          grep -q '/api/v1/auth/login' crates/awesometv-server/web/login.html

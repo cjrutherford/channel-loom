@@ -108,6 +108,11 @@ pub fn probe(path: &Path, kind: &str) -> Result<Media> {
         .and_then(|stream| stream.get("codec_name"))
         .and_then(|codec| codec.as_str())
         .map(str::to_string);
+    let size_bytes = value
+        .get("format")
+        .and_then(|format| format.get("size"))
+        .and_then(|size| size.as_str())
+        .and_then(|size| size.parse::<i64>().ok());
 
     let canonical = path.to_string_lossy().to_string();
     let id = Uuid::new_v5(&Uuid::NAMESPACE_URL, canonical.as_bytes()).to_string();
@@ -123,6 +128,7 @@ pub fn probe(path: &Path, kind: &str) -> Result<Media> {
         height,
         video_codec,
         audio_codec,
+        size_bytes,
         chapters: parse_chapters(&value),
     })
 }

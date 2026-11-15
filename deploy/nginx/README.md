@@ -183,8 +183,9 @@ docker compose up -d --force-recreate
   disabled and long read timeouts.
 - The on-host config assumes `127.0.0.1:8409`. If nginx is on a different
   machine, change the upstream to an address that machine can route to.
-- The app still serves the protected admin console at `/`. Do not share the
-  public hostname broadly until the public viewer/admin split is implemented.
+- `/` is the public live viewer and `/admin` is the login-gated console, so the
+  hostname can be shared. To add a second layer in front of the admin console,
+  allowlist `/admin` to LAN/Tailscale addresses at the proxy.
 - Certbot renewal is normally installed as a systemd timer by the certbot
   package. Verify with:
 
