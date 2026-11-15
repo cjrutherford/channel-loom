@@ -22,6 +22,7 @@ services:
       CLOUD_CACHE_MAX_GB: ${CLOUD_CACHE_MAX_GB:-500}
       CLOUD_AUTO_CACHE_MAX_MB: ${CLOUD_AUTO_CACHE_MAX_MB:-2048}
       AWESOMETV_SECRET_KEY: ${AWESOMETV_SECRET_KEY:-}
+      AWESOMETV_CAST_BASE_URL: ${AWESOMETV_CAST_BASE_URL:-}
       RUST_LOG: ${RUST_LOG:-awesometv_server=info}
     volumes:
       - ./data:/data

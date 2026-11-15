@@ -7,9 +7,12 @@ fn main() {
         .unwrap_or_else(|_| "https://nirvana.tail5a4a0.ts.net:8447/".to_string());
     tauri::Builder::default()
         .setup(move |app| {
-            let parsed = url
-                .parse()
-                .map_err(|error| format!("invalid AWESOMETV_URL: {error}"))?;
+            let parsed: url::Url = url.parse().map_err(|error| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("invalid AWESOMETV_URL: {error}"),
+                )
+            })?;
             WebviewWindowBuilder::new(app, "main", WebviewUrl::External(parsed))
                 .title("Awesome TV")
                 .inner_size(1440.0, 900.0)

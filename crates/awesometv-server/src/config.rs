@@ -23,6 +23,7 @@ pub struct Config {
     pub default_audio_language: String,
     pub default_subtitle_mode: String,
     pub default_subtitle_language: String,
+    pub cast_base_url: String,
 }
 
 impl Config {
@@ -69,6 +70,7 @@ impl Config {
         let default_subtitle_mode =
             env::var("AWESOMETV_SUBTITLE_MODE").unwrap_or_else(|_| "off".into());
         let default_subtitle_language = env::var("AWESOMETV_SUBTITLE_LANGUAGE").unwrap_or_default();
+        let cast_base_url = env::var("AWESOMETV_CAST_BASE_URL").unwrap_or_default();
 
         Self {
             bind,
@@ -89,6 +91,7 @@ impl Config {
             default_audio_language,
             default_subtitle_mode,
             default_subtitle_language,
+            cast_base_url,
         }
     }
 }

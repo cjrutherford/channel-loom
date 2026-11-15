@@ -68,7 +68,7 @@ read-only remote channels, live/guide only, no re-sharing.
 - Already installable over HTTPS.
 - CI validates manifest, service worker, and icons through the server build.
 
-### D. Google Cast (first-class)
+### D. Google Cast (first-class) — implemented baseline
 
 Cast is a first-class playback target, not an afterthought.
 
@@ -99,6 +99,15 @@ Cast is a first-class playback target, not an afterthought.
   normal self-hosted Cast path.
 - Cast media URLs are scoped and expire.
 - Public exposure is not required for LAN Cast.
+
+#### Implemented baseline
+
+- signed Cast HLS playlist and segment routes
+- absolute segment URLs and token expiry
+- Cast button and lazy Cast SDK loading
+- Default Media Receiver casting of the selected channel
+- stop/end session handling
+- Cast base URL in public config and Settings
 
 ### E. Security and public exposure
 

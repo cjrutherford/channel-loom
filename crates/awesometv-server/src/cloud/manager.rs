@@ -323,6 +323,14 @@ impl CloudManager {
         })
     }
 
+    pub fn sign(&self, data: &[u8]) -> String {
+        self.secret.sign(data)
+    }
+
+    pub fn verify(&self, data: &[u8], signature: &str) -> bool {
+        self.secret.verify(data, signature)
+    }
+
     pub fn proxy_url(&self, source_id: &str, remote_id: &str, expires_in: i64) -> String {
         let expires = time::OffsetDateTime::now_utc().unix_timestamp() + expires_in;
         let payload = format!("{source_id}:{remote_id}:{expires}");

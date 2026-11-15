@@ -439,3 +439,17 @@ Jellyfin is configured as `https://jelly.christopherrutherford.net` via `JELLYFI
   probed, playback proxied, then cached locally.
 - Interactive OAuth, provider webhooks, the public viewer split, and other
   providers remain deferred.
+
+
+## Google Cast first-class support
+
+- Added `POST /api/v1/channels/{id}/cast` returning a signed Cast media URL.
+- Public `/cast/{channel}.m3u8` and `/cast/{channel}/{segment}.ts` routes validate
+  an expiring HMAC token, start the channel producer, and rewrite segment URLs
+  to absolute Cast-accessible URLs.
+- Added a Cast button in the header, lazy loading of the Google Cast sender SDK,
+  Default Media Receiver playback, and stop/end-session handling.
+- Added `AWESOMETV_CAST_BASE_URL` for the LAN address a Chromecast can reach;
+  Settings shows the effective Cast base.
+- Verified the Cast playlist: absolute signed segment URLs, 200 segment fetch
+  returning H.264/AAC, and 401 for an invalid token.

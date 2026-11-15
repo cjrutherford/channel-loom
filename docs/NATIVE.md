@@ -114,3 +114,28 @@ AWESOMETV_URL=https://nirvana.tail5a4a0.ts.net:8447/ cargo tauri dev
 The wrapper is scaffolded but not compiled on this host because the WebKitGTK
 development package is not installed. See `desktop/README.md` for the required
 system packages and build steps.
+
+
+## Google Cast
+
+Cast is first-class on the web/PWA surface.
+
+- The header has a **Cast** button.
+- The browser loads the Cast sender SDK lazily on first use.
+- The backend creates a short-lived signed Cast HLS playlist at
+  `/api/v1/channels/{id}/cast`.
+- Public playlist/segment routes:
+  - `/cast/{channel}.m3u8`
+  - `/cast/{channel}/{segment}.ts`
+- The playlist contains absolute signed segment URLs.
+- Uses the Chromecast **Default Media Receiver** (`CC1AD845`).
+- Stop casts from the same button.
+
+The Cast device must be able to reach the media base URL. Set:
+
+```sh
+AWESOMETV_CAST_BASE_URL=http://192.168.1.50:8409
+```
+
+to a LAN-reachable address. Tailscale addresses are often not reachable by a
+Chromecast. Settings shows the effective Cast base URL.

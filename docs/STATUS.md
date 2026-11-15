@@ -19,6 +19,8 @@ Running: `http://100.120.253.100:8409` (Tailscale only)
 | Sources | Jellyfin import configured; Emby import implemented (no live instance configured) |
 | UI | Broadcast-control console plus a 10-foot TV mode with large video, channel strip, keyboard navigation, and live clocks |
 | Apps | Installable PWA over Tailscale Serve HTTPS; Android TV wrapper APK; Tauri desktop wrapper scaffold |
+| Cast | Cast button, signed Cast HLS playlist/segments, Default Media Receiver, configurable Cast base URL |
+| CI | Rust, Docker, Android TV APK, Tauri desktop bundle, PWA asset validation |
 | Runtime | Docker on Ubuntu 26.04 with FFmpeg 8.0.1 and VAAPI device passthrough |
 
 ## Completed

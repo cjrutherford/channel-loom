@@ -306,6 +306,7 @@
     <header class="topbar">
       <div class="crumb">Awesome TV / <b id="crumbView">On Air</b></div>
       <div class="top-actions">
+        <button class="btn ghost" id="castBtn">Cast</button>
         <button class="btn ghost" id="installAppBtn" style="display:none">Install app</button>
         <button class="btn ghost" id="refreshBtn">↻ Refresh</button>
         <button class="btn primary" id="scanTopBtn">＋ Scan library</button>
@@ -630,6 +631,7 @@
           <div class="source-path" id="setHdhr"></div>
           <div class="source-path" id="setM3u"></div>
           <div class="source-path" id="setXmltv"></div>
+          <div class="source-path" id="setCast"></div>
         </div>
       </section>
     </div>
@@ -1200,6 +1202,7 @@ function renderSettings() {
   $('setM3u').textContent = `M3U: ${location.origin}/iptv/channels.m3u`;
   $('setXmltv').textContent = `XMLTV: ${location.origin}/iptv/xmltv.xml`;
   $('setManifest').textContent = `Manifest: ${location.origin}/manifest.webmanifest`;
+  $('setCast').textContent = `Cast base: ${state.config?.cast_base_url || location.origin}`;
   $('sideUrl').textContent = location.host;
   $('setAudioLanguage').value = state.language?.audio_language || '';
   $('setSubtitleMode').value = state.language?.subtitle_mode || 'off';
@@ -1708,6 +1711,94 @@ $('logoutBtn').addEventListener('click', async () => {
   showLogin();
 });
 checkAuth();
+let castSdkPromise = null;
+let castInitialized = false;
+
+function castContextOrNull() {
+  return window.cast?.framework?.CastContext?.getInstance?.() || null;
+}
+
+function loadCastSdk() {
+  if (window.cast && window.cast.framework) return Promise.resolve();
+  if (castSdkPromise) return castSdkPromise;
+  castSdkPromise = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('Cast SDK load timed out')), 12000);
+    window.__onGCastApiAvailable = (available) => {
+      clearTimeout(timer);
+      if (available) resolve(); else reject(new Error('Cast SDK unavailable'));
+    };
+    const script = document.createElement('script');
+    script.src = 'https://www.gstatic.com/cv/js/sender/v1/cast_sender.js?loadCastFramework=1';
+    script.onerror = () => { clearTimeout(timer); reject(new Error('Failed to load Cast SDK')); };
+    document.head.appendChild(script);
+  });
+  return castSdkPromise;
+}
+
+function updateCastButton() {
+  const button = $('castBtn');
+  if (!button) return;
+  const context = castContextOrNull();
+  button.textContent = context?.getCurrentSession() ? 'Stop cast' : 'Cast';
+}
+
+async function initializeCast() {
+  const context = castContextOrNull();
+  if (!context) return null;
+  if (!castInitialized) {
+    context.setOptions({
+      receiverApplicationId: 'CC1AD845',
+      autoJoinPolicy: chrome.cast.AutoJoinPolicy.ORIGIN_SCOPED
+    });
+    context.addEventListener(
+      cast.framework.CastContextEventType.SESSION_STATE_CHANGED,
+      () => updateCastButton()
+    );
+    castInitialized = true;
+  }
+  return context;
+}
+
+async function castCurrentChannel() {
+  const c = currentChannel();
+  if (!c) { toast('Select a channel first.', true); return; }
+  if (!(location.protocol === 'https:' || ['localhost', '127.0.0.1'].includes(location.hostname))) {
+    toast('Cast requires HTTPS or localhost.', true);
+    return;
+  }
+  try {
+    await loadCastSdk();
+    const context = await initializeCast();
+    if (!context) throw new Error('Cast is unavailable in this browser');
+    if (!context.getCurrentSession()) await context.requestSession();
+    const info = await api(`/api/v1/channels/${encodeURIComponent(c.id)}/cast`, { method: 'POST' });
+    const mediaInfo = new chrome.cast.media.MediaInfo(info.media_url, info.content_type);
+    mediaInfo.metadata = new chrome.cast.media.GenericMediaMetadata();
+    mediaInfo.metadata.title = info.title;
+    mediaInfo.metadata.subtitle = c.name;
+    const request = new chrome.cast.media.LoadRequest(mediaInfo);
+    request.autoplay = true;
+    await context.getCurrentSession().loadMedia(request);
+    updateCastButton();
+    toast(`Casting ${info.title}.`);
+  } catch (error) {
+    toast(String(error), true);
+  }
+}
+
+function stopCasting() {
+  const context = castContextOrNull();
+  const session = context?.getCurrentSession();
+  if (session) session.endSession(true);
+  updateCastButton();
+}
+
+$('castBtn').addEventListener('click', () => {
+  const context = castContextOrNull();
+  if (context?.getCurrentSession()) stopCasting();
+  else castCurrentChannel();
+});
+
 let installPrompt = null;
 function showInstallButtons() {
   for (const id of ['installAppBtn', 'settingsInstallBtn']) {

@@ -135,6 +135,7 @@ pub fn router(state: AppState) -> Router {
             "/api/v1/channels/{id}/dvr",
             post(start_dvr).delete(stop_dvr_handler),
         )
+        .route("/api/v1/channels/{id}/cast", post(start_cast))
         .route("/api/v1/channels/{id}/now", get(now_playing))
         .route("/api/v1/channels/{id}/guide", get(guide))
         .layer(axum::middleware::from_fn_with_state(
@@ -164,7 +165,9 @@ pub fn router(state: AppState) -> Router {
         .route("/catchup/{session}/{file}", get(catchup_segment))
         .route("/dvr/{file}", get(dvr_playlist))
         .route("/dvr/{number}/{file}", get(dvr_segment))
-        .route("/cloud/{source}/{remote_id}", get(cloud_proxy));
+        .route("/cloud/{source}/{remote_id}", get(cloud_proxy))
+        .route("/cast/{file}", get(cast_playlist))
+        .route("/cast/{number}/{file}", get(cast_segment));
 
     protected.merge(public).with_state(state)
 }
@@ -286,6 +289,7 @@ struct PublicConfig {
     jellyfin_url: String,
     emby_url: String,
     emby_configured: bool,
+    cast_base_url: String,
 }
 
 async fn public_config(State(state): State<AppState>) -> Json<PublicConfig> {
@@ -294,6 +298,7 @@ async fn public_config(State(state): State<AppState>) -> Json<PublicConfig> {
         jellyfin_url: state.config.jellyfin_url.clone(),
         emby_url: state.config.emby_url.clone(),
         emby_configured: !state.config.emby_api_key.trim().is_empty(),
+        cast_base_url: cast_base(&state.config),
     })
 }
 
@@ -1454,6 +1459,131 @@ async fn xmltv(State(state): State<AppState>) -> Result<Response, ApiError> {
     }
     body.push_str("</tv>\n");
     Ok(([(header::CONTENT_TYPE, "application/xml")], body).into_response())
+}
+
+#[derive(Serialize)]
+struct CastResponse {
+    media_url: String,
+    content_type: String,
+    title: String,
+    channel: String,
+}
+
+async fn start_cast(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<CastResponse>, ApiError> {
+    let channel = db::channel_by_id(&state.pool, &id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("channel not found"))?;
+    let now = db::now_ms() / 1000;
+    let expires = now + 4 * 60 * 60;
+    let token = state
+        .cloud
+        .sign(format!("cast:{}:{expires}", channel.number).as_bytes());
+    let media_url = format!(
+        "{}/cast/{}.m3u8?expires={expires}&token={token}",
+        cast_base(&state.config),
+        channel.number
+    );
+    Ok(Json(CastResponse {
+        media_url,
+        content_type: "application/vnd.apple.mpegurl".into(),
+        title: channel.name,
+        channel: channel.number,
+    }))
+}
+
+#[derive(Deserialize)]
+struct CastQuery {
+    expires: i64,
+    token: String,
+}
+
+fn cast_base(config: &Config) -> String {
+    let value = if config.cast_base_url.trim().is_empty() {
+        config.public_url.trim()
+    } else {
+        config.cast_base_url.trim()
+    };
+    value.trim_end_matches('/').to_string()
+}
+
+fn cast_token_valid(state: &AppState, number: &str, expires: i64, token: &str) -> bool {
+    expires >= db::now_ms() / 1000
+        && state
+            .cloud
+            .verify(format!("cast:{number}:{expires}").as_bytes(), token)
+}
+
+async fn cast_playlist(
+    State(state): State<AppState>,
+    Path(file): Path<String>,
+    Query(query): Query<CastQuery>,
+) -> Result<Response, ApiError> {
+    let number = file
+        .strip_suffix(".m3u8")
+        .ok_or_else(|| ApiError::not_found("expected a .m3u8 playlist"))?;
+    if !cast_token_valid(&state, number, query.expires, &query.token) {
+        return Err(ApiError::unauthorized("invalid cast token"));
+    }
+    let channel = db::channel_by_number(&state.pool, number)
+        .await?
+        .ok_or_else(|| ApiError::not_found("channel not found"))?;
+    let playlist = state.engine.ensure(&channel).await?;
+    let body = tokio::fs::read_to_string(&playlist).await?;
+    let base = cast_base(&state.config);
+    let body = body
+        .lines()
+        .map(|line| {
+            if line.ends_with(".ts") {
+                format!(
+                    "{base}/cast/{number}/{line}?expires={}&token={}",
+                    query.expires, query.token
+                )
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    Ok((
+        [
+            (header::CONTENT_TYPE, "application/vnd.apple.mpegurl"),
+            (header::CACHE_CONTROL, "no-cache"),
+        ],
+        body,
+    )
+        .into_response())
+}
+
+async fn cast_segment(
+    State(state): State<AppState>,
+    Path((number, file)): Path<(String, String)>,
+    Query(query): Query<CastQuery>,
+) -> Result<Response, ApiError> {
+    if file.contains('/') || file.contains('\\') || file.contains("..") {
+        return Err(ApiError::bad_request("invalid segment name"));
+    }
+    if !cast_token_valid(&state, &number, query.expires, &query.token) {
+        return Err(ApiError::unauthorized("invalid cast token"));
+    }
+    let path = state
+        .config
+        .data_dir
+        .join("hls")
+        .join(number.replace('.', "_"))
+        .join(file);
+    let body = tokio::fs::read(&path).await?;
+    Ok((
+        [
+            (header::CONTENT_TYPE, "video/mp2t"),
+            (header::CACHE_CONTROL, "max-age=30"),
+        ],
+        body,
+    )
+        .into_response())
 }
 
 #[derive(Deserialize, Default)]

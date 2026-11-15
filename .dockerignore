@@ -4,5 +4,8 @@ testdata/generated
 .git
 .github
 docs
+android-tv
+desktop
+assets
 *.log
 .env
