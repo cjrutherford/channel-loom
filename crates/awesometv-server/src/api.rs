@@ -250,6 +250,8 @@ pub fn router(state: AppState) -> Router {
         .route("/admin", get(admin_index))
         .route("/admin/", get(admin_index))
         .route("/admin/login", get(admin_index))
+        .route("/cast-receiver", get(cast_receiver))
+        .route("/api/v1/public/config", get(public_viewer_config))
         .route("/api/v1/public/channels", get(public_channels))
         .route("/api/v1/public/guide", get(public_guide))
         .route("/api/v1/public/channels/{number}/cast", post(public_cast))
@@ -457,6 +459,10 @@ async fn public_index() -> Html<&'static str> {
     Html(include_str!("../web/public.html"))
 }
 
+async fn cast_receiver() -> Html<&'static str> {
+    Html(include_str!("../web/cast-receiver.html"))
+}
+
 /// The admin console shell is only sent to authenticated callers. Anonymous
 /// visitors get the login page instead, so the admin JavaScript and markup are
 /// not handed out publicly.
@@ -491,6 +497,7 @@ struct PublicConfig {
     emby_url: String,
     emby_configured: bool,
     cast_base_url: String,
+    cast_receiver_id: String,
 }
 
 async fn public_config(State(state): State<AppState>) -> Json<PublicConfig> {
@@ -499,6 +506,20 @@ async fn public_config(State(state): State<AppState>) -> Json<PublicConfig> {
         jellyfin_url: state.config.jellyfin_url.clone(),
         emby_url: state.config.emby_url.clone(),
         emby_configured: !state.config.emby_api_key.trim().is_empty(),
+        cast_base_url: cast_base(&state.config),
+        cast_receiver_id: state.config.cast_receiver_id.clone(),
+    })
+}
+
+#[derive(Serialize)]
+struct ViewerConfig {
+    cast_receiver_id: String,
+    cast_base_url: String,
+}
+
+async fn public_viewer_config(State(state): State<AppState>) -> Json<ViewerConfig> {
+    Json(ViewerConfig {
+        cast_receiver_id: state.config.cast_receiver_id.clone(),
         cast_base_url: cast_base(&state.config),
     })
 }
@@ -1825,6 +1846,10 @@ async fn start_cast(
     let channel = db::channel_by_id(&state.pool, &id)
         .await?
         .ok_or_else(|| ApiError::not_found("channel not found"))?;
+    // Warm the producer before handing the URL to the receiver; a cold start
+    // can otherwise exceed the Cast media load timeout.
+    state.engine.ensure(&channel).await?;
+    tracing::info!(channel = %channel.number, base = %cast_base(&state.config), "admin cast requested");
     Ok(Json(cast_response(&state, &channel)))
 }
 
@@ -1837,6 +1862,8 @@ async fn public_cast(
     let channel = db::channel_by_number(&state.pool, &number)
         .await?
         .ok_or_else(|| ApiError::not_found("channel not found"))?;
+    state.engine.ensure(&channel).await?;
+    tracing::info!(channel = %channel.number, base = %cast_base(&state.config), "public cast requested");
     Ok(Json(cast_response(&state, &channel)))
 }
 
@@ -1898,6 +1925,7 @@ async fn cast_playlist(
         [
             (header::CONTENT_TYPE, "application/vnd.apple.mpegurl"),
             (header::CACHE_CONTROL, "no-cache"),
+            (header::ACCESS_CONTROL_ALLOW_ORIGIN, "*"),
         ],
         body,
     )
@@ -1926,6 +1954,7 @@ async fn cast_segment(
         [
             (header::CONTENT_TYPE, "video/mp2t"),
             (header::CACHE_CONTROL, "max-age=30"),
+            (header::ACCESS_CONTROL_ALLOW_ORIGIN, "*"),
         ],
         body,
     )
@@ -1985,6 +2014,7 @@ async fn dvr_playlist(
         [
             (header::CONTENT_TYPE, "application/vnd.apple.mpegurl"),
             (header::CACHE_CONTROL, "no-cache"),
+            (header::ACCESS_CONTROL_ALLOW_ORIGIN, "*"),
         ],
         body,
     )
@@ -2001,6 +2031,7 @@ async fn dvr_segment(
         [
             (header::CONTENT_TYPE, "video/mp2t"),
             (header::CACHE_CONTROL, "max-age=30"),
+            (header::ACCESS_CONTROL_ALLOW_ORIGIN, "*"),
         ],
         body,
     )
@@ -2045,6 +2076,7 @@ async fn catchup_playlist(
         [
             (header::CONTENT_TYPE, "application/vnd.apple.mpegurl"),
             (header::CACHE_CONTROL, "no-cache"),
+            (header::ACCESS_CONTROL_ALLOW_ORIGIN, "*"),
         ],
         body,
     )
@@ -2061,6 +2093,7 @@ async fn catchup_segment(
         [
             (header::CONTENT_TYPE, "video/mp2t"),
             (header::CACHE_CONTROL, "max-age=30"),
+            (header::ACCESS_CONTROL_ALLOW_ORIGIN, "*"),
         ],
         body,
     )
@@ -2101,6 +2134,7 @@ async fn hls_playlist(
         [
             (header::CONTENT_TYPE, "application/vnd.apple.mpegurl"),
             (header::CACHE_CONTROL, "no-cache"),
+            (header::ACCESS_CONTROL_ALLOW_ORIGIN, "*"),
         ],
         body,
     )
@@ -2128,6 +2162,7 @@ async fn hls_segment(
         [
             (header::CONTENT_TYPE, "video/mp2t"),
             (header::CACHE_CONTROL, "max-age=30"),
+            (header::ACCESS_CONTROL_ALLOW_ORIGIN, "*"),
         ],
         body,
     )

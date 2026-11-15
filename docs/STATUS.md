@@ -18,9 +18,9 @@ Running: `https://atv.christopherrutherford.net` (public), `http://192.168.1.153
 | Auth | Public viewer at `/`; admin console at `/admin` (login-gated shell, session cookies marked `Secure` behind TLS, per-IP login throttling, Basic auth for API clients) |
 | Backups | Create/list/download, staged restore on restart |
 | Sources | Jellyfin import configured; Emby import implemented (no live instance configured) |
-| UI | Broadcast-control console plus a 10-foot TV mode with large video, channel strip, keyboard navigation, and live clocks |
+| UI | Redesigned watch page and control room: cinematic player, channel rail, guide timeline, cast mode, skeletons, responsive layouts, and a 10-foot TV mode |
 | Apps | Installable PWA over Tailscale Serve HTTPS; Android TV wrapper APK; Tauri desktop wrapper scaffold |
-| Cast | Cast button in the public viewer and admin, signed Cast HLS playlist/segments, Default Media Receiver, configurable Cast base URL |
+| Cast | Cast button in the public viewer and admin, cast-mode overlay with remote play/pause/mute/volume/stop, channel switching while casting, branded metadata, configurable Styled/Custom receiver, signed Cast HLS and CORS |
 | CI | Rust, Docker, Android TV APK, Tauri desktop bundle, PWA asset validation |
 | Runtime | Docker on Ubuntu 26.04 with FFmpeg 8.0.1 and VAAPI device passthrough |
 
@@ -69,6 +69,11 @@ Two public-path constraints were found and addressed:
   five 401s from a logged-out UI poll. The UI now stops polling when
   unauthenticated, and that jail is disabled; the app throttles its own login
   attempts instead.
+
+Both interfaces share a broadcast-control visual language. The watch page caches
+channels and guide data in local storage, and the service worker caches public
+API responses plus immutable HLS segments so brief network drops and retries do
+not restart the buffer.
 
 The public viewer/admin split is in place:
 

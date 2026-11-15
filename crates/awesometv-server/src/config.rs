@@ -24,6 +24,7 @@ pub struct Config {
     pub default_subtitle_mode: String,
     pub default_subtitle_language: String,
     pub cast_base_url: String,
+    pub cast_receiver_id: String,
     pub stream_max_kbps: i64,
     pub precache_enabled: bool,
     pub precache_dir: PathBuf,
@@ -80,6 +81,11 @@ impl Config {
             env::var("AWESOMETV_SUBTITLE_MODE").unwrap_or_else(|_| "off".into());
         let default_subtitle_language = env::var("AWESOMETV_SUBTITLE_LANGUAGE").unwrap_or_default();
         let cast_base_url = env::var("AWESOMETV_CAST_BASE_URL").unwrap_or_default();
+        let cast_receiver_id = env::var("AWESOMETV_CAST_RECEIVER_ID")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "CC1AD845".into());
         let stream_max_kbps = env::var("AWESOMETV_STREAM_MAX_KBPS")
             .ok()
             .and_then(|value| value.parse().ok())
@@ -135,6 +141,7 @@ impl Config {
             default_subtitle_mode,
             default_subtitle_language,
             cast_base_url,
+            cast_receiver_id,
             stream_max_kbps,
             precache_enabled,
             precache_dir,

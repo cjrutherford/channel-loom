@@ -23,6 +23,7 @@ services:
       CLOUD_AUTO_CACHE_MAX_MB: ${CLOUD_AUTO_CACHE_MAX_MB:-2048}
       AWESOMETV_SECRET_KEY: ${AWESOMETV_SECRET_KEY:-}
       AWESOMETV_CAST_BASE_URL: ${AWESOMETV_CAST_BASE_URL:-}
+      AWESOMETV_CAST_RECEIVER_ID: ${AWESOMETV_CAST_RECEIVER_ID:-CC1AD845}
       # Global video bitrate ceiling in kbps for public streaming. 0 disables it.
       AWESOMETV_STREAM_MAX_KBPS: ${AWESOMETV_STREAM_MAX_KBPS:-0}
       # Local precache for slow source mounts.
