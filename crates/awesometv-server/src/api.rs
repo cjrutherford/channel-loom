@@ -34,6 +34,104 @@ pub struct Session {
     pub expires_ms: i64,
 }
 
+const LOGIN_WINDOW_MS: i64 = 15 * 60 * 1000;
+const LOGIN_MAX_FAILURES: usize = 10;
+
+/// In-memory failed login tracking. A single administrator account on a
+/// self-hosted box does not need a persistent store, and losing the counters on
+/// restart only ever makes the limiter more permissive for one window.
+#[derive(Default)]
+pub struct LoginThrottle {
+    failures: HashMap<String, Vec<i64>>,
+}
+
+impl LoginThrottle {
+    /// Seconds the caller should wait, or `None` when attempts are allowed.
+    fn retry_after(&mut self, key: &str, now: i64) -> Option<u64> {
+        let retry = match self.failures.get_mut(key) {
+            Some(timestamps) => {
+                timestamps.retain(|at| now.saturating_sub(*at) < LOGIN_WINDOW_MS);
+                if timestamps.len() < LOGIN_MAX_FAILURES {
+                    None
+                } else {
+                    timestamps.first().map(|oldest| {
+                        let remaining_ms = LOGIN_WINDOW_MS - (now - oldest);
+                        (remaining_ms.max(1_000) / 1_000) as u64
+                    })
+                }
+            }
+            None => None,
+        };
+        if retry.is_none()
+            && self
+                .failures
+                .get(key)
+                .is_some_and(|timestamps| timestamps.is_empty())
+        {
+            self.failures.remove(key);
+        }
+        retry
+    }
+
+    fn record_failure(&mut self, key: &str, now: i64) {
+        if self.failures.len() > 4_096 {
+            self.failures
+                .retain(|_, timestamps| timestamps.iter().any(|at| now - at < LOGIN_WINDOW_MS));
+        }
+        let timestamps = self.failures.entry(key.to_string()).or_default();
+        timestamps.push(now);
+        if timestamps.len() > LOGIN_MAX_FAILURES * 2 {
+            let excess = timestamps.len() - LOGIN_MAX_FAILURES * 2;
+            timestamps.drain(0..excess);
+        }
+    }
+
+    fn clear(&mut self, key: &str) {
+        self.failures.remove(key);
+    }
+}
+
+#[cfg(test)]
+mod throttle_tests {
+    use super::*;
+
+    #[test]
+    fn blocks_after_repeated_failures() {
+        let mut throttle = LoginThrottle::default();
+        let now = 1_000_000;
+        for _ in 0..LOGIN_MAX_FAILURES {
+            assert!(throttle.retry_after("1.2.3.4", now).is_none());
+            throttle.record_failure("1.2.3.4", now);
+        }
+        assert!(throttle.retry_after("1.2.3.4", now).is_some());
+        assert!(throttle.retry_after("5.6.7.8", now).is_none());
+    }
+
+    #[test]
+    fn clears_after_successful_login() {
+        let mut throttle = LoginThrottle::default();
+        for _ in 0..LOGIN_MAX_FAILURES {
+            throttle.record_failure("1.2.3.4", 1_000_000);
+        }
+        throttle.clear("1.2.3.4");
+        assert!(throttle.retry_after("1.2.3.4", 1_000_000).is_none());
+    }
+
+    #[test]
+    fn window_expiry_unblocks() {
+        let mut throttle = LoginThrottle::default();
+        for _ in 0..LOGIN_MAX_FAILURES {
+            throttle.record_failure("1.2.3.4", 1_000_000);
+        }
+        assert!(throttle.retry_after("1.2.3.4", 1_000_000).is_some());
+        assert!(
+            throttle
+                .retry_after("1.2.3.4", 1_000_000 + LOGIN_WINDOW_MS + 1)
+                .is_none()
+        );
+    }
+}
+
 #[derive(Clone)]
 pub struct AppState {
     pub config: Config,
@@ -41,6 +139,7 @@ pub struct AppState {
     pub engine: Arc<Engine>,
     pub cloud: Arc<CloudManager>,
     pub sessions: Arc<Mutex<HashMap<String, Session>>>,
+    pub login_throttle: Arc<Mutex<LoginThrottle>>,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -178,15 +277,76 @@ struct LoginRequest {
     password: String,
 }
 
+/// Requests reach the app over plain HTTP when a reverse proxy terminates TLS,
+/// so trust the standard forwarding headers to decide whether the session
+/// cookie must be marked `Secure`.
+fn request_is_secure(headers: &HeaderMap) -> bool {
+    if let Some(proto) = headers
+        .get("x-forwarded-proto")
+        .and_then(|v| v.to_str().ok())
+    {
+        return proto
+            .split(',')
+            .any(|value| value.trim().eq_ignore_ascii_case("https"));
+    }
+    headers
+        .get("forwarded")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| {
+            value.split(';').any(|part| {
+                part.trim()
+                    .strip_prefix("proto=")
+                    .is_some_and(|proto| proto.trim_matches('"').eq_ignore_ascii_case("https"))
+            })
+        })
+}
+
+/// Prefer the header the reverse proxy sets itself. `X-Forwarded-For` is
+/// append-only, so the last entry is the one added by the closest proxy; using
+/// the first entry would let a client spoof its way around the limiter.
+fn client_key(headers: &HeaderMap) -> String {
+    headers
+        .get("x-real-ip")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            headers
+                .get("x-forwarded-for")
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.rsplit(',').next())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        })
+        .unwrap_or("unknown")
+        .to_string()
+}
+
 async fn login(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(request): Json<LoginRequest>,
 ) -> Result<Response, ApiError> {
+    let key = client_key(&headers);
+    let now = db::now_ms();
+    if let Some(retry_after) = state.login_throttle.lock().await.retry_after(&key, now) {
+        let mut response = (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(serde_json::json!({"error": "too many failed login attempts"})),
+        )
+            .into_response();
+        if let Ok(value) = HeaderValue::from_str(&retry_after.to_string()) {
+            response.headers_mut().insert(header::RETRY_AFTER, value);
+        }
+        return Ok(response);
+    }
     if request.username != state.config.admin_user
         || request.password != state.config.admin_password
     {
+        state.login_throttle.lock().await.record_failure(&key, now);
         return Err(ApiError::unauthorized("invalid credentials"));
     }
+    state.login_throttle.lock().await.clear(&key);
     let token = uuid::Uuid::new_v4().to_string();
     state.sessions.lock().await.insert(
         token.clone(),
@@ -196,10 +356,15 @@ async fn login(
         },
     );
     let mut response = Json(serde_json::json!({"user": state.config.admin_user})).into_response();
+    let secure = if request_is_secure(&headers) {
+        "; Secure"
+    } else {
+        ""
+    };
     response.headers_mut().insert(
         header::SET_COOKIE,
         HeaderValue::from_str(&format!(
-            "awesometv_session={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800"
+            "awesometv_session={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800{secure}"
         ))
         .map_err(|error| ApiError::internal(format!("cookie: {error}")))?,
     );
@@ -211,9 +376,17 @@ async fn logout(State(state): State<AppState>, request: Request) -> Response {
         state.sessions.lock().await.remove(&token);
     }
     let mut response = StatusCode::NO_CONTENT.into_response();
+    let secure = if request_is_secure(request.headers()) {
+        "; Secure"
+    } else {
+        ""
+    };
     response.headers_mut().insert(
         header::SET_COOKIE,
-        HeaderValue::from_static("awesometv_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0"),
+        HeaderValue::from_str(&format!(
+            "awesometv_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0{secure}"
+        ))
+        .expect("static cookie header is valid"),
     );
     response
 }

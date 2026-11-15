@@ -1,7 +1,7 @@
 # Status and remaining work
 
 Date: 2026-11-15
-Running: `http://192.168.1.153:8409` (LAN), `http://100.120.253.100:8409` (Tailscale), `https://nirvana.tail5a4a0.ts.net:8447` (Tailscale HTTPS). Public reverse proxy config: `deploy/nginx/` for `atv.christopherrutherford.net`.
+Running: `https://atv.christopherrutherford.net` (public), `http://192.168.1.153:8409` (LAN), `http://100.120.253.100:8409` (Tailscale), `https://nirvana.tail5a4a0.ts.net:8447` (Tailscale HTTPS). Public TLS terminates in SWAG on the VPS; config lives in `deploy/nginx/swag/`.
 
 ## Current state
 
@@ -14,7 +14,7 @@ Running: `http://192.168.1.153:8409` (LAN), `http://100.120.253.100:8409` (Tails
 | Graphics | Per-channel text bug, static or animated image/video watermark, and lower third; captured in block templates |
 | Streams | Resolution, preset, CRF, audio bitrate, global/per-channel languages, subtitles, HDR tonemap, software/VAAPI, segment size, prebuffer, cache depth, and startup prewarm |
 | Playback | HLS + MPEG-TS/HDHomeRun; trimmed in/out playback; catch-up restart; rolling DVR buffer; music/image items; subtitles, overlays, HDR tonemap, VAAPI; slate fallback |
-| Auth | Session login/logout; Basic auth retained for API clients |
+| Auth | Session login/logout with `Secure` cookies behind TLS, per-IP login throttling (10 failures / 15 min); Basic auth retained for API clients |
 | Backups | Create/list/download, staged restore on restart |
 | Sources | Jellyfin import configured; Emby import implemented (no live instance configured) |
 | UI | Broadcast-control console plus a 10-foot TV mode with large video, channel strip, keyboard navigation, and live clocks |
@@ -48,6 +48,15 @@ Running: `http://192.168.1.153:8409` (LAN), `http://100.120.253.100:8409` (Tails
 | 12 | Gundam Channel | 13 Gundam series, 2 episodes each per cycle |
 
 A **Holiday Movies** alternate schedule runs Family Movies on Movie Night from December 24–26.
+
+## Public access
+
+`https://atv.christopherrutherford.net` is live: DNS points at the Linode VPS,
+SWAG terminates TLS with a certificate covering the hostname, and the proxy
+reaches the app over Tailscale MagicDNS (`nirvana.tail5a4a0.ts.net:8409`).
+Verified end-to-end: login, session cookie, config, channel list, HLS playlist,
+and MPEG-TS segment fetch. The public viewer/admin split is still pending, so
+the hostname currently serves the protected admin console.
 
 ## Cloud sources
 

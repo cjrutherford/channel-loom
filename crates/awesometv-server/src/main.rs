@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use anyhow::Context;
 
-use crate::api::AppState;
+use crate::api::{AppState, LoginThrottle};
 use crate::config::Config;
 use crate::engine::Engine;
 
@@ -64,6 +64,7 @@ async fn main() -> anyhow::Result<()> {
         engine: engine.clone(),
         cloud: cloud.clone(),
         sessions: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
+        login_throttle: Arc::new(tokio::sync::Mutex::new(LoginThrottle::default())),
     };
     let prewarm = engine.clone();
     tokio::spawn(async move {
