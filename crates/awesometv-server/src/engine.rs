@@ -687,7 +687,10 @@ fn start_producer(
     std::fs::create_dir_all(&log_dir)?;
     let log_path = log_dir.join(format!("channel-{}.log", channel.number));
     let log = File::create(&log_path).with_context(|| format!("create {}", log_path.display()))?;
-    let segment_prefix = format!("seg_{}_{:05}", item_key.replace(':', "_"), 0);
+    // A fresh run id keeps segment URLs unique across producer restarts, so a
+    // client or service-worker cache can never serve a stale segment.
+    let run_id = uuid::Uuid::new_v4().simple().to_string();
+    let segment_prefix = format!("seg_{}_{}_{:05}", item_key.replace(':', "_"), run_id, 0);
     let segment_pattern = out_dir.join(format!("{segment_prefix}_%05d.ts"));
     let probe = if matches!(media_kind, "image" | "slate") {
         StreamProbe::default()
@@ -901,7 +904,8 @@ fn start_slate_producer(
     std::fs::create_dir_all(&log_dir)?;
     let log_path = log_dir.join(format!("channel-{}.log", channel.number));
     let log = File::create(&log_path).with_context(|| format!("create {}", log_path.display()))?;
-    let segment_prefix = format!("seg_{}_{:05}", item_key.replace(':', "_"), 0);
+    let run_id = uuid::Uuid::new_v4().simple().to_string();
+    let segment_prefix = format!("seg_{}_{}_{:05}", item_key.replace(':', "_"), run_id, 0);
     let segment_pattern = out_dir.join(format!("{segment_prefix}_%05d.ts"));
     let seconds = (duration_ms as f64 / 1000.0).max(1.0);
     let font = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf";
