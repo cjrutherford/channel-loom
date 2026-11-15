@@ -63,11 +63,15 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
-      - uses: android-actions/setup-android@v3
       - name: Install Android SDK 36
+        env:
+          ANDROID_HOME: /usr/local/lib/android/sdk
+          ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
         run: |
-          yes | sdkmanager --licenses >/dev/null 2>&1 || true
-          sdkmanager "platforms;android-36" "build-tools;36.0.0"
+          SDKMANAGER=$(find "$ANDROID_HOME" -type f -path '*/bin/sdkmanager' | sort -V | tail -1)
+          echo "Using $SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+          "$SDKMANAGER" "platforms;android-36" "build-tools;36.0.0"
       - name: Build debug APK
         run: |
           chmod +x android-tv/gradlew
