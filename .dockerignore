@@ -1,0 +1,8 @@
+target
+data
+testdata/generated
+.git
+.github
+docs
+*.log
+.env

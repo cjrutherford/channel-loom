@@ -1,0 +1,32 @@
+services:
+  awesometv:
+    build: .
+    container_name: awesometv
+    network_mode: host
+    user: "${AWESOMETV_UID:-1000}:${AWESOMETV_GID:-1000}"
+    environment:
+      # Bind only the Tailscale address. Change this if your Tailscale IP differs.
+      AWESOMETV_BIND: ${AWESOMETV_BIND:-100.120.253.100}
+      AWESOMETV_PORT: ${AWESOMETV_PORT:-8409}
+      AWESOMETV_PUBLIC_URL: ${AWESOMETV_PUBLIC_URL:-http://100.120.253.100:8409}
+      AWESOMETV_DATA_DIR: /data
+      AWESOMETV_MEDIA_ROOT: /media
+      AWESOMETV_ADMIN_USER: ${AWESOMETV_ADMIN_USER:-admin}
+      AWESOMETV_ADMIN_PASSWORD: ${AWESOMETV_ADMIN_PASSWORD:?set AWESOMETV_ADMIN_PASSWORD in .env}
+      JELLYFIN_URL: ${JELLYFIN_URL:-https://jelly.christopherrutherford.net}
+      JELLYFIN_API_KEY: ${JELLYFIN_API_KEY:-}
+      EMBY_URL: ${EMBY_URL:-http://localhost:8096}
+      EMBY_API_KEY: ${EMBY_API_KEY:-}
+      GOOGLE_DRIVE_API_BASE: ${GOOGLE_DRIVE_API_BASE:-}
+      GOOGLE_OAUTH_TOKEN_URL: ${GOOGLE_OAUTH_TOKEN_URL:-}
+      CLOUD_CACHE_MAX_GB: ${CLOUD_CACHE_MAX_GB:-500}
+      CLOUD_AUTO_CACHE_MAX_MB: ${CLOUD_AUTO_CACHE_MAX_MB:-2048}
+      AWESOMETV_SECRET_KEY: ${AWESOMETV_SECRET_KEY:-}
+      RUST_LOG: ${RUST_LOG:-awesometv_server=info}
+    volumes:
+      - ./data:/data
+      - /mnt/valhalla/media:/media:ro
+    # Expose the render node for the optional VAAPI stream profile.
+    devices:
+      - /dev/dri:/dev/dri
+    restart: unless-stopped

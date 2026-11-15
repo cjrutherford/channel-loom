@@ -1,0 +1,1766 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Awesome TV — Broadcast Control</title>
+<meta name="theme-color" content="#0b0f12">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Awesome TV">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink: #08090a;
+    --panel: #0e1012;
+    --panel-2: #131619;
+    --line: #262b30;
+    --line-soft: #1a1f23;
+    --paper: #f3efe6;
+    --muted: #9aa4ad;
+    --dim: #6f7b84;
+    --signal: #7ee7c7;
+    --amber: #f5c26b;
+    --red: #ff5a5f;
+    --blue: #7fb4ff;
+    --display: "Barlow Condensed", "Arial Narrow", sans-serif;
+    --body: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; min-height: 100%; background: var(--ink); color: var(--paper); font-family: var(--body); }
+  body {
+    background:
+      radial-gradient(1100px 600px at 12% -10%, rgba(126,231,199,.08), transparent 60%),
+      radial-gradient(900px 500px at 95% 10%, rgba(245,194,107,.06), transparent 60%),
+      var(--ink);
+  }
+  body::before {
+    content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 50; opacity: .035;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.55'/%3E%3C/svg%3E");
+  }
+  a { color: var(--signal); }
+  button, input, select { font: inherit; }
+  button { cursor: pointer; }
+  .shell { display: grid; grid-template-columns: 236px minmax(0, 1fr); min-height: 100vh; }
+  .sidebar {
+    position: sticky; top: 0; height: 100vh; padding: 22px 16px 18px;
+    border-right: 1px solid var(--line-soft); background: rgba(8,9,10,.72); backdrop-filter: blur(12px);
+    display: flex; flex-direction: column; gap: 22px;
+  }
+  .brand { display: flex; align-items: center; gap: 11px; padding: 0 8px; }
+  .brand-mark {
+    width: 34px; height: 34px; border-radius: 9px; background: var(--paper); color: var(--ink);
+    display: grid; place-items: center; font-family: var(--display); font-size: 22px; font-weight: 700; letter-spacing: -.03em;
+    box-shadow: 0 0 0 1px rgba(255,255,255,.15), 0 8px 24px rgba(0,0,0,.4);
+  }
+  .brand-name { font-family: var(--display); font-size: 24px; font-weight: 700; letter-spacing: .02em; line-height: .9; }
+  .brand-sub { font-family: var(--mono); font-size: 9px; letter-spacing: .18em; color: var(--dim); margin-top: 4px; text-transform: uppercase; }
+  nav { display: grid; gap: 4px; }
+  .nav-item {
+    display: flex; align-items: center; gap: 10px; padding: 10px 11px; border-radius: 8px;
+    color: var(--muted); text-decoration: none; font-size: 13px; font-weight: 500; border: 1px solid transparent;
+  }
+  .nav-item .key { font-family: var(--mono); font-size: 10px; color: var(--dim); margin-left: auto; }
+  .nav-item:hover { color: var(--paper); background: rgba(255,255,255,.035); }
+  .nav-item.active { color: var(--ink); background: var(--paper); }
+  .nav-item.active .key { color: rgba(0,0,0,.45); }
+  .nav-icon { width: 17px; text-align: center; font-size: 13px; }
+  .side-foot { margin-top: auto; display: grid; gap: 10px; }
+  .health { display: flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 10px; color: var(--muted); padding: 10px; border: 1px solid var(--line-soft); border-radius: 8px; }
+  .pulse { width: 7px; height: 7px; border-radius: 99px; background: var(--signal); box-shadow: 0 0 0 0 rgba(126,231,199,.5); animation: pulse 2.4s infinite; }
+  @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(126,231,199,.45); } 70% { box-shadow: 0 0 0 7px rgba(126,231,199,0); } 100% { box-shadow: 0 0 0 0 rgba(126,231,199,0); } }
+  .main { min-width: 0; }
+  .topbar {
+    position: sticky; top: 0; z-index: 20; display: flex; align-items: center; gap: 16px;
+    padding: 16px 28px; border-bottom: 1px solid var(--line-soft); background: rgba(8,9,10,.82); backdrop-filter: blur(12px);
+  }
+  .crumb { font-family: var(--mono); font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: .12em; }
+  .crumb b { color: var(--paper); font-weight: 500; }
+  .top-actions { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+  .btn {
+    border: 1px solid var(--line); background: var(--panel-2); color: var(--paper); border-radius: 7px;
+    padding: 8px 12px; font-size: 12px; font-weight: 600; display: inline-flex; gap: 7px; align-items: center;
+  }
+  .btn:hover { border-color: #3b444c; background: #181c20; }
+  .btn.primary { background: var(--paper); color: var(--ink); border-color: var(--paper); }
+  .btn.primary:hover { background: #fff; }
+  .btn.ghost { background: transparent; }
+  .btn.small { padding: 5px 9px; font-size: 11px; }
+  .btn:disabled { opacity: .45; cursor: default; }
+  .content { padding: 26px 28px 64px; max-width: 1500px; }
+  .view { display: none; animation: rise .35s ease both; }
+  .view.active { display: block; }
+  @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+  .view-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
+  .eyebrow { font-family: var(--mono); font-size: 10px; letter-spacing: .16em; text-transform: uppercase; color: var(--signal); margin-bottom: 6px; }
+  h1 { font-family: var(--display); font-size: clamp(34px, 4vw, 54px); line-height: .92; letter-spacing: .01em; margin: 0; font-weight: 600; text-transform: uppercase; }
+  h2 { font-family: var(--display); font-size: 24px; text-transform: uppercase; letter-spacing: .03em; margin: 0 0 12px; font-weight: 600; }
+  h3 { font-size: 13px; margin: 0 0 5px; font-weight: 600; }
+  p { margin: 0 0 10px; }
+  .muted { color: var(--muted); }
+  .dim { color: var(--dim); }
+  .mono { font-family: var(--mono); }
+  .small { font-size: 12px; }
+  .tiny { font-size: 10px; }
+  .grid-2 { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(300px, .65fr); gap: 18px; }
+  .grid-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+  .panel { border: 1px solid var(--line); background: linear-gradient(180deg, rgba(255,255,255,.022), transparent 45%), var(--panel); border-radius: 12px; }
+  .panel-pad { padding: 18px; }
+  .onair { overflow: hidden; }
+  .screen {
+    position: relative; aspect-ratio: 16 / 9; background: #000; border-bottom: 1px solid var(--line);
+    display: grid; place-items: center; overflow: hidden;
+  }
+  .screen video { width: 100%; height: 100%; object-fit: contain; background: #000; }
+  .screen-off {
+    position: absolute; inset: 0; display: grid; place-items: center; text-align: center; padding: 24px;
+    background: radial-gradient(circle at 50% 45%, #182026 0, #08090a 65%);
+  }
+  .screen-off .big { font-family: var(--display); font-size: clamp(38px, 6vw, 82px); line-height: .85; letter-spacing: .02em; color: #2c353c; text-transform: uppercase; }
+  .screen-off .sub { font-family: var(--mono); font-size: 10px; letter-spacing: .18em; color: #54616a; margin-top: 10px; }
+  .onair-top { position: absolute; top: 14px; left: 14px; right: 14px; display: flex; justify-content: space-between; gap: 10px; z-index: 3; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 6px; padding: 5px 8px; border-radius: 999px;
+    font-family: var(--mono); font-size: 9px; letter-spacing: .1em; text-transform: uppercase; background: rgba(8,9,10,.78); border: 1px solid rgba(255,255,255,.14); backdrop-filter: blur(8px);
+  }
+  .chip.live { color: var(--red); }
+  .chip.live .dot { background: var(--red); animation: pulse 1.8s infinite; }
+  .dot { width: 6px; height: 6px; border-radius: 99px; background: var(--signal); }
+  .screen-meta {
+    position: absolute; left: 0; right: 0; bottom: 0; z-index: 3; padding: 42px 16px 14px;
+    background: linear-gradient(transparent, rgba(0,0,0,.88));
+  }
+  .screen-title { font-family: var(--display); font-size: clamp(24px, 3.4vw, 42px); line-height: .95; text-transform: uppercase; letter-spacing: .02em; }
+  .screen-sub { font-family: var(--mono); font-size: 10px; color: #c8d0d6; margin-top: 5px; letter-spacing: .04em; }
+  .onair-body { display: flex; gap: 16px; align-items: center; padding: 14px 18px; flex-wrap: wrap; }
+  .channel-no { font-family: var(--display); font-size: 42px; line-height: .8; color: var(--amber); }
+  .onair-copy { min-width: 0; flex: 1; }
+  .onair-copy .name { font-weight: 600; font-size: 14px; }
+  .onair-copy .next { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .progress { height: 4px; background: #22282d; border-radius: 99px; overflow: hidden; margin-top: 8px; }
+  .progress > span { display: block; height: 100%; background: linear-gradient(90deg, var(--signal), var(--amber)); width: 0; }
+  .rail { display: grid; gap: 8px; align-content: start; }
+  .rail-card {
+    display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; gap: 10px; align-items: center;
+    padding: 10px; border: 1px solid var(--line-soft); border-radius: 9px; background: rgba(255,255,255,.018); cursor: pointer;
+  }
+  .rail-card:hover { border-color: #3a444c; background: rgba(255,255,255,.035); }
+  .rail-card.active { border-color: var(--signal); box-shadow: inset 0 0 0 1px rgba(126,231,199,.25); }
+  .rail-no { font-family: var(--display); font-size: 25px; color: var(--amber); }
+  .rail-name { font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .rail-now { font-size: 10px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .rail-play { font-family: var(--mono); font-size: 10px; color: var(--signal); }
+  .stat-strip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 14px; }
+  .stat { border: 1px solid var(--line-soft); border-radius: 9px; padding: 11px 13px; background: rgba(255,255,255,.015); }
+  .stat .n { font-family: var(--display); font-size: 28px; line-height: .9; }
+  .stat .l { font-family: var(--mono); font-size: 9px; color: var(--dim); text-transform: uppercase; letter-spacing: .1em; margin-top: 3px; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); gap: 12px; }
+  .channel-card { padding: 14px; border: 1px solid var(--line); border-radius: 11px; background: var(--panel); cursor: pointer; }
+  .channel-card:hover { border-color: #3b464e; transform: translateY(-1px); }
+  .channel-card.active { border-color: var(--signal); }
+  .cc-top { display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; }
+  .cc-no { font-family: var(--display); font-size: 26px; color: var(--amber); line-height: .9; }
+  .cc-name { font-weight: 600; font-size: 13px; }
+  .cc-now { font-size: 11px; color: var(--muted); margin-top: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cc-next { font-size: 10px; color: var(--dim); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cc-actions { display: flex; gap: 6px; margin-top: 10px; }
+  .toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+  .search { flex: 1; min-width: 150px; background: var(--panel); border: 1px solid var(--line); color: var(--paper); border-radius: 7px; padding: 8px 11px; }
+  .search::placeholder { color: #63707a; }
+  .tabs { display: flex; gap: 4px; background: var(--panel); border: 1px solid var(--line); padding: 3px; border-radius: 8px; }
+  .tab { background: transparent; border: 0; color: var(--muted); padding: 6px 9px; border-radius: 5px; font-size: 11px; font-weight: 600; }
+  .tab.active { background: var(--paper); color: var(--ink); }
+  .table { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .tr { display: grid; grid-template-columns: 26px minmax(0, 1fr) 78px 76px 88px 74px; gap: 10px; align-items: center; padding: 8px 11px; border-bottom: 1px solid var(--line-soft); font-size: 12px; }
+  .tr:last-child { border-bottom: 0; }
+  .tr.head { background: var(--panel-2); color: var(--dim); font-family: var(--mono); font-size: 9px; letter-spacing: .1em; text-transform: uppercase; }
+  .tr:not(.head):hover { background: rgba(255,255,255,.02); }
+  .tr .name { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tr input { accent-color: var(--signal); }
+  .badge { display: inline-block; font-family: var(--mono); font-size: 9px; padding: 2px 5px; border: 1px solid var(--line); border-radius: 4px; color: var(--muted); }
+  .empty { padding: 32px 20px; text-align: center; color: var(--dim); border: 1px dashed var(--line); border-radius: 10px; }
+  .empty b { display: block; color: var(--paper); font-family: var(--display); font-size: 22px; text-transform: uppercase; margin-bottom: 4px; }
+  .source-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+  .source-card { padding: 15px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+  .source-top { display: flex; justify-content: space-between; gap: 10px; align-items: center; }
+  .source-path { font-family: var(--mono); font-size: 10px; color: var(--dim); word-break: break-all; margin: 8px 0 12px; }
+  .ok { color: var(--signal); }
+  .warn { color: var(--amber); }
+  .guide { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .guide-row { display: grid; grid-template-columns: 130px minmax(0, 1fr); min-height: 48px; border-bottom: 1px solid var(--line-soft); }
+  .guide-row:last-child { border-bottom: 0; }
+  .guide-label { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-right: 1px solid var(--line-soft); background: var(--panel-2); min-width: 0; }
+  .guide-label .tiny { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .guide-track { position: relative; min-height: 48px; }
+  .guide-block { position: absolute; top: 5px; bottom: 5px; border-radius: 5px; padding: 5px 7px; overflow: hidden; font-size: 10px; color: #07100d; background: var(--signal); border: 1px solid rgba(0,0,0,.15); }
+  .guide-block.filler { background: var(--amber); }
+  .guide-block span { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .guide-now { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--red); z-index: 3; }
+  .guide-ticks { display: grid; grid-template-columns: 130px minmax(0, 1fr); position: sticky; top: 57px; z-index: 2; background: var(--ink); border-bottom: 1px solid var(--line-soft); }
+  .guide-ticks .spacer { border-right: 1px solid var(--line-soft); }
+  .ticks { display: grid; grid-template-columns: repeat(6, 1fr); font-family: var(--mono); font-size: 9px; color: var(--dim); padding: 6px 0; }
+  .ticks span { padding-left: 6px; border-left: 1px solid var(--line-soft); }
+  .modal-back { position: fixed; inset: 0; background: rgba(0,0,0,.72); backdrop-filter: blur(4px); z-index: 100; display: none; place-items: center; padding: 18px; }
+  .modal-back.open { display: grid; }
+  .modal { width: min(520px, 100%); border: 1px solid var(--line); border-radius: 12px; background: var(--panel); box-shadow: 0 30px 80px rgba(0,0,0,.55); padding: 20px; }
+  .modal h2 { margin-bottom: 4px; }
+  .field { display: grid; gap: 5px; margin: 12px 0; }
+  .field label { font-family: var(--mono); font-size: 9px; letter-spacing: .1em; text-transform: uppercase; color: var(--dim); }
+  .field input, .field select { background: #08090a; border: 1px solid var(--line); color: var(--paper); border-radius: 7px; padding: 9px 10px; }
+  .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+  .toast-wrap { position: fixed; right: 18px; bottom: 18px; z-index: 120; display: grid; gap: 8px; }
+  .toast { background: var(--paper); color: var(--ink); border-radius: 8px; padding: 10px 13px; font-size: 12px; font-weight: 600; box-shadow: 0 10px 30px rgba(0,0,0,.4); animation: toast .3s ease both; max-width: 360px; }
+  .toast.err { background: var(--red); color: #fff; }
+  @keyframes toast { from { opacity: 0; transform: translateY(8px); } }
+  .collection-card { padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); display: flex; justify-content: space-between; gap: 10px; align-items: center; }
+  .collection-card .count { font-family: var(--mono); font-size: 10px; color: var(--dim); }
+  .block-row { display: grid; grid-template-columns: 90px minmax(0,1fr) 90px 70px; gap: 8px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line-soft); font-size: 11px; }
+  .block-row.wide-actions { grid-template-columns: 90px minmax(0,1fr) 90px 150px; }
+  .block-row:last-child { border-bottom: 0; }
+  .block-row .days { color: var(--muted); font-family: var(--mono); font-size: 9px; }
+  .daychecks { display: flex; flex-wrap: wrap; gap: 6px; }
+  .daychecks label { display: flex; align-items: center; gap: 3px; font-size: 10px; color: var(--muted); }
+  .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .program-grid { display: grid; grid-template-columns: 1.1fr .9fr; gap: 14px; }
+  .tv-stage { position: relative; background: #000; border: 1px solid var(--line); border-radius: 14px; overflow: hidden; height: 56vh; }
+  .tv-stage video { width: 100%; height: 100%; object-fit: contain; background: #000; }
+  .tv-overlay { position: absolute; left: 0; right: 0; bottom: 0; padding: 24px 28px; background: linear-gradient(transparent, rgba(0,0,0,.88)); }
+  .tv-overlay .title { font-size: clamp(24px, 3vw, 44px); font-weight: 800; letter-spacing: -.02em; }
+  .tv-overlay .sub { font-family: var(--mono); color: var(--muted); font-size: 13px; margin-top: 6px; }
+  .tv-clock { font-family: var(--mono); font-size: 22px; color: var(--paper); }
+  .tv-grid { display: flex; gap: 12px; margin-top: 16px; overflow-x: auto; padding-bottom: 6px; scrollbar-width: thin; }
+  .tv-tile { flex: 0 0 250px; border: 1px solid var(--line); border-radius: 12px; padding: 16px; background: var(--panel); cursor: pointer; min-height: 112px; }
+  .tv-tile.active { border-color: var(--mint); box-shadow: 0 0 0 2px rgba(126,231,199,.22); }
+  .tv-tile .num { font-family: var(--mono); color: var(--mint); font-size: 22px; }
+  .tv-tile .name { font-size: 20px; font-weight: 700; margin-top: 2px; }
+  .tv-tile .now { font-size: 14px; color: var(--muted); margin-top: 8px; }
+  .tv-tile .next { font-size: 11px; color: var(--dim); margin-top: 4px; }
+  .tv-tile .bar { height: 4px; background: rgba(255,255,255,.08); margin-top: 10px; border-radius: 2px; overflow: hidden; }
+  .tv-tile .bar span { display: block; height: 100%; background: var(--mint); }
+  @media (max-width: 980px) { .program-grid { grid-template-columns: 1fr; } }
+  .login-back { position: fixed; inset: 0; z-index: 200; display: none; place-items: center; padding: 18px; background: radial-gradient(circle at 50% 30%, #142027 0, #050607 65%); }
+  .login-back.open { display: grid; }
+  .login-card { width: min(380px, 100%); border: 1px solid var(--line); border-radius: 12px; background: var(--panel); padding: 24px; box-shadow: 0 30px 90px rgba(0,0,0,.65); }
+  .login-card h2 { font-size: 34px; margin: 10px 0 4px; }
+  .login-error { min-height: 18px; font-size: 12px; color: var(--red); margin-top: 8px; }
+  .backup-row { display: flex; justify-content: space-between; gap: 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line-soft); font-size: 11px; }
+  .backup-row:last-child { border-bottom: 0; }
+  .backup-row a { color: var(--signal); text-decoration: none; font-family: var(--mono); font-size: 10px; }
+  .mobile-nav { display: none; }
+  @media (max-width: 980px) {
+    .shell { grid-template-columns: 1fr; }
+    .sidebar { position: static; height: auto; flex-direction: row; align-items: center; padding: 12px 14px; gap: 14px; overflow-x: auto; }
+    .brand { flex: 0 0 auto; }
+    .brand-sub { display: none; }
+    nav { display: flex; gap: 3px; }
+    .nav-item { padding: 7px 9px; white-space: nowrap; }
+    .nav-item .key { display: none; }
+    .side-foot { display: none; }
+    .topbar { top: 0; padding: 12px 16px; }
+    .content { padding: 18px 16px 50px; }
+    .grid-2 { grid-template-columns: 1fr; }
+    .stat-strip { grid-template-columns: repeat(2, 1fr); }
+    .tr { grid-template-columns: 22px minmax(0,1fr) 72px 66px; }
+    .tr .kind, .tr .format { display: none; }
+    .guide-row { grid-template-columns: 96px minmax(0, 1fr); }
+    .guide-ticks { grid-template-columns: 96px minmax(0,1fr); }
+  }
+</style>
+</head>
+<body>
+<span id="swStatus" style="display:none">PENDING</span>
+<div class="shell">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark">AT</div>
+      <div>
+        <div class="brand-name">Awesome TV</div>
+        <div class="brand-sub">Broadcast control</div>
+      </div>
+    </div>
+    <nav>
+      <a class="nav-item active" href="#on-air" data-view="on-air"><span class="nav-icon">◉</span> On Air <span class="key">1</span></a>
+      <a class="nav-item" href="#channels" data-view="channels"><span class="nav-icon">▤</span> Channels <span class="key">2</span></a>
+      <a class="nav-item" href="#library" data-view="library"><span class="nav-icon">▦</span> Library <span class="key">3</span></a>
+      <a class="nav-item" href="#guide" data-view="guide"><span class="nav-icon">≡</span> Guide <span class="key">4</span></a>
+      <a class="nav-item" href="#collections" data-view="collections"><span class="nav-icon">▣</span> Collections <span class="key">5</span></a>
+      <a class="nav-item" href="#programming" data-view="programming"><span class="nav-icon">◫</span> Programming <span class="key">6</span></a>
+      <a class="nav-item" href="#sources" data-view="sources"><span class="nav-icon">⌁</span> Sources <span class="key">7</span></a>
+      <a class="nav-item" href="#settings" data-view="settings"><span class="nav-icon">⚙</span> Settings <span class="key">8</span></a>
+      <a class="nav-item" href="#tv" data-view="tv"><span class="nav-icon">▷</span> TV Mode <span class="key">9</span></a>
+    </nav>
+    <div class="side-foot">
+      <div class="health"><span class="pulse"></span><span id="healthText">SYSTEM ONLINE</span></div>
+      <div class="mono tiny dim" id="sideUrl"></div>
+      <button class="btn ghost small" id="logoutBtn">Sign out</button>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <div class="crumb">Awesome TV / <b id="crumbView">On Air</b></div>
+      <div class="top-actions">
+        <button class="btn ghost" id="installAppBtn" style="display:none">Install app</button>
+        <button class="btn ghost" id="refreshBtn">↻ Refresh</button>
+        <button class="btn primary" id="scanTopBtn">＋ Scan library</button>
+      </div>
+    </header>
+
+    <div class="content">
+      <section class="view active" id="view-on-air">
+        <div class="view-head">
+          <div><div class="eyebrow">Now broadcasting</div><h1>On Air</h1></div>
+          <div class="mono tiny dim" id="clock"></div>
+        </div>
+        <div class="grid-2">
+          <div class="panel onair">
+            <div class="screen">
+              <video id="player" controls playsinline></video>
+              <div class="screen-off" id="screenOff">
+                <div>
+                  <div class="big">No signal</div>
+                  <div class="sub">Select a channel to start the broadcast</div>
+                </div>
+              </div>
+              <div class="onair-top">
+                <div class="chip live"><span class="dot"></span> On air</div>
+                <div class="chip" id="qualityChip">HLS · 720p</div>
+              </div>
+              <div class="screen-meta" id="screenMeta" style="display:none;">
+                <div class="screen-title" id="screenTitle">—</div>
+                <div class="screen-sub" id="screenSub">—</div>
+              </div>
+            </div>
+            <div class="onair-body">
+              <div class="channel-no" id="onairNo">—</div>
+              <div class="onair-copy">
+                <div class="name" id="onairName">No channel selected</div>
+                <div class="next" id="onairNext">Create a channel from the Library to begin.</div>
+                <div class="progress"><span id="onairProgress"></span></div>
+              </div>
+              <div class="row"><button class="btn ghost" id="dvrBtn">DVR</button><button class="btn ghost" id="catchupBtn">Restart program</button><button class="btn primary" id="watchBtn">Tune in</button></div>
+            </div>
+          </div>
+          <div class="rail" id="channelRail"></div>
+        </div>
+        <div class="stat-strip">
+          <div class="stat"><div class="n" id="statChannels">0</div><div class="l">Channels</div></div>
+          <div class="stat"><div class="n" id="statMovies">0</div><div class="l">Movies</div></div>
+          <div class="stat"><div class="n" id="statEpisodes">0</div><div class="l">Episodes</div></div>
+          <div class="stat"><div class="n" id="statMusic">0</div><div class="l">Music tracks</div></div>
+        </div>
+      </section>
+
+      <section class="view" id="view-tv">
+        <div class="view-head"><div><div class="eyebrow">10-foot mode</div><h1>TV</h1></div><div class="tv-clock" id="tvClock">—</div></div>
+        <div class="tv-stage">
+          <video id="tvPlayer" controls playsinline></video>
+          <div class="tv-overlay">
+            <div class="title" id="tvTitle">Select a channel</div>
+            <div class="sub" id="tvSub">Arrow keys to browse · Enter to watch</div>
+          </div>
+        </div>
+        <div class="tv-grid" id="tvGrid"></div>
+      </section>
+
+      <section class="view" id="view-channels">
+        <div class="view-head"><div><div class="eyebrow">Lineup</div><h1>Channels</h1></div><button class="btn primary" id="newChannelBtn">＋ New channel</button></div>
+        <div class="cards" id="channelCards"></div>
+      </section>
+
+      <section class="view" id="view-library">
+        <div class="view-head"><div><div class="eyebrow">Catalog</div><h1>Library</h1></div><div class="mono tiny dim" id="libraryCount"></div></div>
+        <div class="toolbar">
+          <div class="tabs" id="kindTabs">
+            <button class="tab active" data-kind="all">All</button>
+            <button class="tab" data-kind="movie">Movies</button>
+            <button class="tab" data-kind="episode">TV</button>
+            <button class="tab" data-kind="music">Music</button>
+            <button class="tab" data-kind="image">Images</button>
+          </div>
+          <input class="search" id="mediaSearch" placeholder="Search title…">
+          <button class="btn ghost" id="selectAllBtn">Select all</button>
+          <button class="btn ghost" id="clearSelBtn">Clear</button>
+          <button class="btn ghost" id="createCollectionBtn" disabled>Create collection</button>
+          <button class="btn primary" id="createFromSelBtn" disabled>Create channel</button>
+        </div>
+        <div class="table" id="mediaTable"></div>
+      </section>
+
+      <section class="view" id="view-guide">
+        <div class="view-head"><div><div class="eyebrow">Program guide</div><h1>Guide</h1></div><div class="mono tiny dim">Next 12 hours</div></div>
+        <div class="guide" id="guide"></div>
+      </section>
+
+      <section class="view" id="view-collections">
+        <div class="view-head"><div><div class="eyebrow">Library sets</div><h1>Collections</h1></div><button class="btn primary" id="newCollectionBtn">＋ New collection</button></div>
+        <div class="cards" id="collectionCards"></div>
+      </section>
+
+      <section class="view" id="view-programming">
+        <div class="view-head"><div><div class="eyebrow">Weekly plan</div><h1>Programming</h1></div><div class="row"><select id="progChannel"></select><button class="btn primary" id="saveBlocksBtn">Save &amp; rebuild</button></div></div>
+        <div class="tabs" id="programModeTabs" style="margin-bottom:12px; width:max-content;">
+          <button class="tab active" data-mode="blocks">Weekly blocks</button>
+          <button class="tab" data-mode="classic">Classic sequence</button>
+          <button class="tab" data-mode="scripted">Scripted YAML</button>
+          <button class="tab" data-mode="external">External JSON</button>
+        </div>
+        <div class="program-grid" id="blocksPanel">
+          <div class="panel panel-pad">
+            <h3>Weekly blocks</h3>
+            <p class="muted small">Blocks are local-time windows. Rebuilding replaces the channel timeline for the next seven days.</p>
+            <div id="blockList"></div>
+          </div>
+          <div class="panel panel-pad">
+            <h3>Add block</h3>
+            <div class="field"><label>Days</label><div class="daychecks" id="blockDays"></div></div>
+            <div class="form-row">
+              <div class="field"><label for="blockStart">Start</label><input id="blockStart" type="time" value="06:00"></div>
+              <div class="field"><label for="blockEnd">End</label><input id="blockEnd" type="time" value="12:00"></div>
+            </div>
+            <div class="field"><label for="blockCollection">Collection</label><select id="blockCollection"></select></div>
+            <div class="field"><label for="blockFiller">Filler collection (optional)</label><select id="blockFiller"></select></div>
+            <div class="field"><label for="blockOrder">Order</label><select id="blockOrder"><option value="sequential">Sequential</option><option value="shuffle">Shuffle</option></select></div>
+            <button class="btn ghost" id="addBlockBtn">＋ Add block</button>
+          </div>
+        </div>
+        <div class="panel panel-pad" id="templatePanel" style="margin-top:14px;">
+          <div class="source-top">
+            <div><h3>Block templates</h3><div class="muted small">Save the current weekly blocks as a reusable template, then apply it to another channel.</div></div>
+          </div>
+          <div class="form-row" style="margin-top:12px;">
+            <div class="field"><label for="templateName">Template name</label><input id="templateName" placeholder="Weeknight prime time"></div>
+            <button class="btn ghost" id="saveTemplateBtn" style="margin-bottom:14px;">Save current blocks</button>
+          </div>
+          <div id="templateList"></div>
+        </div>
+        <div class="program-grid" id="classicPanel" style="display:none;">
+          <div class="panel panel-pad">
+            <h3>Classic sequence</h3>
+            <p class="muted small">Items run in order and loop for the next seven days. Each item plays one, a count, or a duration.</p>
+            <div id="classicList"></div>
+          </div>
+          <div class="panel panel-pad">
+            <h3>Add classic item</h3>
+            <div class="field"><label for="classicCollection">Collection</label><select id="classicCollection"></select></div>
+            <div class="field"><label for="classicMode">Mode</label><select id="classicMode"><option value="one">One item</option><option value="multiple" selected>Multiple</option><option value="duration">Duration</option></select></div>
+            <div class="form-row">
+              <div class="field"><label for="classicCount">Count</label><input id="classicCount" type="number" min="1" value="2"></div>
+              <div class="field"><label for="classicDuration">Duration (min)</label><input id="classicDuration" type="number" min="1" value="60"></div>
+            </div>
+            <div class="field"><label for="classicOrder">Order</label><select id="classicOrder"><option value="sequential">Sequential</option><option value="shuffle">Shuffle</option></select></div>
+            <div class="field"><label for="classicFiller">Break filler collection (optional)</label><select id="classicFiller"></select></div>
+            <div class="form-row">
+              <div class="field"><label for="classicMidRoll">Mid-roll interval (min)</label><input id="classicMidRoll" type="number" min="0" value="0"></div>
+              <div class="field"><label for="classicBreak">Break length (sec)</label><input id="classicBreak" type="number" min="0" value="0"></div>
+            </div>
+            <div class="field"><label for="classicBreakMarkers">Manual break markers (sec or mm:ss)</label><input id="classicBreakMarkers" placeholder="600, 12:30"></div>
+            <div class="field"><label><input id="classicChapterBreaks" type="checkbox" checked> Snap breaks to chapters</label></div>
+            <button class="btn ghost" id="addClassicBtn">＋ Add classic item</button>
+          </div>
+        </div>
+        <div class="panel panel-pad" id="scriptPanel" style="display:none;">
+          <div class="source-top">
+            <div><h3>Scripted schedule</h3><div class="muted small">Paste YAML to replace this channel's schedule. Load current exports the active schedule.</div></div>
+            <div class="row"><button class="btn small ghost" id="loadYamlBtn">Load current</button><button class="btn primary" id="applyYamlBtn">Apply YAML</button></div>
+          </div>
+          <div class="field" style="margin-top:12px;"><label for="scriptYaml">Schedule YAML</label><textarea id="scriptYaml" rows="18" spellcheck="false" style="width:100%;font-family:var(--mono);font-size:11px;line-height:1.6;background:#0a0d0f;border:1px solid var(--line);border-radius:8px;color:var(--text);padding:12px;"></textarea></div>
+        </div>
+        <div class="panel panel-pad" id="overridePanel" style="display:none;margin-top:14px;">
+          <div class="source-top">
+            <div><h3>Alternate schedules</h3><div class="muted small">Save the YAML above as a date-range override. The highest priority override wins for each day.</div></div>
+          </div>
+          <div class="form-row" style="margin-top:12px;">
+            <div class="field"><label for="overrideName">Override name</label><input id="overrideName" placeholder="Holiday week"></div>
+            <div class="field"><label for="overridePriority">Priority</label><input id="overridePriority" type="number" value="0"></div>
+          </div>
+          <div class="form-row">
+            <div class="field"><label for="overrideStart">Start date</label><input id="overrideStart" type="date"></div>
+            <div class="field"><label for="overrideEnd">End date</label><input id="overrideEnd" type="date"></div>
+          </div>
+          <button class="btn ghost" id="saveOverrideBtn">Save current YAML as override</button>
+          <div id="overrideList"></div>
+        </div>
+        <div class="panel panel-pad" id="externalPanel" style="display:none;">
+          <div class="source-top">
+            <div><h3>External playout JSON</h3><div class="muted small">Import an explicit timeline from an external system, or export the active materialized timeline.</div></div>
+            <div class="row"><button class="btn small ghost" id="loadJsonBtn">Load current</button><button class="btn primary" id="applyJsonBtn">Apply JSON</button></div>
+          </div>
+          <div class="field" style="margin-top:12px;"><label for="externalJson">Playout JSON</label><textarea id="externalJson" rows="18" spellcheck="false" style="width:100%;font-family:var(--mono);font-size:11px;line-height:1.6;background:#0a0d0f;border:1px solid var(--line);border-radius:8px;color:var(--text);padding:12px;"></textarea></div>
+        </div>
+        <div class="panel panel-pad" id="graphicsPanel" style="margin-top:14px;">
+          <div class="source-top">
+            <div><h3>Channel graphics</h3><div class="muted small">Optional text bug overlaid on the channel. Changes apply at the next item.</div></div>
+            <button class="btn primary" id="saveGraphicsBtn">Save graphics</button>
+          </div>
+          <div class="form-row" style="margin-top:12px;">
+            <div class="field"><label for="graphicsText">Overlay text</label><input id="graphicsText" maxlength="80" placeholder="AWESOME TV"></div>
+            <div class="field"><label for="graphicsPosition">Position</label><select id="graphicsPosition"><option value="top-left">Top left</option><option value="top-right">Top right</option><option value="bottom-left">Bottom left</option><option value="bottom-right" selected>Bottom right</option></select></div>
+          </div>
+          <div class="form-row">
+            <div class="field"><label for="graphicsOpacity">Opacity (0-100)</label><input id="graphicsOpacity" type="number" min="0" max="100" value="60"></div>
+            <div class="field"><label for="graphicsSize">Font size</label><input id="graphicsSize" type="number" min="8" max="96" value="28"></div>
+          </div>
+          <div class="form-row">
+            <div class="field"><label for="graphicsWatermark">Image watermark</label><select id="graphicsWatermark"><option value="">No watermark</option></select></div>
+            <div class="field"><label for="graphicsWatermarkPosition">Watermark position</label><select id="graphicsWatermarkPosition"><option value="top-left">Top left</option><option value="top-right" selected>Top right</option><option value="bottom-left">Bottom left</option><option value="bottom-right">Bottom right</option></select></div>
+          </div>
+          <div class="form-row">
+            <div class="field"><label for="graphicsWatermarkOpacity">Watermark opacity (0-100)</label><input id="graphicsWatermarkOpacity" type="number" min="0" max="100" value="70"></div>
+            <div class="field"><label for="graphicsWatermarkScale">Watermark width (%)</label><input id="graphicsWatermarkScale" type="number" min="3" max="50" value="12"></div>
+          </div>
+          <div class="form-row">
+            <div class="field"><label for="graphicsLowerThird">Lower-third text</label><input id="graphicsLowerThird" maxlength="120" placeholder="Now playing"></div>
+            <div class="field"><label for="graphicsLowerThirdSize">Lower-third size</label><input id="graphicsLowerThirdSize" type="number" min="8" max="96" value="22"></div>
+          </div>
+          <div class="form-row">
+            <div class="field"><label for="graphicsLowerThirdOpacity">Lower-third opacity (0-100)</label><input id="graphicsLowerThirdOpacity" type="number" min="0" max="100" value="65"></div>
+          </div>
+        </div>
+        <div class="panel panel-pad" id="streamPanel" style="margin-top:14px;">
+          <div class="source-top">
+            <div><h3>Channel stream</h3><div class="muted small">Output resolution and encoding profile. Changes apply at the next item.</div></div>
+            <button class="btn primary" id="saveStreamBtn">Save stream</button>
+          </div>
+          <div class="form-row" style="margin-top:12px;">
+            <div class="field"><label for="streamResolution">Resolution</label><select id="streamResolution"><option value="854x480">480p</option><option value="1280x720" selected>720p</option><option value="1920x1080">1080p</option></select></div>
+            <div class="field"><label for="streamPreset">x264 preset</label><select id="streamPreset"><option value="ultrafast">ultrafast</option><option value="superfast">superfast</option><option value="veryfast" selected>veryfast</option><option value="faster">faster</option><option value="fast">fast</option><option value="medium">medium</option><option value="slow">slow</option></select></div>
+          </div>
+          <div class="form-row">
+            <div class="field"><label for="streamCrf">CRF (16-32)</label><input id="streamCrf" type="number" min="16" max="32" value="22"></div>
+            <div class="field"><label for="streamAudio">Audio bitrate (kbps)</label><input id="streamAudio" type="number" min="64" max="512" value="160"></div>
+          </div>
+          <div class="form-row">
+            <div class="field"><label for="streamAudioLanguage">Audio language</label><input id="streamAudioLanguage" placeholder="eng"></div>
+            <div class="field"><label for="streamSubtitleMode">Subtitles</label><select id="streamSubtitleMode"><option value="inherit" selected>Inherit global</option><option value="off">Off</option><option value="burn">Burn text subtitles</option></select></div>
+          </div>
+          <div class="form-row">
+            <div class="field"><label for="streamSubtitleLanguage">Subtitle language</label><input id="streamSubtitleLanguage" placeholder="eng"></div>
+            <div class="field"><label for="streamHdrMode">HDR handling</label><select id="streamHdrMode"><option value="passthrough" selected>Passthrough</option><option value="tonemap">Tonemap to SDR</option></select></div>
+          </div>
+          <div class="form-row">
+            <div class="field"><label for="streamEncoder">Video encoder</label><select id="streamEncoder"><option value="software" selected>Software x264</option><option value="vaapi">VAAPI hardware</option></select></div>
+            <div class="field"><label for="streamSegment">Segment length (sec)</label><input id="streamSegment" type="number" min="2" max="10" value="4"></div>
+          </div>
+          <div class="form-row">
+            <div class="field"><label for="streamPrebuffer">Prebuffer (sec)</label><input id="streamPrebuffer" type="number" min="0" max="30" value="8"></div>
+            <div class="field"><label for="streamCache">Cache segments</label><input id="streamCache" type="number" min="4" max="60" value="12"></div>
+          </div>
+          <div class="field"><label><input id="streamPrewarm" type="checkbox"> Prewarm on startup</label></div>
+        </div>
+      </section>
+
+      <section class="view" id="view-sources">
+        <div class="view-head"><div><div class="eyebrow">Ingest</div><h1>Sources</h1></div><button class="btn primary" id="scanAllBtn">Scan all</button></div>
+        <div class="source-grid" id="sourceGrid"></div>
+        <div class="panel panel-pad" style="margin-top:14px;">
+          <div class="source-top"><div><h3>Jellyfin</h3><div class="muted small">Mapped to the same media share.</div></div><div class="row"><span class="badge" id="jellyfinBadge">checking</span><button class="btn small" id="jellyfinSyncBtn">Sync</button></div></div>
+          <div class="source-path" id="jellyfinPath">https://jelly.christopherrutherford.net</div>
+          <div class="muted small" id="jellyfinHint">Set JELLYFIN_API_KEY to enable API metadata sync.</div>
+        </div>
+        <div class="panel panel-pad" style="margin-top:14px;">
+          <div class="source-top"><div><h3>Emby</h3><div class="muted small">Mapped to the same media share.</div></div><div class="row"><span class="badge" id="embyBadge">checking</span><button class="btn small" id="embySyncBtn">Sync</button></div></div>
+          <div class="source-path" id="embyPath">http://localhost:8096</div>
+          <div class="muted small" id="embyHint">Set EMBY_API_KEY to enable API metadata sync.</div>
+        </div>
+        <div class="panel panel-pad" style="margin-top:14px;">
+          <div class="source-top"><div><h3>Cloud sources</h3><div class="muted small">Google Drive via service account or access token. Provider secrets are encrypted at rest.</div></div></div>
+          <div id="cloudSourceList"></div>
+          <div class="form-row" style="margin-top:12px;">
+            <div class="field"><label for="cloudName">Name</label><input id="cloudName" placeholder="Google Drive"></div>
+            <div class="field"><label for="cloudAuth">Auth</label><select id="cloudAuth"><option value="service_account">Service account JSON</option><option value="access_token">Access token (dev)</option></select></div>
+          </div>
+          <div class="field"><label for="cloudSecret">Secret</label><textarea id="cloudSecret" rows="4" style="width:100%;font-family:var(--mono);font-size:11px;background:#0a0d0f;border:1px solid var(--line);border-radius:8px;color:var(--text);padding:10px;" placeholder="Paste service-account JSON or access token"></textarea></div>
+          <div class="form-row">
+            <div class="field"><label for="cloudPolicy">Policy</label><select id="cloudPolicy"><option value="auto">Auto</option><option value="cache_all">Cache all</option><option value="stream_all">Stream all</option></select></div>
+            <div class="field"><label for="cloudRootId">Initial folder ID (optional)</label><input id="cloudRootId" placeholder="Google Drive folder ID"></div>
+          </div>
+          <button class="btn ghost" id="addCloudSourceBtn">Add cloud source</button>
+          <div class="source-top" style="margin-top:16px;"><div><h3>Folder browser</h3></div></div>
+          <div class="form-row">
+            <div class="field"><label for="cloudBrowseSource">Source</label><select id="cloudBrowseSource"></select></div>
+            <div class="field"><label for="cloudFolderId">Folder ID</label><input id="cloudFolderId" value="root"></div>
+          </div>
+          <div class="row"><button class="btn small ghost" id="browseCloudBtn">Browse</button><button class="btn small" id="addCloudRootBtn">Add current folder</button></div>
+          <div id="cloudFolderList"></div>
+        </div>
+      </section>
+
+      <section class="view" id="view-settings">
+        <div class="view-head"><div><div class="eyebrow">System</div><h1>Settings</h1></div></div>
+        <div class="grid-3">
+          <div class="panel panel-pad"><h3>Public URL</h3><div class="source-path" id="setPublic"></div><div class="muted small">Bound to the Tailscale address only.</div></div>
+          <div class="panel panel-pad"><h3>Data</h3><div class="source-path">SQLite · ./data/awesometv.db</div><div class="muted small">7-day timelines, in-memory HLS producer state.</div></div>
+          <div class="panel panel-pad"><h3>Jellyfin</h3><div class="source-path" id="setJellyfin"></div><div class="muted small">External metadata source.</div></div>
+        </div>
+        <div class="panel panel-pad" style="margin-top:14px;">
+          <div class="row" style="justify-content:space-between"><h3>Backups</h3><button class="btn small" id="backupBtn">Create backup</button></div>
+          <p class="muted small">SQLite snapshots of the catalog, collections, channels, and settings. Restore takes effect on the next restart.</p>
+          <div id="backupList"></div>
+        </div>
+        <div class="panel panel-pad" style="margin-top:14px;">
+          <div class="row" style="justify-content:space-between"><h3>Stream health</h3><button class="btn small" id="metricsRefreshBtn">Refresh</button></div>
+          <p class="muted small">Producer startup latency, cached HLS segments, and disk usage per channel.</p>
+          <div id="streamHealth"></div>
+        </div>
+        <div class="panel panel-pad" style="margin-top:14px;">
+          <div class="source-top"><div><h3>Language defaults</h3><div class="muted small">Used by channels that inherit the global language settings.</div></div><button class="btn primary" id="saveLanguageBtn">Save defaults</button></div>
+          <div class="form-row" style="margin-top:12px;">
+            <div class="field"><label for="setAudioLanguage">Default audio language</label><input id="setAudioLanguage" placeholder="eng; blank = first audio"></div>
+            <div class="field"><label for="setSubtitleMode">Default subtitles</label><select id="setSubtitleMode"><option value="off">Off</option><option value="burn">Burn text subtitles</option></select></div>
+          </div>
+          <div class="form-row">
+            <div class="field"><label for="setSubtitleLanguage">Default subtitle language</label><input id="setSubtitleLanguage" placeholder="eng"></div>
+          </div>
+        </div>
+        <div class="panel panel-pad" style="margin-top:14px;">
+          <div class="row" style="justify-content:space-between"><h3>Native apps</h3><button class="btn small" id="settingsInstallBtn">Install app</button></div>
+          <p class="muted small">Install Awesome TV as a standalone app on desktop, mobile, or a TV browser. Installation requires HTTPS or localhost.</p>
+          <div class="source-path" id="setManifest"></div>
+          <div class="muted small">Native players can use the HDHomeRun, M3U, and XMLTV endpoints above.</div>
+        </div>
+        <div class="panel panel-pad" style="margin-top:14px;">
+          <h3>Client URLs</h3>
+          <div class="source-path" id="setHdhr"></div>
+          <div class="source-path" id="setM3u"></div>
+          <div class="source-path" id="setXmltv"></div>
+        </div>
+      </section>
+    </div>
+  </main>
+</div>
+
+<div class="login-back open" id="loginBack">
+  <form class="login-card" id="loginForm">
+    <div class="brand-mark">AT</div>
+    <div class="eyebrow" style="margin-top:12px">Broadcast control</div>
+    <h2>Sign in</h2>
+    <p class="muted small">Manage channels, collections, and sources.</p>
+    <div class="field"><label for="loginUser">User</label><input id="loginUser" value="admin" autocomplete="username"></div>
+    <div class="field"><label for="loginPass">Password</label><input id="loginPass" type="password" autocomplete="current-password"></div>
+    <button class="btn primary" type="submit" style="width:100%; justify-content:center">Enter</button>
+    <div class="login-error" id="loginError"></div>
+  </form>
+</div>
+
+<div class="modal-back" id="modalBack">
+  <div class="modal">
+    <div class="eyebrow" id="modalKicker">Create</div>
+    <h2 id="modalTitle">New channel</h2>
+    <p class="muted small" id="modalSub">Selected media loops in order for seven days.</p>
+    <div class="field" id="scanSourceField">
+      <label for="scanSource">Source</label>
+      <select id="scanSource">
+        <option value="movies">Movies</option>
+        <option value="tv">TV Shows</option>
+        <option value="music">Music</option>
+        <option value="images">Images</option>
+        <option value="commercials">Commercials</option>
+      </select>
+    </div>
+    <div class="field" id="scanLimitField">
+      <label for="scanLimit">Max files</label>
+      <input id="scanLimit" type="number" min="1" max="2000" value="100">
+    </div>
+    <div class="field" id="collectionNameField" style="display:none;">
+      <label for="collectionName">Collection name</label>
+      <input id="collectionName" placeholder="Saturday Cartoons">
+    </div>
+    <div class="field" id="channelNumberField">
+      <label for="channelNumber">Channel number</label>
+      <input id="channelNumber" value="1">
+    </div>
+    <div class="field" id="channelNameField">
+      <label for="channelName">Channel name</label>
+      <input id="channelName" value="Awesome Channel">
+    </div>
+    <div class="modal-actions">
+      <button class="btn ghost" id="modalCancel">Cancel</button>
+      <button class="btn primary" id="modalConfirm">Create</button>
+    </div>
+  </div>
+</div>
+<div class="toast-wrap" id="toasts"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
+<script>
+const $ = (id) => document.getElementById(id);
+const state = { config: null, sources: [], stats: null, media: [], channels: [], collections: [], blocks: [], classicItems: [], templates: [], overrides: [], graphics: null, stream: null, metrics: null, language: null, tvNumber: null, playerTarget: null, cloudSources: [], cloudBrowse: null, programChannel: null, programMode: 'blocks', selected: new Set(), kind: 'all', search: '', activeChannel: null, hls: null, modalMode: null, autoPlayed: false };
+const KIND_LABEL = { movie: 'Movie', episode: 'Episode', music: 'Music', image: 'Image', other: 'Video' };
+
+function toast(text, error = false) {
+  const el = document.createElement('div');
+  el.className = `toast${error ? ' err' : ''}`;
+  el.textContent = text;
+  $('toasts').append(el);
+  setTimeout(() => el.remove(), 4500);
+}
+function esc(value) {
+  return String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+async function api(path, options = {}) {
+  const res = await fetch(path, { credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, ...options });
+  if (res.status === 401) { showLogin(); throw new Error('Authentication required'); }
+  if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+  return res.json();
+}
+function fmtDuration(ms) {
+  const m = Math.max(0, Math.round(ms / 60000));
+  return m >= 60 ? `${Math.floor(m/60)}h ${m%60}m` : `${m}m`;
+}
+function fmtClock(ms) {
+  return new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+function progress(item) {
+  if (!item) return 0;
+  const now = Date.now();
+  return Math.max(0, Math.min(100, ((now - item.start_ms) / (item.end_ms - item.start_ms)) * 100));
+}
+
+function showLogin() {
+  $('loginBack').classList.add('open');
+}
+
+async function checkAuth() {
+  try {
+    const response = await fetch('/api/v1/auth/me', { credentials: 'same-origin' });
+    if (response.ok) {
+      $('loginBack').classList.remove('open');
+      await loadAll();
+    } else {
+      showLogin();
+    }
+  } catch { showLogin(); }
+}
+
+async function renderBackups() {
+  try {
+    const backups = await api('/api/v1/backups');
+    $('backupList').innerHTML = backups.length ? backups.map(b => `
+      <div class="backup-row">
+        <div><div>${esc(b.name)}</div><div class="dim">${(b.size / 1024).toFixed(0)} KB</div></div>
+        <div class="row"><a href="/api/v1/backups/${encodeURIComponent(b.name)}" download>Download</a><button class="btn small ghost" data-restore="${esc(b.name)}">Restore</button></div>
+      </div>`).join('') : '<p class="muted small">No backups yet.</p>';
+    $('backupList').querySelectorAll('button[data-restore]').forEach(btn => btn.addEventListener('click', async () => {
+      if (!confirm(`Stage ${btn.dataset.restore} for restore on the next restart?`)) return;
+      try { await api('/api/v1/restore', { method: 'POST', body: JSON.stringify({ name: btn.dataset.restore }) }); toast('Restore staged. Restart the server to apply it.'); }
+      catch (error) { toast(String(error), true); }
+    }));
+  } catch (error) { $('backupList').innerHTML = `<p class="muted small">${esc(String(error))}</p>`; }
+}
+
+async function loadAll() {
+  try {
+    const [config, sources, stats, media, channels, collections, templates, metrics, language, cloudSources] = await Promise.all([
+      api('/api/v1/config'), api('/api/v1/sources'), api('/api/v1/stats'), api('/api/v1/media'), api('/api/v1/channels'), api('/api/v1/collections'), api('/api/v1/templates'), api('/api/v1/metrics'), api('/api/v1/settings/language'), api('/api/v1/cloud/sources')
+    ]);
+    state.config = config; state.sources = sources; state.stats = stats; state.media = media; state.channels = channels; state.collections = collections; state.templates = templates; state.metrics = metrics; state.language = language; state.cloudSources = cloudSources;
+    const requested = new URLSearchParams(location.search).get('channel');
+    if (requested) {
+      const match = channels.find(c => c.number === requested);
+      if (match) { state.activeChannel = match.number; state.programChannel = match.id; }
+    }
+    if (!state.activeChannel && channels.length) state.activeChannel = channels[0].number;
+    renderAll();
+    if (location.hash === '#tv' && !state.playerTarget && state.tvNumber) playTvChannel(state.tvNumber);
+    $('healthText').textContent = 'SYSTEM ONLINE';
+    if (location.hash === '#programming') loadProgramming();
+    const autoplay = new URLSearchParams(location.search).get('autoplay') !== '0';
+    if (autoplay && !state.autoPlayed && state.channels.length) { state.autoPlayed = true; playActive(); }
+  } catch (error) {
+    $('healthText').textContent = 'SYSTEM DEGRADED';
+    toast(String(error), true);
+  }
+}
+
+function renderAll() {
+  renderRail(); renderChannels(); renderLibrary(); renderCollections(); renderSources(); renderStats(); renderGuide(); renderSettings(); renderOnAir(); renderProgramming(); renderTemplateList(); renderTv(); renderCloudSources();
+}
+
+function renderStats() {
+  const counts = Object.fromEntries((state.stats?.media_counts || []).map(([k,v]) => [k, v]));
+  $('statChannels').textContent = state.stats?.channels ?? state.channels.length;
+  $('statMovies').textContent = counts.movie || 0;
+  $('statEpisodes').textContent = counts.episode || 0;
+  $('statMusic').textContent = counts.music || 0;
+}
+
+function currentChannel() {
+  return state.channels.find(c => c.number === state.activeChannel) || state.channels[0] || null;
+}
+
+function renderRail() {
+  const rail = $('channelRail');
+  if (!state.channels.length) {
+    rail.innerHTML = `<div class="empty"><b>No channels</b>Build one from the Library.</div>`;
+    return;
+  }
+  rail.innerHTML = state.channels.map(c => `
+    <div class="rail-card ${c.number === state.activeChannel ? 'active' : ''}" data-number="${esc(c.number)}">
+      <div class="rail-no">${esc(c.number)}</div>
+      <div style="min-width:0">
+        <div class="rail-name">${esc(c.name)}</div>
+        <div class="rail-now">${esc(c.now?.title || 'Off air')}</div>
+      </div>
+      <div class="rail-play">▶</div>
+    </div>`).join('');
+  rail.querySelectorAll('.rail-card').forEach(el => el.addEventListener('click', () => { state.activeChannel = el.dataset.number; renderAll(); playActive(); }));
+}
+
+function renderOnAir() {
+  const c = currentChannel();
+  const chNo = $('onairNo'), name = $('onairName'), next = $('onairNext');
+  if (!c) { chNo.textContent = '—'; name.textContent = 'No channel selected'; next.textContent = 'Create a channel from the Library to begin.'; $('screenMeta').style.display = 'none'; return; }
+  chNo.textContent = c.number;
+  name.textContent = c.name;
+  next.textContent = c.now ? `Now: ${c.now.title} · ${fmtClock(c.now.start_ms)}–${fmtClock(c.now.end_ms)}` : 'Off air';
+  if (c.now) {
+    $('screenMeta').style.display = 'block';
+    $('screenTitle').textContent = c.now.title;
+    $('screenSub').textContent = `Channel ${c.number} · ${fmtDuration(c.now.end_ms - c.now.start_ms)} · next: ${c.next?.title || '—'}`;
+    $('onairProgress').style.width = `${progress(c.now)}%`;
+  } else {
+    $('screenMeta').style.display = 'none';
+  }
+}
+
+function renderChannels() {
+  const cards = $('channelCards');
+  if (!state.channels.length) {
+    cards.innerHTML = `<div class="empty"><b>No channels yet</b>Scan the library, select media, and create your first channel.</div>`;
+    return;
+  }
+  cards.innerHTML = state.channels.map(c => `
+    <div class="channel-card ${c.number === state.activeChannel ? 'active' : ''}" data-number="${esc(c.number)}">
+      <div class="cc-top"><div class="cc-no">${esc(c.number)}</div><span class="badge">${c.now ? 'ON AIR' : 'OFF AIR'}</span></div>
+      <div class="cc-name">${esc(c.name)}</div>
+      <div class="cc-now">${esc(c.now?.title || 'Nothing scheduled')}</div>
+      <div class="cc-next">Next: ${esc(c.next?.title || '—')}</div>
+      <div class="cc-actions"><button class="btn small primary">Watch</button><span class="badge">${c.now ? fmtDuration(c.now.end_ms - c.now.start_ms) : '—'}</span></div>
+    </div>`).join('');
+  cards.querySelectorAll('.channel-card').forEach(el => el.addEventListener('click', () => { state.activeChannel = el.dataset.number; renderAll(); go('on-air'); playActive(); }));
+}
+
+function renderLibrary() {
+  const filtered = state.media.filter(m =>
+    (state.kind === 'all' || m.kind === state.kind) &&
+    (!state.search || m.title.toLowerCase().includes(state.search.toLowerCase()))
+  );
+  $('libraryCount').textContent = `${filtered.length} of ${state.media.length} items`;
+  $('createFromSelBtn').disabled = state.selected.size === 0;
+  $('createFromSelBtn').textContent = state.selected.size ? `Create channel (${state.selected.size})` : 'Create channel';
+  $('createCollectionBtn').disabled = state.selected.size === 0;
+  $('createCollectionBtn').textContent = state.selected.size ? `Create collection (${state.selected.size})` : 'Create collection';
+  const rows = filtered.slice(0, 400).map(m => `
+    <div class="tr">
+      <input type="checkbox" data-id="${esc(m.id)}" ${state.selected.has(m.id) ? 'checked' : ''}>
+      <div class="name">${esc(m.title)}</div>
+      <div class="kind"><span class="badge">${esc(KIND_LABEL[m.kind] || m.kind)}</span></div>
+      <div class="mono tiny dim">${fmtDuration(m.duration_ms)}</div>
+      <div class="mono tiny dim">${m.width ? `${m.width}×${m.height}` : '—'}</div>
+      <div class="mono tiny dim">${esc(m.video_codec || m.audio_codec || '—')}</div>
+    </div>`).join('');
+  $('mediaTable').innerHTML = `<div class="tr head"><div></div><div>Title</div><div>Kind</div><div>Runtime</div><div>Format</div><div>Codec</div></div>` + (rows || `<div class="empty" style="border:0"><b>No media</b>Scan a source to populate the catalog.</div>`);
+  document.querySelectorAll('#mediaTable input[type=checkbox]').forEach(box => box.addEventListener('change', () => {
+    if (box.checked) state.selected.add(box.dataset.id); else state.selected.delete(box.dataset.id);
+    $('createFromSelBtn').disabled = state.selected.size === 0;
+    $('createFromSelBtn').textContent = state.selected.size ? `Create channel (${state.selected.size})` : 'Create channel';
+    $('createCollectionBtn').disabled = state.selected.size === 0;
+    $('createCollectionBtn').textContent = state.selected.size ? `Create collection (${state.selected.size})` : 'Create collection';
+  }));
+}
+
+function renderCollections() {
+  const grid = $('collectionCards');
+  if (!state.collections.length) {
+    grid.innerHTML = `<div class="empty"><b>No collections</b>Select media in the Library and save a collection.</div>`;
+    return;
+  }
+  grid.innerHTML = state.collections.map(c => `
+    <div class="collection-card">
+      <div><div class="cc-name">${esc(c.name)}</div><div class="count">${c.count} items</div></div>
+      <div class="row"><button class="btn small" data-use="${esc(c.id)}">Program</button><button class="btn small ghost" data-chapters="${esc(c.id)}">Chapters</button><button class="btn small ghost" data-del="${esc(c.id)}">Delete</button></div>
+    </div>`).join('');
+  grid.querySelectorAll('button[data-use]').forEach(btn => btn.addEventListener('click', () => { go('programming'); }));
+  grid.querySelectorAll('button[data-chapters]').forEach(btn => btn.addEventListener('click', async () => {
+    const label = btn.textContent;
+    btn.disabled = true; btn.textContent = 'Probing…';
+    try {
+      const result = await api('/api/v1/media/probe-chapters', { method: 'POST', body: JSON.stringify({ collection_id: btn.dataset.chapters }) });
+      toast(`Probed ${result.chapters} chapters in ${result.probed} items.`);
+    } catch (error) { toast(String(error), true); }
+    finally { btn.disabled = false; btn.textContent = label; }
+  }));
+  grid.querySelectorAll('button[data-del]').forEach(btn => btn.addEventListener('click', async () => {
+    if (!confirm('Delete this collection? Blocks using it will be removed.')) return;
+    try { await api(`/api/v1/collections/${encodeURIComponent(btn.dataset.del)}`, { method: 'DELETE' }); await loadAll(); toast('Collection deleted.'); }
+    catch (error) { toast(String(error), true); }
+  }));
+}
+
+function renderProgramming() {
+  const select = $('progChannel');
+  if (!state.programChannel && state.channels.length) state.programChannel = state.channels[0].id;
+  select.innerHTML = state.channels.map(c => `<option value="${esc(c.id)}" ${c.id === state.programChannel ? 'selected' : ''}>${esc(c.number)} · ${esc(c.name)}</option>`).join('');
+  const collectionSelect = $('blockCollection');
+  collectionSelect.innerHTML = state.collections.map(c => `<option value="${esc(c.id)}">${esc(c.name)} (${c.count})</option>`).join('');
+  if (!state.collections.length) collectionSelect.innerHTML = '<option value="">No collections yet</option>';
+  $('classicCollection').innerHTML = collectionSelect.innerHTML;
+  $('blockFiller').innerHTML = '<option value="">No filler</option>' + collectionSelect.innerHTML;
+  $('classicFiller').innerHTML = '<option value="">No breaks</option>' + collectionSelect.innerHTML;
+  document.querySelectorAll('#programModeTabs .tab').forEach(tab => tab.classList.toggle('active', tab.dataset.mode === state.programMode));
+  $('blocksPanel').style.display = state.programMode === 'blocks' ? '' : 'none';
+  $('templatePanel').style.display = state.programMode === 'blocks' ? '' : 'none';
+  $('classicPanel').style.display = state.programMode === 'classic' ? '' : 'none';
+  $('scriptPanel').style.display = state.programMode === 'scripted' ? '' : 'none';
+  $('overridePanel').style.display = state.programMode === 'scripted' ? '' : 'none';
+  $('externalPanel').style.display = state.programMode === 'external' ? '' : 'none';
+  renderClassicList();
+  const days = $('blockDays');
+  if (!days.children.length) {
+    days.innerHTML = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map((d, i) => `<label><input type="checkbox" value="${i}" ${i < 7 ? 'checked' : ''}>${d}</label>`).join('');
+  }
+  renderBlockList();
+}
+
+function renderBlockList() {
+  const list = $('blockList');
+  if (!state.blocks.length) {
+    list.innerHTML = `<div class="empty" style="border:0;padding:18px"><b>No blocks</b>Add a weekly block to replace the flat loop.</div>`;
+    return;
+  }
+  list.innerHTML = state.blocks.map((b, index) => {
+    const collection = state.collections.find(c => c.id === b.collection_id);
+    return `<div class="block-row">
+      <div class="days">${formatDays(b.days_mask)}</div>
+      <div>${esc(collection?.name || 'Missing collection')}<div class="dim tiny">${timeLabel(b.start_minute)}–${timeLabel(b.end_minute)} · ${b.order}${b.filler_collection_id ? ` · filler: ${esc(state.collections.find(c => c.id === b.filler_collection_id)?.name || 'missing')}` : ''}</div></div>
+      <div class="mono tiny dim">${collection?.count || 0} items</div>
+      <button class="btn small ghost" data-remove="${index}">Remove</button>
+    </div>`;
+  }).join('');
+  list.querySelectorAll('button[data-remove]').forEach(btn => btn.addEventListener('click', () => {
+    state.blocks.splice(Number(btn.dataset.remove), 1); renderBlockList();
+  }));
+}
+
+function renderClassicList() {
+  const list = $('classicList');
+  if (!state.classicItems.length) {
+    list.innerHTML = `<div class="empty" style="border:0;padding:18px"><b>No classic items</b>Add a collection to start an ordered sequence.</div>`;
+    return;
+  }
+  list.innerHTML = state.classicItems.map((item, index) => {
+    const collection = state.collections.find(c => c.id === item.collection_id);
+    const detail = item.mode === 'duration' ? `${item.duration_minutes}m` : item.mode === 'multiple' ? `${item.count} items` : 'one item';
+    const filler = item.filler_collection_id ? state.collections.find(c => c.id === item.filler_collection_id) : null;
+    const markers = item.break_markers || [];
+    const breakInfo = markers.length
+      ? ` · manual breaks at ${markers.map(formatMarker).join(', ')}${filler ? ` (${esc(filler.name)})` : ' (no filler)'}`
+      : filler && item.mid_roll_interval_minutes > 0 && item.mid_roll_duration_seconds > 0
+        ? ` · breaks every ${item.mid_roll_interval_minutes}m for ${item.mid_roll_duration_seconds}s${item.chapter_breaks ? ' at chapters' : ''} (${esc(filler.name)})`
+        : '';
+    return `<div class="block-row">
+      <div class="days">${index + 1}</div>
+      <div>${esc(collection?.name || 'Missing collection')}<div class="dim tiny">${detail} · ${item.order}${breakInfo}</div></div>
+      <div class="mono tiny dim">${collection?.count || 0} items</div>
+      <button class="btn small ghost" data-remove-classic="${index}">Remove</button>
+    </div>`;
+  }).join('');
+  list.querySelectorAll('button[data-remove-classic]').forEach(btn => btn.addEventListener('click', () => {
+    state.classicItems.splice(Number(btn.dataset.removeClassic), 1); renderClassicList();
+  }));
+}
+
+function renderTemplateList() {
+  const list = $('templateList');
+  if (!list) return;
+  if (!state.templates.length) {
+    list.innerHTML = `<div class="empty" style="border:0;padding:14px"><b>No templates</b>Add blocks, name them, and save a reusable template.</div>`;
+    return;
+  }
+  list.innerHTML = state.templates.map(t => `
+    <div class="block-row wide-actions">
+      <div class="days">T</div>
+      <div>${esc(t.name)}<div class="dim tiny">${t.block_count} blocks</div></div>
+      <div class="mono tiny dim">Weekly</div>
+      <div class="row"><button class="btn small" data-apply-template="${esc(t.id)}">Apply</button><button class="btn small ghost" data-delete-template="${esc(t.id)}">Delete</button></div>
+    </div>`).join('');
+  list.querySelectorAll('button[data-apply-template]').forEach(btn => btn.addEventListener('click', async () => {
+    if (!state.programChannel) { toast('Choose a channel first.', true); return; }
+    if (!confirm('Replace this channel\'s weekly blocks with the template?')) return;
+    try {
+      const result = await api(`/api/v1/channels/${encodeURIComponent(state.programChannel)}/apply-template`, { method: 'POST', body: JSON.stringify({ template_id: btn.dataset.applyTemplate }) });
+      state.blocks = result.blocks; state.programMode = 'blocks';
+      renderProgramming(); renderBlockList(); await loadAll();
+      toast(`Template applied: rebuilt ${result.rebuild.items} items (${result.rebuild.warnings} warnings).`);
+    } catch (error) { toast(String(error), true); }
+  }));
+  list.querySelectorAll('button[data-delete-template]').forEach(btn => btn.addEventListener('click', async () => {
+    if (!confirm('Delete this template?')) return;
+    try { await api(`/api/v1/templates/${encodeURIComponent(btn.dataset.deleteTemplate)}`, { method: 'DELETE' }); await loadAll(); toast('Template deleted.'); }
+    catch (error) { toast(String(error), true); }
+  }));
+}
+
+function formatDays(mask) {
+  const days = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].filter((_, i) => mask & (1 << i));
+  return days.length === 7 ? 'Every day' : days.join(' ');
+}
+function timeLabel(minutes) { return `${String(Math.floor(minutes/60)).padStart(2,'0')}:${String(minutes%60).padStart(2,'0')}`; }
+function timeToMinutes(value) { const [h,m] = value.split(':').map(Number); return (h||0)*60 + (m||0); }
+function formatMarker(seconds) { return `${Math.floor(seconds/60)}:${String(seconds%60).padStart(2,'0')}`; }
+function parseMarkerList(value) {
+  return value.split(',').map(part => part.trim()).filter(Boolean).map(part => {
+    const pieces = part.split(':').map(Number);
+    if (pieces.some(Number.isNaN)) return NaN;
+    if (pieces.length === 1) return pieces[0];
+    if (pieces.length === 2) return pieces[0] * 60 + pieces[1];
+    if (pieces.length === 3) return pieces[0] * 3600 + pieces[1] * 60 + pieces[2];
+    return NaN;
+  }).filter(seconds => Number.isFinite(seconds) && seconds > 0);
+}
+
+async function loadProgramming() {
+  if (!state.programChannel) { state.blocks = []; state.classicItems = []; state.overrides = []; state.graphics = null; state.stream = null; renderBlockList(); renderClassicList(); renderGraphics(); renderStream(); renderOverrides(); return; }
+  try {
+    const channel = state.channels.find(c => c.id === state.programChannel);
+    const requestedMode = new URLSearchParams(location.search).get('mode');
+    const channelMode = channel?.schedule_mode;
+    state.programMode = requestedMode || (channelMode === 'classic' ? 'classic' : channelMode === 'external' ? 'external' : 'blocks');
+    const id = encodeURIComponent(state.programChannel);
+    const [blocks, classic, graphics, stream, overrides] = await Promise.all([
+      api(`/api/v1/channels/${id}/blocks`),
+      api(`/api/v1/channels/${id}/classic`),
+      api(`/api/v1/channels/${id}/graphics`),
+      api(`/api/v1/channels/${id}/stream`),
+      api(`/api/v1/channels/${id}/overrides`)
+    ]);
+    state.blocks = blocks; state.classicItems = classic; state.graphics = graphics; state.stream = stream; state.overrides = overrides;
+    renderProgramming(); renderGraphics(); renderStream(); renderOverrides();
+    if (state.programMode === 'scripted') loadScriptYaml();
+    if (state.programMode === 'external') loadExternalJson();
+  } catch (error) { toast(String(error), true); }
+}
+
+function renderGraphics() {
+  const graphics = state.graphics || { text: '', position: 'bottom-right', opacity: 60, size: 28, watermark_media_id: null, watermark_position: 'top-right', watermark_opacity: 70, watermark_scale: 12, lower_third_text: '', lower_third_size: 22, lower_third_opacity: 65 };
+  $('graphicsText').value = graphics.text || '';
+  $('graphicsPosition').value = graphics.position || 'bottom-right';
+  $('graphicsOpacity').value = graphics.opacity ?? 60;
+  $('graphicsSize').value = graphics.size ?? 28;
+  const watermark = $('graphicsWatermark');
+  watermark.innerHTML = '<option value="">No watermark</option>' + state.media.filter(m => m.kind === 'image').map(m => `<option value="${esc(m.id)}">${esc(m.title)}</option>`).join('');
+  watermark.value = graphics.watermark_media_id || '';
+  $('graphicsWatermarkPosition').value = graphics.watermark_position || 'top-right';
+  $('graphicsWatermarkOpacity').value = graphics.watermark_opacity ?? 70;
+  $('graphicsWatermarkScale').value = graphics.watermark_scale ?? 12;
+  $('graphicsLowerThird').value = graphics.lower_third_text || '';
+  $('graphicsLowerThirdSize').value = graphics.lower_third_size ?? 22;
+  $('graphicsLowerThirdOpacity').value = graphics.lower_third_opacity ?? 65;
+}
+
+function renderStream() {
+  const stream = state.stream || { width: 1280, height: 720, preset: 'veryfast', crf: 22, audio_kbps: 160 };
+  const resolution = `${stream.width}x${stream.height}`;
+  const select = $('streamResolution');
+  select.value = [...select.options].some(option => option.value === resolution) ? resolution : '1280x720';
+  $('streamPreset').value = stream.preset || 'veryfast';
+  $('streamCrf').value = stream.crf ?? 22;
+  $('streamAudio').value = stream.audio_kbps ?? 160;
+  $('streamAudioLanguage').value = stream.audio_language || '';
+  $('streamAudioLanguage').placeholder = state.language?.audio_language ? `inherit global (${state.language.audio_language})` : 'inherit global';
+  $('streamSubtitleMode').value = stream.subtitle_mode || 'inherit';
+  $('streamSubtitleLanguage').value = stream.subtitle_language || '';
+  $('streamSubtitleLanguage').placeholder = state.language?.subtitle_language ? `inherit global (${state.language.subtitle_language})` : 'inherit global';
+  $('streamHdrMode').value = stream.hdr_mode || 'passthrough';
+  $('streamEncoder').value = stream.encoder || 'software';
+  $('streamSegment').value = stream.segment_seconds ?? 4;
+  $('streamPrebuffer').value = stream.prebuffer_seconds ?? 8;
+  $('streamCache').value = stream.cache_segments ?? 12;
+  $('streamPrewarm').checked = !!stream.prewarm;
+}
+
+function renderOverrides() {
+  const list = $('overrideList');
+  if (!list) return;
+  if (!state.overrides.length) {
+    list.innerHTML = `<div class="empty" style="border:0;padding:14px"><b>No alternate schedules</b>Save the YAML above with a date range to override the base schedule.</div>`;
+    return;
+  }
+  list.innerHTML = state.overrides.map(item => `
+    <div class="block-row wide-actions">
+      <div class="days">O</div>
+      <div>${esc(item.name)}<div class="dim tiny">${esc(item.start_date)} – ${esc(item.end_date)} · priority ${item.priority}</div></div>
+      <div class="mono tiny dim">Override</div>
+      <button class="btn small ghost" data-delete-override="${esc(item.id)}">Delete</button>
+    </div>`).join('');
+  list.querySelectorAll('button[data-delete-override]').forEach(btn => btn.addEventListener('click', async () => {
+    if (!confirm('Delete this alternate schedule?')) return;
+    try {
+      const result = await api(`/api/v1/channels/${encodeURIComponent(state.programChannel)}/overrides/${encodeURIComponent(btn.dataset.deleteOverride)}`, { method: 'DELETE' });
+      state.overrides = result.overrides;
+      renderOverrides(); await loadAll(); await loadProgramming();
+      toast(`Override deleted: rebuilt ${result.rebuild.items} items.`);
+    } catch (error) { toast(String(error), true); }
+  }));
+}
+
+function renderCloudSources() {
+  const list = $('cloudSourceList');
+  if (!list) return;
+  const select = $('cloudBrowseSource');
+  select.innerHTML = state.cloudSources.map(source => `<option value="${esc(source.id)}">${esc(source.name)}</option>`).join('');
+  if (!state.cloudSources.length) {
+    list.innerHTML = `<div class="empty" style="border:0;padding:14px"><b>No cloud sources</b>Add a Google Drive source to browse and scan cloud media.</div>`;
+    return;
+  }
+  list.innerHTML = state.cloudSources.map(source => `
+    <div class="block-row wide-actions">
+      <div class="days">☁</div>
+      <div>${esc(source.name)}<div class="dim tiny">${esc(source.provider)} · ${esc(source.auth_type)} · ${esc(source.policy)}${source.last_error ? ` · ${esc(source.last_error)}` : ''}</div></div>
+      <div class="mono tiny dim">${source.last_sync_at ? 'synced' : 'never'}</div>
+      <div class="row"><button class="btn small" data-cloud-scan="${esc(source.id)}">Scan</button><button class="btn small ghost" data-cloud-del="${esc(source.id)}">Delete</button></div>
+    </div>`).join('');
+  list.querySelectorAll('button[data-cloud-scan]').forEach(btn => btn.addEventListener('click', () => scanCloudSource(btn.dataset.cloudScan)));
+  list.querySelectorAll('button[data-cloud-del]').forEach(btn => btn.addEventListener('click', async () => {
+    if (!confirm('Delete this cloud source and its indexed media?')) return;
+    try { await api(`/api/v1/cloud/sources/${encodeURIComponent(btn.dataset.cloudDel)}`, { method: 'DELETE' }); await loadAll(); toast('Cloud source deleted.'); }
+    catch (error) { toast(String(error), true); }
+  }));
+}
+
+async function scanCloudSource(id) {
+  try {
+    const report = await api(`/api/v1/cloud/sources/${encodeURIComponent(id)}/scan`, { method: 'POST', body: JSON.stringify({ limit: 1000 }) });
+    await loadAll();
+    toast(`Cloud scan: ${report.scanned} scanned, ${report.probed} probed, ${report.skipped} skipped, ${report.errors} errors.`);
+  } catch (error) { toast(String(error), true); }
+}
+
+async function browseCloud() {
+  const source = $('cloudBrowseSource').value;
+  const folder = $('cloudFolderId').value.trim() || 'root';
+  if (!source) { toast('Add a cloud source first.', true); return; }
+  try {
+    const entries = await api(`/api/v1/cloud/sources/${encodeURIComponent(source)}/browse?folder=${encodeURIComponent(folder)}`);
+    state.cloudBrowse = { source, folder, path: folder, entries };
+    const list = $('cloudFolderList');
+    list.innerHTML = entries.length ? entries.map((entry, index) => `
+      <div class="block-row wide-actions">
+        <div class="days">${entry.is_folder ? '▸' : '·'}</div>
+        <div>${esc(entry.name)}<div class="dim tiny">${esc(entry.mime_type)}</div></div>
+        <div class="mono tiny dim">${entry.size ? `${Math.round(entry.size / 1048576)} MB` : ''}</div>
+        <div>${entry.is_folder ? `<button class="btn small ghost" data-cloud-folder="${esc(entry.id)}">Open</button>` : ''}</div>
+      </div>`).join('') : '<div class="empty" style="border:0;padding:14px">This folder is empty.</div>';
+    list.querySelectorAll('button[data-cloud-folder]').forEach(btn => btn.addEventListener('click', () => { $('cloudFolderId').value = btn.dataset.cloudFolder; browseCloud(); }));
+  } catch (error) { toast(String(error), true); }
+}
+
+async function addCloudRoot() {
+  const source = $('cloudBrowseSource').value;
+  const folder = $('cloudFolderId').value.trim();
+  if (!source || !folder) { toast('Choose a source and folder first.', true); return; }
+  try {
+    await api(`/api/v1/cloud/sources/${encodeURIComponent(source)}/roots`, { method: 'POST', body: JSON.stringify({ remote_id: folder, remote_path: folder, display_path: folder }) });
+    await loadAll();
+    toast('Folder added to the cloud source.');
+  } catch (error) { toast(String(error), true); }
+}
+
+function renderSources() {
+  const grid = $('sourceGrid');
+  grid.innerHTML = state.sources.map(s => `
+    <div class="source-card">
+      <div class="source-top"><div><h3>${esc(s.label)}</h3><div class="mono tiny ${s.exists ? 'ok' : 'warn'}">${s.exists ? 'MOUNTED' : 'MISSING'}</div></div><button class="btn small" data-source="${esc(s.id)}">Scan</button></div>
+      <div class="source-path">${esc(s.path)}</div>
+    </div>`).join('');
+  grid.querySelectorAll('button[data-source]').forEach(btn => btn.addEventListener('click', () => scanSource(btn.dataset.source)));
+  $('jellyfinBadge').textContent = state.stats?.jellyfin_configured ? 'CONNECTED' : 'API KEY NEEDED';
+  $('jellyfinBadge').className = `badge ${state.stats?.jellyfin_configured ? 'ok' : 'warn'}`;
+  $('jellyfinSyncBtn').disabled = !state.stats?.jellyfin_configured;
+  $('jellyfinHint').textContent = state.stats?.jellyfin_configured ? 'Metadata sync is configured. Full library import lands in the next pass.' : 'Set JELLYFIN_API_KEY to enable API metadata sync.';
+  $('jellyfinPath').textContent = state.config?.jellyfin_url || 'https://jelly.christopherrutherford.net';
+  $('embyBadge').textContent = state.stats?.emby_configured ? 'CONNECTED' : 'API KEY NEEDED';
+  $('embyBadge').className = `badge ${state.stats?.emby_configured ? 'ok' : 'warn'}`;
+  $('embySyncBtn').disabled = !state.stats?.emby_configured;
+  $('embyHint').textContent = state.stats?.emby_configured ? 'Metadata sync is configured.' : 'Set EMBY_API_KEY to enable API metadata sync.';
+  $('embyPath').textContent = state.config?.emby_url || 'http://localhost:8096';
+}
+
+function renderSettings() {
+  $('setPublic').textContent = state.config?.public_url || location.origin;
+  $('setJellyfin').textContent = state.config?.jellyfin_url || '—';
+  $('setHdhr').textContent = `HDHomeRun: ${location.origin}/discover.json`;
+  $('setM3u').textContent = `M3U: ${location.origin}/iptv/channels.m3u`;
+  $('setXmltv').textContent = `XMLTV: ${location.origin}/iptv/xmltv.xml`;
+  $('setManifest').textContent = `Manifest: ${location.origin}/manifest.webmanifest`;
+  $('sideUrl').textContent = location.host;
+  $('setAudioLanguage').value = state.language?.audio_language || '';
+  $('setSubtitleMode').value = state.language?.subtitle_mode || 'off';
+  $('setSubtitleLanguage').value = state.language?.subtitle_language || '';
+  renderStreamHealth();
+  renderBackups();
+}
+
+function renderStreamHealth() {
+  const list = $('streamHealth');
+  if (!list) return;
+  const metrics = state.metrics;
+  if (!metrics || !metrics.producers?.length) {
+    list.innerHTML = `<div class="empty" style="border:0;padding:14px"><b>No active producers</b>Tune a channel to start a stream.</div>`;
+    return;
+  }
+  const totalMb = (metrics.hls_bytes / (1024 * 1024)).toFixed(1);
+  list.innerHTML = `<div class="muted small" style="margin-bottom:8px">Uptime ${fmtDuration(metrics.uptime_ms)} · HLS cache ${totalMb} MB · ${metrics.producers.length} producers</div>` +
+    metrics.producers.map(p => `
+      <div class="row" style="justify-content:space-between;gap:12px;padding:9px 0;border-bottom:1px solid var(--line-soft)">
+        <div style="min-width:0"><b>${esc(p.channel)} · ${esc(p.name)}</b><div class="dim tiny">${esc(p.item.split(':')[0])}</div></div>
+        <div class="mono tiny dim" style="white-space:nowrap">${p.segments} segs · ${Math.round(p.startup_ms)} ms</div>
+      </div>`).join('');
+}
+
+async function renderGuide() {
+  const guide = $('guide');
+  if (!state.channels.length) { guide.innerHTML = `<div class="empty"><b>No guide</b>Create a channel first.</div>`; return; }
+  const now = Date.now();
+  const start = now - 30 * 60000;
+  const span = 12 * 3600000;
+  const rows = [];
+  for (const c of state.channels) {
+    let items = [];
+    try { items = await api(`/api/v1/channels/${encodeURIComponent(c.id)}/guide?hours=12`); } catch {}
+    const blocks = items.filter(i => i.end_ms > start && i.start_ms < start + span).map(i => {
+      const left = Math.max(0, (i.start_ms - start) / span * 100);
+      const width = Math.min(100 - left, (i.end_ms - i.start_ms) / span * 100);
+      return `<div class="guide-block ${i.media_id ? '' : 'filler'}" style="left:${left}%;width:${Math.max(1,width)}%" title="${esc(i.title)} ${fmtClock(i.start_ms)}"><span>${esc(i.title)}</span><span>${fmtClock(i.start_ms)}</span></div>`;
+    }).join('');
+    const nowLeft = Math.max(0, Math.min(100, (now - start) / span * 100));
+    rows.push(`<div class="guide-row"><div class="guide-label"><div class="rail-no" style="font-size:20px">${esc(c.number)}</div><div class="tiny">${esc(c.name)}</div></div><div class="guide-track">${blocks}<div class="guide-now" style="left:${nowLeft}%"></div></div></div>`);
+  }
+  const ticks = Array.from({length: 6}, (_, i) => `<span>${new Date(start + i * 2 * 3600000).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'})}</span>`).join('');
+  guide.innerHTML = `<div class="guide-ticks"><div class="spacer"></div><div class="ticks">${ticks}</div></div>${rows.join('')}`;
+}
+
+function playUrl(url, label = 'HLS · 720p', target = 'player') {
+  const video = $(target);
+  state.playerTarget = target;
+  if (target === 'player') $('screenOff').style.display = 'none';
+  if (state.hls) { state.hls.destroy(); state.hls = null; }
+  if (window.Hls && Hls.isSupported()) {
+    const fromStart = label.startsWith('DVR') || label.startsWith('CATCH-UP');
+    state.hls = new Hls({ liveSyncDurationCount: 3, lowLatencyMode: false, startPosition: fromStart ? 0 : -1 });
+    state.hls.loadSource(url);
+    state.hls.attachMedia(video);
+    state.hls.on(Hls.Events.MANIFEST_PARSED, () => video.play().catch(() => {}));
+    state.hls.on(Hls.Events.ERROR, (_e, data) => { if (data.fatal) toast(`HLS: ${data.type}`, true); });
+  } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+    video.src = url; video.play().catch(() => {});
+  } else {
+    toast('HLS is not supported in this browser.', true);
+  }
+  $('qualityChip').textContent = label;
+}
+
+function stopPlayback() {
+  if (state.hls) { state.hls.destroy(); state.hls = null; }
+  for (const id of ['player', 'tvPlayer']) {
+    const video = $(id);
+    if (!video) continue;
+    video.pause();
+    video.removeAttribute('src');
+    video.load();
+  }
+  state.playerTarget = null;
+}
+
+function renderTv() {
+  const grid = $('tvGrid');
+  if (!grid) return;
+  if (!state.channels.length) { grid.innerHTML = '<div class="empty">No channels configured.</div>'; return; }
+  if (!state.tvNumber) state.tvNumber = state.channels[0].number;
+  grid.innerHTML = state.channels.map(c => `
+    <div class="tv-tile ${c.number === state.tvNumber ? 'active' : ''}" data-tv-number="${esc(c.number)}">
+      <div class="num">${esc(c.number)}</div>
+      <div class="name">${esc(c.name)}</div>
+      <div class="now">${esc(c.now?.title || 'Off air')}</div>
+      <div class="next">${c.next ? `Next: ${esc(c.next.title)}` : ''}</div>
+      <div class="bar"><span style="width:${c.now ? progress(c.now) : 0}%"></span></div>
+    </div>`).join('');
+  grid.querySelectorAll('.tv-tile').forEach(tile => tile.addEventListener('click', () => selectTvChannel(tile.dataset.tvNumber, true)));
+  const channel = state.channels.find(c => c.number === state.tvNumber);
+  if (channel) {
+    $('tvTitle').textContent = channel.now?.title || channel.name;
+    $('tvSub').textContent = `Channel ${channel.number} · ${channel.name} · ${channel.now ? `${fmtClock(channel.now.start_ms)}–${fmtClock(channel.now.end_ms)}` : 'Off air'}`;
+  }
+  updateTvClock();
+}
+
+function updateTvClock() {
+  const clock = $('tvClock');
+  if (clock) clock.textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+function selectTvChannel(number, play) {
+  state.tvNumber = number;
+  renderTv();
+  const active = $('tvGrid')?.querySelector('.tv-tile.active');
+  if (active) active.scrollIntoView({ inline: 'center', block: 'nearest' });
+  if (play) playTvChannel(number);
+}
+
+function playTvChannel(number) {
+  const channel = state.channels.find(c => c.number === number);
+  if (!channel) return;
+  state.tvNumber = number;
+  renderTv();
+  stopDvr(channel);
+  playUrl(`/channel/${encodeURIComponent(number)}.m3u8`, 'HLS · 720p', 'tvPlayer');
+}
+
+function stopDvr(channel) {
+  if (!channel) return;
+  fetch(`/api/v1/channels/${encodeURIComponent(channel.id)}/dvr`, { method: 'DELETE', credentials: 'same-origin' }).catch(() => {});
+}
+
+async function startDvr() {
+  const c = currentChannel();
+  if (!c) { toast('Create a channel first.', true); return; }
+  try {
+    const result = await api(`/api/v1/channels/${encodeURIComponent(c.id)}/dvr`, { method: 'POST', body: JSON.stringify({ window_seconds: 3600 }) });
+    playUrl(result.playlist_url, 'DVR · 60 min');
+    toast('DVR started. Pause or seek within the rolling 60-minute window.');
+  } catch (error) { toast(String(error), true); }
+}
+
+function playActive() {
+  const c = currentChannel();
+  if (!c) { toast('Create a channel first.', true); return; }
+  stopDvr(c);
+  playUrl(`/channel/${encodeURIComponent(c.number)}.m3u8`, 'HLS · 720p');
+  setTimeout(loadAll, 1200);
+}
+
+async function startCatchup() {
+  const c = currentChannel();
+  if (!c) { toast('Create a channel first.', true); return; }
+  try {
+    stopDvr(c);
+    const result = await api(`/api/v1/channels/${encodeURIComponent(c.id)}/catchup`, { method: 'POST' });
+    playUrl(result.playlist_url, 'CATCH-UP · from start');
+    toast(`Catch-up started: ${result.title}`);
+  } catch (error) { toast(String(error), true); }
+}
+
+async function scanSource(source) {
+  toast(`Scanning ${source}…`);
+  try {
+    const result = await api('/api/v1/scan', { method: 'POST', body: JSON.stringify({ source, limit: 500 }) });
+    await loadAll();
+    toast(`Scanned ${result.scanned} items from ${source}.`);
+  } catch (error) { toast(String(error), true); }
+}
+
+function go(view) {
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+  $(`view-${view}`).classList.add('active');
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.toggle('active', n.dataset.view === view));
+  $('crumbView').textContent = ({'on-air':'On Air','channels':'Channels','library':'Library','guide':'Guide','collections':'Collections','programming':'Programming','sources':'Sources','settings':'Settings','tv':'TV'})[view] || view;
+  if (view === 'guide') renderGuide();
+  if (view === 'programming') { renderProgramming(); loadProgramming(); }
+  if (view === 'tv') {
+    renderTv();
+    if (state.tvNumber) playTvChannel(state.tvNumber);
+  } else if (state.playerTarget === 'tvPlayer') {
+    stopPlayback();
+  }
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+  history.replaceState(null, '', `#${view}`);
+}
+
+function openModal(mode) {
+  state.modalMode = mode;
+  $('modalBack').classList.add('open');
+  const isScan = mode === 'scan';
+  const isCollection = mode === 'collection';
+  $('modalKicker').textContent = isScan ? 'Ingest' : 'Program';
+  $('modalTitle').textContent = isScan ? 'Scan source' : isCollection ? 'New collection' : 'New channel';
+  $('modalSub').textContent = isScan ? 'Probe files and add them to the catalog.' : isCollection ? `${state.selected.size} selected item(s) become a reusable collection.` : `${state.selected.size} selected item(s) loop for seven days.`;
+  $('scanSourceField').style.display = isScan ? '' : 'none';
+  $('scanLimitField').style.display = isScan ? '' : 'none';
+  $('collectionNameField').style.display = isCollection ? '' : 'none';
+  $('channelNumberField').style.display = isScan || isCollection ? 'none' : '';
+  $('channelNameField').style.display = isScan || isCollection ? 'none' : '';
+  $('modalConfirm').textContent = isScan ? 'Scan' : isCollection ? 'Create collection' : 'Create';
+}
+function closeModal() { $('modalBack').classList.remove('open'); }
+
+async function confirmModal() {
+  if (state.modalMode === 'scan') {
+    closeModal();
+    await scanSource($('scanSource').value);
+  } else if (state.modalMode === 'collection') {
+    const ids = [...state.selected];
+    if (!ids.length) { toast('Select media first.', true); return; }
+    try {
+      await api('/api/v1/collections', { method: 'POST', body: JSON.stringify({ name: $('collectionName').value.trim() || 'Untitled collection', media_ids: ids }) });
+      state.selected.clear(); closeModal(); await loadAll(); go('collections'); toast('Collection created.');
+    } catch (error) { toast(String(error), true); }
+  } else {
+    const ids = [...state.selected];
+    if (!ids.length) { toast('Select media first.', true); return; }
+    try {
+      await api('/api/v1/channels', { method: 'POST', body: JSON.stringify({ number: $('channelNumber').value.trim(), name: $('channelName').value.trim(), media_ids: ids }) });
+      state.selected.clear(); closeModal(); await loadAll(); go('channels'); toast('Channel created.');
+    } catch (error) { toast(String(error), true); }
+  }
+}
+
+document.querySelectorAll('.nav-item').forEach(n => n.addEventListener('click', (e) => { e.preventDefault(); go(n.dataset.view); }));
+$('refreshBtn').addEventListener('click', loadAll);
+$('addCloudSourceBtn').addEventListener('click', async () => {
+  const name = $('cloudName').value.trim();
+  const secret = $('cloudSecret').value.trim();
+  if (!name || !secret) { toast('Name and secret are required.', true); return; }
+  const rootId = $('cloudRootId').value.trim();
+  try {
+    await api('/api/v1/cloud/sources', { method: 'POST', body: JSON.stringify({
+      provider: 'google', name, auth_type: $('cloudAuth').value, policy: $('cloudPolicy').value,
+      secret, roots: rootId ? [{ remote_id: rootId, remote_path: rootId, display_path: rootId }] : []
+    }) });
+    $('cloudName').value = ''; $('cloudSecret').value = ''; $('cloudRootId').value = '';
+    await loadAll();
+    toast('Cloud source added.');
+  } catch (error) { toast(String(error), true); }
+});
+$('browseCloudBtn').addEventListener('click', browseCloud);
+$('addCloudRootBtn').addEventListener('click', addCloudRoot);
+$('metricsRefreshBtn').addEventListener('click', async () => {
+  try { state.metrics = await api('/api/v1/metrics'); renderStreamHealth(); } catch (error) { toast(String(error), true); }
+});
+$('scanTopBtn').addEventListener('click', () => openModal('scan'));
+$('scanAllBtn').addEventListener('click', async () => { for (const s of state.sources) await scanSource(s.id); });
+$('jellyfinSyncBtn').addEventListener('click', async () => {
+  $('jellyfinSyncBtn').disabled = true;
+  toast('Syncing Jellyfin metadata…');
+  try {
+    const report = await api('/api/v1/sources/jellyfin/sync', { method: 'POST', body: JSON.stringify({ limit: 20000 }) });
+    await loadAll();
+    toast(`Jellyfin: ${report.imported} imported, ${report.skipped} skipped, ${report.errors} errors.`);
+  } catch (error) { toast(String(error), true); }
+  finally { $('jellyfinSyncBtn').disabled = false; }
+});
+$('embySyncBtn').addEventListener('click', async () => {
+  $('embySyncBtn').disabled = true;
+  toast('Syncing Emby metadata…');
+  try {
+    const report = await api('/api/v1/sources/emby/sync', { method: 'POST', body: JSON.stringify({ limit: 20000 }) });
+    await loadAll();
+    toast(`Emby: ${report.imported} imported, ${report.skipped} skipped, ${report.errors} errors.`);
+  } catch (error) { toast(String(error), true); }
+  finally { $('embySyncBtn').disabled = false; }
+});
+$('newChannelBtn').addEventListener('click', () => { if (!state.selected.size) go('library'); else openModal('channel'); });
+$('createFromSelBtn').addEventListener('click', () => openModal('channel'));
+$('createCollectionBtn').addEventListener('click', () => openModal('collection'));
+$('newCollectionBtn').addEventListener('click', () => { if (state.selected.size) openModal('collection'); else { go('library'); toast('Select media in the Library first.'); } });
+$('watchBtn').addEventListener('click', playActive);
+$('catchupBtn').addEventListener('click', startCatchup);
+$('dvrBtn').addEventListener('click', startDvr);
+$('modalCancel').addEventListener('click', closeModal);
+$('modalBack').addEventListener('click', (e) => { if (e.target === $('modalBack')) closeModal(); });
+$('modalConfirm').addEventListener('click', confirmModal);
+$('selectAllBtn').addEventListener('click', () => { state.media.filter(m => state.kind === 'all' || m.kind === state.kind).forEach(m => state.selected.add(m.id)); renderLibrary(); });
+$('progChannel').addEventListener('change', (e) => { state.programChannel = e.target.value; loadProgramming(); });
+$('addBlockBtn').addEventListener('click', () => {
+  const days = [...document.querySelectorAll('#blockDays input:checked')].reduce((mask, box) => mask | (1 << Number(box.value)), 0);
+  const start = timeToMinutes($('blockStart').value);
+  const end = timeToMinutes($('blockEnd').value);
+  const collection = $('blockCollection').value;
+  if (!days) { toast('Choose at least one day.', true); return; }
+  if (!collection) { toast('Create a collection first.', true); return; }
+  if (end <= start) { toast('End must be after start.', true); return; }
+  state.blocks.push({ days_mask: days, start_minute: start, end_minute: end, collection_id: collection, filler_collection_id: $('blockFiller').value || null, order: $('blockOrder').value });
+  renderBlockList();
+});
+document.querySelectorAll('#programModeTabs .tab').forEach(tab => tab.addEventListener('click', () => {
+  state.programMode = tab.dataset.mode;
+  renderProgramming();
+  if (state.programMode === 'scripted') loadScriptYaml();
+  if (state.programMode === 'external') loadExternalJson();
+}));
+$('addClassicBtn').addEventListener('click', () => {
+  const collection = $('classicCollection').value;
+  if (!collection) { toast('Create a collection first.', true); return; }
+  state.classicItems.push({
+    collection_id: collection,
+    mode: $('classicMode').value,
+    count: Number($('classicCount').value) || 1,
+    duration_minutes: Number($('classicDuration').value) || 60,
+    filler_collection_id: $('classicFiller').value || null,
+    mid_roll_interval_minutes: Number($('classicMidRoll').value) || 0,
+    mid_roll_duration_seconds: Number($('classicBreak').value) || 0,
+    chapter_breaks: $('classicChapterBreaks').checked,
+    break_markers: parseMarkerList($('classicBreakMarkers').value),
+    order: $('classicOrder').value
+  });
+  renderClassicList();
+});
+$('saveOverrideBtn').addEventListener('click', async () => {
+  if (!state.programChannel) { toast('Choose a channel first.', true); return; }
+  const name = $('overrideName').value.trim();
+  const startDate = $('overrideStart').value;
+  const endDate = $('overrideEnd').value;
+  const yaml = $('scriptYaml').value;
+  if (!name || !startDate || !endDate) { toast('Name and date range are required.', true); return; }
+  if (!yaml.trim()) { toast('Load or paste a schedule in the YAML editor first.', true); return; }
+  try {
+    const result = await api(`/api/v1/channels/${encodeURIComponent(state.programChannel)}/overrides`, {
+      method: 'POST',
+      body: JSON.stringify({ name, start_date: startDate, end_date: endDate, priority: Number($('overridePriority').value) || 0, schedule_yaml: yaml })
+    });
+    state.overrides = result.overrides;
+    renderOverrides(); await loadAll(); await loadProgramming();
+    toast(`Override saved: rebuilt ${result.rebuild.items} items.`);
+  } catch (error) { toast(String(error), true); }
+});
+$('saveLanguageBtn').addEventListener('click', async () => {
+  try {
+    state.language = await api('/api/v1/settings/language', { method: 'PUT', body: JSON.stringify({
+      audio_language: $('setAudioLanguage').value.trim() || null,
+      subtitle_mode: $('setSubtitleMode').value,
+      subtitle_language: $('setSubtitleLanguage').value.trim() || null
+    }) });
+    renderSettings(); renderStream();
+    toast('Language defaults saved. Channel producers were restarted.');
+  } catch (error) { toast(String(error), true); }
+});
+$('saveGraphicsBtn').addEventListener('click', async () => {
+  if (!state.programChannel) { toast('Choose a channel first.', true); return; }
+  const payload = {
+    text: $('graphicsText').value.trim(),
+    position: $('graphicsPosition').value,
+    opacity: Number($('graphicsOpacity').value),
+    size: Number($('graphicsSize').value),
+    watermark_media_id: $('graphicsWatermark').value || null,
+    watermark_position: $('graphicsWatermarkPosition').value,
+    watermark_opacity: Number($('graphicsWatermarkOpacity').value),
+    watermark_scale: Number($('graphicsWatermarkScale').value),
+    lower_third_text: $('graphicsLowerThird').value.trim(),
+    lower_third_size: Number($('graphicsLowerThirdSize').value),
+    lower_third_opacity: Number($('graphicsLowerThirdOpacity').value)
+  };
+  try {
+    state.graphics = await api(`/api/v1/channels/${encodeURIComponent(state.programChannel)}/graphics`, { method: 'PUT', body: JSON.stringify(payload) });
+    renderGraphics();
+    toast('Graphics saved. The channel restarts at the current position.');
+  } catch (error) { toast(String(error), true); }
+});
+$('saveStreamBtn').addEventListener('click', async () => {
+  if (!state.programChannel) { toast('Choose a channel first.', true); return; }
+  const [width, height] = $('streamResolution').value.split('x').map(Number);
+  const payload = {
+    width, height,
+    preset: $('streamPreset').value,
+    crf: Number($('streamCrf').value),
+    audio_kbps: Number($('streamAudio').value),
+    audio_language: $('streamAudioLanguage').value.trim() || null,
+    subtitle_mode: $('streamSubtitleMode').value,
+    subtitle_language: $('streamSubtitleLanguage').value.trim() || null,
+    hdr_mode: $('streamHdrMode').value,
+    encoder: $('streamEncoder').value,
+    segment_seconds: Number($('streamSegment').value),
+    prebuffer_seconds: Number($('streamPrebuffer').value),
+    cache_segments: Number($('streamCache').value),
+    prewarm: $('streamPrewarm').checked
+  };
+  try {
+    state.stream = await api(`/api/v1/channels/${encodeURIComponent(state.programChannel)}/stream`, { method: 'PUT', body: JSON.stringify(payload) });
+    renderStream();
+    toast('Stream profile saved. The channel restarts at the current position.');
+  } catch (error) { toast(String(error), true); }
+});
+async function loadExternalJson() {
+  if (!state.programChannel) { toast('Choose a channel first.', true); return; }
+  try {
+    const res = await fetch(`/api/v1/channels/${encodeURIComponent(state.programChannel)}/playout.json`, { credentials: 'same-origin' });
+    if (res.status === 401) { showLogin(); return; }
+    if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+    $('externalJson').value = await res.text();
+  } catch (error) { toast(String(error), true); }
+}
+$('loadJsonBtn').addEventListener('click', loadExternalJson);
+$('applyJsonBtn').addEventListener('click', async () => {
+  if (!state.programChannel) { toast('Choose a channel first.', true); return; }
+  const json = $('externalJson').value;
+  if (!json.trim()) { toast('Paste playout JSON first.', true); return; }
+  $('applyJsonBtn').disabled = true;
+  try {
+    const res = await fetch(`/api/v1/channels/${encodeURIComponent(state.programChannel)}/playout.json`, {
+      method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: json
+    });
+    if (res.status === 401) { showLogin(); return; }
+    if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+    const result = await res.json();
+    state.programMode = 'external';
+    await loadAll();
+    await loadProgramming();
+    toast(`Applied external playout: ${result.items} items.`);
+  } catch (error) { toast(String(error), true); }
+  finally { $('applyJsonBtn').disabled = false; }
+});
+async function loadScriptYaml() {
+  if (!state.programChannel) { toast('Choose a channel first.', true); return; }
+  try {
+    const res = await fetch(`/api/v1/channels/${encodeURIComponent(state.programChannel)}/schedule.yaml`, { credentials: 'same-origin' });
+    if (res.status === 401) { showLogin(); return; }
+    if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+    $('scriptYaml').value = await res.text();
+  } catch (error) { toast(String(error), true); }
+}
+$('loadYamlBtn').addEventListener('click', loadScriptYaml);
+$('applyYamlBtn').addEventListener('click', async () => {
+  if (!state.programChannel) { toast('Choose a channel first.', true); return; }
+  const yaml = $('scriptYaml').value;
+  if (!yaml.trim()) { toast('Paste a schedule first.', true); return; }
+  $('applyYamlBtn').disabled = true;
+  try {
+    const res = await fetch(`/api/v1/channels/${encodeURIComponent(state.programChannel)}/schedule.yaml`, {
+      method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'text/yaml' }, body: yaml
+    });
+    if (res.status === 401) { showLogin(); return; }
+    if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+    const result = await res.json();
+    state.programMode = result.mode === 'classic' ? 'classic' : 'blocks';
+    await loadAll();
+    await loadProgramming();
+    toast(`Applied YAML: ${result.mode}, rebuilt ${result.rebuild.items} items (${result.rebuild.warnings} warnings).`);
+  } catch (error) { toast(String(error), true); }
+  finally { $('applyYamlBtn').disabled = false; }
+});
+$('saveTemplateBtn').addEventListener('click', async () => {
+  const name = $('templateName').value.trim();
+  if (!name) { toast('Name the template first.', true); return; }
+  if (!state.blocks.length) { toast('Add at least one weekly block first.', true); return; }
+  const blocks = state.blocks.map(b => ({
+    days_mask: b.days_mask, start_minute: b.start_minute, end_minute: b.end_minute,
+    collection_id: b.collection_id, filler_collection_id: b.filler_collection_id, order: b.order
+  }));
+  try {
+    await api('/api/v1/templates', { method: 'POST', body: JSON.stringify({ name, blocks, graphics: state.graphics || undefined }) });
+    $('templateName').value = '';
+    await loadAll();
+    toast('Template saved.');
+  } catch (error) { toast(String(error), true); }
+});
+$('saveBlocksBtn').addEventListener('click', async () => {
+  if (!state.programChannel) { toast('Create a channel first.', true); return; }
+  if (state.programMode === 'scripted') { $('applyYamlBtn').click(); return; }
+  if (state.programMode === 'external') { $('applyJsonBtn').click(); return; }
+  $('saveBlocksBtn').disabled = true;
+  try {
+    const endpoint = state.programMode === 'classic' ? 'classic' : 'blocks';
+    const payload = state.programMode === 'classic' ? state.classicItems : state.blocks;
+    const result = await api(`/api/v1/channels/${encodeURIComponent(state.programChannel)}/${endpoint}`, { method: 'PUT', body: JSON.stringify(payload) });
+    if (state.programMode === 'classic') state.classicItems = result.items; else state.blocks = result.blocks;
+    renderBlockList(); renderClassicList(); await loadAll();
+    toast(`Rebuilt ${result.rebuild.items} items (${result.rebuild.warnings} warnings).`);
+  } catch (error) { toast(String(error), true); }
+  finally { $('saveBlocksBtn').disabled = false; }
+});
+$('clearSelBtn').addEventListener('click', () => { state.selected.clear(); renderLibrary(); });
+$('mediaSearch').addEventListener('input', (e) => { state.search = e.target.value; renderLibrary(); });
+document.querySelectorAll('#kindTabs .tab').forEach(tab => tab.addEventListener('click', () => {
+  state.kind = tab.dataset.kind;
+  document.querySelectorAll('#kindTabs .tab').forEach(t => t.classList.toggle('active', t === tab));
+  renderLibrary();
+}));
+setInterval(() => { $('clock').textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }); }, 1000);
+setInterval(async () => {
+  if (document.hidden) return;
+  try {
+    state.channels = await api('/api/v1/channels');
+    renderRail(); renderChannels(); renderOnAir();
+  } catch {}
+}, 10000);
+$('loginForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  $('loginError').textContent = '';
+  try {
+    const response = await fetch('/api/v1/auth/login', {
+      method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: $('loginUser').value, password: $('loginPass').value })
+    });
+    if (!response.ok) { $('loginError').textContent = 'Invalid credentials'; return; }
+    $('loginBack').classList.remove('open');
+    await loadAll();
+  } catch (error) { $('loginError').textContent = String(error); }
+});
+$('logoutBtn').addEventListener('click', async () => {
+  try { await fetch('/api/v1/auth/logout', { method: 'POST', credentials: 'same-origin' }); } catch {}
+  if (state.hls) { state.hls.destroy(); state.hls = null; }
+  $('player').removeAttribute('src'); $('screenOff').style.display = 'grid';
+  showLogin();
+});
+checkAuth();
+let installPrompt = null;
+function showInstallButtons() {
+  for (const id of ['installAppBtn', 'settingsInstallBtn']) {
+    const button = $(id);
+    if (button) button.style.display = '';
+  }
+}
+async function installApp() {
+  if (!installPrompt) {
+    toast('Use your browser menu to install, or open this page over HTTPS.', true);
+    return;
+  }
+  const prompt = installPrompt;
+  installPrompt = null;
+  prompt.prompt();
+  try { await prompt.userChoice; } catch {}
+  $('installAppBtn').style.display = 'none';
+}
+window.addEventListener('beforeinstallprompt', (event) => {
+  event.preventDefault();
+  installPrompt = event;
+  showInstallButtons();
+});
+window.addEventListener('appinstalled', () => {
+  installPrompt = null;
+  $('installAppBtn').style.display = 'none';
+  toast('Awesome TV installed.');
+});
+$('installAppBtn').addEventListener('click', installApp);
+$('settingsInstallBtn').addEventListener('click', installApp);
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js')
+    .then(() => { const el = $('swStatus'); if (el) el.textContent = 'READY'; })
+    .catch(() => { const el = $('swStatus'); if (el) el.textContent = 'UNAVAILABLE'; });
+}
+
+document.addEventListener('keydown', (event) => {
+  if (!$('view-tv').classList.contains('active') || !state.channels.length) return;
+  const index = state.channels.findIndex(c => c.number === state.tvNumber);
+  if (['ArrowRight', 'ArrowDown', 'ArrowLeft', 'ArrowUp'].includes(event.key)) {
+    event.preventDefault();
+    const delta = event.key === 'ArrowRight' || event.key === 'ArrowDown' ? 1 : -1;
+    const next = state.channels[(index + delta + state.channels.length) % state.channels.length];
+    selectTvChannel(next.number, true);
+  } else if (event.key === 'Enter') {
+    event.preventDefault();
+    playTvChannel(state.tvNumber);
+  }
+});
+setInterval(() => { if ($('view-tv').classList.contains('active')) updateTvClock(); }, 1000);
+const appMode = new URLSearchParams(location.search).get('app');
+const initial = appMode === 'tv' ? 'tv' : appMode === 'guide' ? 'guide' : (location.hash.replace('#', '') || 'on-air');
+go(initial);
+</script>
+</body>
+</html>
