@@ -23,8 +23,8 @@ AWESOMETV_CAST_BASE_URL=http://192.168.1.153:8409
 ```
 
 Do not point it at the public TLS hostname unless the Chromecast can reach it.
-The sender can be remote, but the receiver still fetches media from the cast
-base.
+The sender must be able to discover the Chromecast on the same network; the
+receiver then fetches media from the cast base.
 
 Cold casts wait for the producer to become ready before returning the media
 URL, avoiding the receiver's media-load timeout. The app also returns
