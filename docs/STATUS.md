@@ -55,8 +55,22 @@ A **Holiday Movies** alternate schedule runs Family Movies on Movie Night from D
 SWAG terminates TLS with a certificate covering the hostname, and the proxy
 reaches the app over Tailscale MagicDNS (`nirvana.tail5a4a0.ts.net:8409`).
 Verified end-to-end: login, session cookie, config, channel list, HLS playlist,
-and MPEG-TS segment fetch. The public viewer/admin split is still pending, so
-the hostname currently serves the protected admin console.
+MPEG-TS segment fetch, and real Chrome playback (video advanced with no fatal
+errors).
+
+Two public-path constraints were found and addressed:
+
+- **Uplink.** Public segments travel `app -> Tailscale -> VPS -> viewer`, so the
+  home upload caps every public stream. `AWESOMETV_STREAM_MAX_KBPS=900` keeps a
+  single viewer inside the measured path throughput; the per-channel stream
+  form can override it. Multiple public viewers share the same upload.
+- **fail2ban.** SWAG's stock `nginx-unauthorized` jail banned the home IP after
+  five 401s from a logged-out UI poll. The UI now stops polling when
+  unauthenticated, and that jail is disabled; the app throttles its own login
+  attempts instead.
+
+The public viewer/admin split is still pending, so the hostname currently
+serves the protected admin console.
 
 ## Cloud sources
 

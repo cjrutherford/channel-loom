@@ -63,10 +63,39 @@ atv.christopherrutherford.net
 
 ### Troubleshooting
 
-- **`ERR_CONNECTION_REFUSED` from one network but not others.** SWAG restarts
-  nginx whenever `proxy-confs` changes; connections are refused for a few
-  seconds during the reload. Confirm the port is open from an independent
-  network, for example `https://check-host.net/check-tcp?host=45.79.204.77:443`.
+- **`ERR_CONNECTION_REFUSED` / `ERR_NETWORK_CHANGED` from one network but not
+  others.** First rule out SWAG's fail2ban. The stock `nginx-unauthorized` jail
+  bans an IP after five 401 responses, and a logged-out Awesome TV tab used to
+  poll a protected API every ten seconds, so a real viewer could ban
+  themselves. Check and clear it:
+
+  ```sh
+  docker exec swag fail2ban-client status
+  docker exec swag fail2ban-client status nginx-unauthorized
+  docker exec swag fail2ban-client set nginx-unauthorized unbanip <ip>
+  ```
+
+  The app now stops polling after a 401 and throttles its own login attempts, so
+  disable the 401 jail to avoid recurrence. Edit
+  `/opt/swag/config/fail2ban/jail.local`, set `enabled = false` under
+  `[nginx-unauthorized]`, then sync and restart inside the container:
+
+  ```sh
+  docker exec swag cp /config/fail2ban/jail.local /etc/fail2ban/jail.local
+  docker exec swag fail2ban-client restart
+  ```
+
+  The other SWAG jails (bad bots, bot search, deny, HTTP auth) can stay enabled.
+
+- **Connections refused for a few seconds after a deploy.** SWAG and Docker
+  rebuild their bridge/DNAT rules on restart. Confirm the port is open from an
+  independent network, for example
+  `https://check-host.net/check-tcp?host=45.79.204.77:443`.
+- **HLS stalls or never starts over the public host.** The public stream is
+  limited by the home upload, because every segment travels
+  `app -> Tailscale -> VPS -> viewer`. Set `AWESOMETV_STREAM_MAX_KBPS` to a value
+  the uplink can sustain (900 here) and keep the live buffer deep. Multiple
+  public viewers share that same upload capacity.
 - **502 from nginx.** The upstream is unreachable. Check inside the container:
 
   ```sh

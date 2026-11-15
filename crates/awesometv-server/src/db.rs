@@ -96,6 +96,9 @@ pub struct StreamSettings {
     pub preset: String,
     #[serde(default = "default_stream_crf")]
     pub crf: i64,
+    /// Video bitrate ceiling in kbps. 0 uses the global default.
+    #[serde(default)]
+    pub max_kbps: i64,
     #[serde(default = "default_stream_audio_kbps")]
     pub audio_kbps: i64,
     #[serde(default)]
@@ -125,6 +128,7 @@ impl Default for StreamSettings {
             height: default_stream_height(),
             preset: default_stream_preset(),
             crf: default_stream_crf(),
+            max_kbps: 0,
             audio_kbps: default_stream_audio_kbps(),
             audio_language: None,
             subtitle_mode: default_subtitle_mode(),
@@ -372,6 +376,7 @@ pub async fn init(data_dir: &Path) -> Result<SqlitePool> {
             stream_height INTEGER NOT NULL DEFAULT 720,
             stream_preset TEXT NOT NULL DEFAULT 'veryfast',
             stream_crf INTEGER NOT NULL DEFAULT 22,
+            stream_max_kbps INTEGER NOT NULL DEFAULT 0,
             stream_audio_kbps INTEGER NOT NULL DEFAULT 160,
             audio_language TEXT,
             subtitle_mode TEXT NOT NULL DEFAULT 'inherit',
@@ -616,6 +621,10 @@ pub async fn init(data_dir: &Path) -> Result<SqlitePool> {
         (
             "stream_crf",
             "ALTER TABLE channels ADD COLUMN stream_crf INTEGER NOT NULL DEFAULT 22",
+        ),
+        (
+            "stream_max_kbps",
+            "ALTER TABLE channels ADD COLUMN stream_max_kbps INTEGER NOT NULL DEFAULT 0",
         ),
         (
             "stream_audio_kbps",
@@ -951,7 +960,7 @@ pub async fn create_channel(
 
 pub async fn list_channels(pool: &SqlitePool) -> Result<Vec<Channel>> {
     let rows = sqlx::query(
-        "SELECT id, number, name, start_ms, schedule_mode, graphics_text, graphics_position, graphics_opacity, graphics_size, watermark_media_id, watermark_position, watermark_opacity, watermark_scale, lower_third_text, lower_third_size, lower_third_opacity, stream_width, stream_height, stream_preset, stream_crf, stream_audio_kbps, audio_language, subtitle_mode, subtitle_language, hdr_mode, encoder, segment_seconds, prebuffer_seconds, cache_segments, prewarm FROM channels ORDER BY CAST(number AS INTEGER), number",
+        "SELECT id, number, name, start_ms, schedule_mode, graphics_text, graphics_position, graphics_opacity, graphics_size, watermark_media_id, watermark_position, watermark_opacity, watermark_scale, lower_third_text, lower_third_size, lower_third_opacity, stream_width, stream_height, stream_preset, stream_crf, stream_max_kbps, stream_audio_kbps, audio_language, subtitle_mode, subtitle_language, hdr_mode, encoder, segment_seconds, prebuffer_seconds, cache_segments, prewarm FROM channels ORDER BY CAST(number AS INTEGER), number",
     )
     .fetch_all(pool)
     .await?;
@@ -971,7 +980,7 @@ pub async fn list_channels(pool: &SqlitePool) -> Result<Vec<Channel>> {
 
 pub async fn channel_by_number(pool: &SqlitePool, number: &str) -> Result<Option<Channel>> {
     let row = sqlx::query(
-        "SELECT id, number, name, start_ms, schedule_mode, graphics_text, graphics_position, graphics_opacity, graphics_size, watermark_media_id, watermark_position, watermark_opacity, watermark_scale, lower_third_text, lower_third_size, lower_third_opacity, stream_width, stream_height, stream_preset, stream_crf, stream_audio_kbps, audio_language, subtitle_mode, subtitle_language, hdr_mode, encoder, segment_seconds, prebuffer_seconds, cache_segments, prewarm FROM channels WHERE number = ? LIMIT 1",
+        "SELECT id, number, name, start_ms, schedule_mode, graphics_text, graphics_position, graphics_opacity, graphics_size, watermark_media_id, watermark_position, watermark_opacity, watermark_scale, lower_third_text, lower_third_size, lower_third_opacity, stream_width, stream_height, stream_preset, stream_crf, stream_max_kbps, stream_audio_kbps, audio_language, subtitle_mode, subtitle_language, hdr_mode, encoder, segment_seconds, prebuffer_seconds, cache_segments, prewarm FROM channels WHERE number = ? LIMIT 1",
     )
     .bind(number)
     .fetch_optional(pool)
@@ -2442,6 +2451,7 @@ fn stream_from_row(row: &sqlx::sqlite::SqliteRow) -> StreamSettings {
         height: row.get("stream_height"),
         preset: row.get("stream_preset"),
         crf: row.get("stream_crf"),
+        max_kbps: row.get("stream_max_kbps"),
         audio_kbps: row.get("stream_audio_kbps"),
         audio_language: row.get("audio_language"),
         subtitle_mode: row.get("subtitle_mode"),
@@ -2500,12 +2510,13 @@ pub async fn set_channel_stream(
     stream: &StreamSettings,
 ) -> Result<()> {
     sqlx::query(
-        "UPDATE channels SET stream_width = ?, stream_height = ?, stream_preset = ?, stream_crf = ?, stream_audio_kbps = ?, audio_language = ?, subtitle_mode = ?, subtitle_language = ?, hdr_mode = ?, encoder = ?, segment_seconds = ?, prebuffer_seconds = ?, cache_segments = ?, prewarm = ? WHERE id = ?",
+        "UPDATE channels SET stream_width = ?, stream_height = ?, stream_preset = ?, stream_crf = ?, stream_max_kbps = ?, stream_audio_kbps = ?, audio_language = ?, subtitle_mode = ?, subtitle_language = ?, hdr_mode = ?, encoder = ?, segment_seconds = ?, prebuffer_seconds = ?, cache_segments = ?, prewarm = ? WHERE id = ?",
     )
     .bind(stream.width)
     .bind(stream.height)
     .bind(&stream.preset)
     .bind(stream.crf)
+    .bind(stream.max_kbps)
     .bind(stream.audio_kbps)
     .bind(&stream.audio_language)
     .bind(&stream.subtitle_mode)
@@ -2524,7 +2535,7 @@ pub async fn set_channel_stream(
 
 pub async fn channel_by_id(pool: &SqlitePool, id: &str) -> Result<Option<Channel>> {
     let row = sqlx::query(
-        "SELECT id, number, name, start_ms, schedule_mode, graphics_text, graphics_position, graphics_opacity, graphics_size, watermark_media_id, watermark_position, watermark_opacity, watermark_scale, lower_third_text, lower_third_size, lower_third_opacity, stream_width, stream_height, stream_preset, stream_crf, stream_audio_kbps, audio_language, subtitle_mode, subtitle_language, hdr_mode, encoder, segment_seconds, prebuffer_seconds, cache_segments, prewarm FROM channels WHERE id = ? LIMIT 1",
+        "SELECT id, number, name, start_ms, schedule_mode, graphics_text, graphics_position, graphics_opacity, graphics_size, watermark_media_id, watermark_position, watermark_opacity, watermark_scale, lower_third_text, lower_third_size, lower_third_opacity, stream_width, stream_height, stream_preset, stream_crf, stream_max_kbps, stream_audio_kbps, audio_language, subtitle_mode, subtitle_language, hdr_mode, encoder, segment_seconds, prebuffer_seconds, cache_segments, prewarm FROM channels WHERE id = ? LIMIT 1",
     )
     .bind(id)
     .fetch_optional(pool)

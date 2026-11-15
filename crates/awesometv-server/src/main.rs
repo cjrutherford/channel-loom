@@ -57,6 +57,7 @@ async fn main() -> anyhow::Result<()> {
         pool.clone(),
         config.data_dir.clone(),
         cloud.clone(),
+        config.stream_max_kbps,
     ));
     let state = AppState {
         config: config.clone(),

@@ -1,4 +1,4 @@
-const CACHE = "awesometv-shell-v1";
+const CACHE = "awesometv-shell-v2";
 const SHELL = [
   "/",
   "/manifest.webmanifest",

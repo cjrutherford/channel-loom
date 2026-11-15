@@ -24,6 +24,7 @@ pub struct Config {
     pub default_subtitle_mode: String,
     pub default_subtitle_language: String,
     pub cast_base_url: String,
+    pub stream_max_kbps: i64,
 }
 
 impl Config {
@@ -71,6 +72,10 @@ impl Config {
             env::var("AWESOMETV_SUBTITLE_MODE").unwrap_or_else(|_| "off".into());
         let default_subtitle_language = env::var("AWESOMETV_SUBTITLE_LANGUAGE").unwrap_or_default();
         let cast_base_url = env::var("AWESOMETV_CAST_BASE_URL").unwrap_or_default();
+        let stream_max_kbps = env::var("AWESOMETV_STREAM_MAX_KBPS")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(0);
 
         Self {
             bind,
@@ -92,6 +97,7 @@ impl Config {
             default_subtitle_mode,
             default_subtitle_language,
             cast_base_url,
+            stream_max_kbps,
         }
     }
 }

@@ -26,6 +26,7 @@ pub struct Engine {
     catchups: Arc<Mutex<HashMap<String, CatchupSession>>>,
     dvr: Arc<Mutex<HashMap<String, DvrSession>>>,
     cloud: Arc<CloudManager>,
+    max_kbps: i64,
 }
 
 struct CatchupSession {
@@ -92,7 +93,12 @@ pub struct ProducerSnapshot {
 }
 
 impl Engine {
-    pub fn new(pool: SqlitePool, data_dir: PathBuf, cloud: Arc<CloudManager>) -> Self {
+    pub fn new(
+        pool: SqlitePool,
+        data_dir: PathBuf,
+        cloud: Arc<CloudManager>,
+        max_kbps: i64,
+    ) -> Self {
         Self {
             pool,
             data_dir,
@@ -104,6 +110,7 @@ impl Engine {
             catchups: Arc::new(Mutex::new(HashMap::new())),
             dvr: Arc::new(Mutex::new(HashMap::new())),
             cloud,
+            max_kbps,
         }
     }
 
@@ -271,6 +278,7 @@ impl Engine {
             self.initial_burst,
             &media_kind,
             watermark_path,
+            self.max_kbps,
         )?;
         wait_for_ready(&playlist, Duration::from_secs(20), 1).await?;
         let mut catchups = self.catchups.lock().await;
@@ -379,6 +387,7 @@ impl Engine {
         let dir_for_task = dir.clone();
         let playlist_for_task = playlist.clone();
         let cloud_for_task = self.cloud.clone();
+        let max_kbps = self.max_kbps;
         tokio::spawn(async move {
             if let Err(error) = run_dvr(
                 pool,
@@ -391,6 +400,7 @@ impl Engine {
                 dir_for_task,
                 playlist_for_task,
                 cloud_for_task,
+                max_kbps,
             )
             .await
             {
@@ -570,6 +580,7 @@ impl Engine {
                 self.initial_burst,
                 &media_kind,
                 watermark_path,
+                self.max_kbps,
             )?
         };
         let segment_seconds = channel.stream.segment_seconds.clamp(2, 10);
@@ -607,6 +618,7 @@ fn start_producer(
     initial_burst: bool,
     media_kind: &str,
     watermark: Option<&Path>,
+    max_kbps: i64,
 ) -> Result<(PathBuf, Child)> {
     let playlist = out_dir.join("index.m3u8");
     let log_dir = data_dir.join("logs");
@@ -708,12 +720,28 @@ fn start_producer(
                 hardware,
             ));
         }
+        let bitrate_cap = if channel.stream.max_kbps > 0 {
+            channel.stream.max_kbps
+        } else {
+            max_kbps
+        };
         if hardware {
-            command
-                .arg("-c:v")
-                .arg("h264_vaapi")
-                .arg("-qp")
-                .arg(channel.stream.crf.to_string());
+            command.arg("-c:v").arg("h264_vaapi");
+            if bitrate_cap > 0 {
+                // VAAPI constant-QP mode ignores -maxrate, so switch to CBR
+                // when a ceiling is configured.
+                command
+                    .arg("-rc_mode")
+                    .arg("CBR")
+                    .arg("-b:v")
+                    .arg(format!("{bitrate_cap}k"))
+                    .arg("-maxrate")
+                    .arg(format!("{bitrate_cap}k"))
+                    .arg("-bufsize")
+                    .arg(format!("{}k", bitrate_cap.saturating_mul(2)));
+            } else {
+                command.arg("-qp").arg(channel.stream.crf.to_string());
+            }
         } else {
             command
                 .arg("-c:v")
@@ -724,6 +752,15 @@ fn start_producer(
                 .arg(channel.stream.crf.to_string())
                 .arg("-pix_fmt")
                 .arg("yuv420p");
+            if bitrate_cap > 0 {
+                // Cap the VBV buffer as well as the peak rate so a complex
+                // scene cannot burst past what the upload path can sustain.
+                command
+                    .arg("-maxrate")
+                    .arg(format!("{bitrate_cap}k"))
+                    .arg("-bufsize")
+                    .arg(format!("{}k", bitrate_cap.saturating_mul(2)));
+            }
         }
         let segment_seconds = channel.stream.segment_seconds.clamp(2, 10);
         let keyint = ((30_000.0 / 1001.0) * segment_seconds as f64).round() as i64;
@@ -921,6 +958,7 @@ async fn run_dvr(
     dir: PathBuf,
     playlist: PathBuf,
     cloud: Arc<CloudManager>,
+    max_kbps: i64,
 ) -> Result<()> {
     let items = crate::db::channel_items_from(&pool, &channel.id, current.start_ms).await?;
     let mut state = DvrState {
@@ -972,6 +1010,7 @@ async fn run_dvr(
             true,
             &resolved.kind,
             watermark_path,
+            max_kbps,
         ) {
             Ok(value) => value,
             Err(error) => {

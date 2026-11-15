@@ -538,6 +538,9 @@
             <div class="field"><label for="streamAudio">Audio bitrate (kbps)</label><input id="streamAudio" type="number" min="64" max="512" value="160"></div>
           </div>
           <div class="form-row">
+            <div class="field"><label for="streamMaxKbps">Max video bitrate (kbps, 0 = global)</label><input id="streamMaxKbps" type="number" min="0" max="20000" step="100" value="0"></div>
+          </div>
+          <div class="form-row">
             <div class="field"><label for="streamAudioLanguage">Audio language</label><input id="streamAudioLanguage" placeholder="eng"></div>
             <div class="field"><label for="streamSubtitleMode">Subtitles</label><select id="streamSubtitleMode"><option value="inherit" selected>Inherit global</option><option value="off">Off</option><option value="burn">Burn text subtitles</option></select></div>
           </div>
@@ -693,7 +696,7 @@
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
 <script>
 const $ = (id) => document.getElementById(id);
-const state = { config: null, sources: [], stats: null, media: [], channels: [], collections: [], blocks: [], classicItems: [], templates: [], overrides: [], graphics: null, stream: null, metrics: null, language: null, tvNumber: null, playerTarget: null, cloudSources: [], cloudBrowse: null, programChannel: null, programMode: 'blocks', selected: new Set(), kind: 'all', search: '', activeChannel: null, hls: null, modalMode: null, autoPlayed: false };
+const state = { config: null, sources: [], stats: null, media: [], channels: [], collections: [], blocks: [], classicItems: [], templates: [], overrides: [], graphics: null, stream: null, metrics: null, language: null, tvNumber: null, playerTarget: null, cloudSources: [], cloudBrowse: null, programChannel: null, programMode: 'blocks', selected: new Set(), kind: 'all', search: '', activeChannel: null, hls: null, modalMode: null, autoPlayed: false, authed: false };
 const KIND_LABEL = { movie: 'Movie', episode: 'Episode', music: 'Music', image: 'Image', other: 'Video' };
 
 function toast(text, error = false) {
@@ -708,7 +711,13 @@ function esc(value) {
 }
 async function api(path, options = {}) {
   const res = await fetch(path, { credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, ...options });
-  if (res.status === 401) { showLogin(); throw new Error('Authentication required'); }
+  if (res.status === 401) {
+    // Stop background polling: repeated 401s look like credential attacks to a
+    // reverse-proxy fail2ban jail and get the viewer's IP banned.
+    state.authed = false;
+    showLogin();
+    throw new Error('Authentication required');
+  }
   if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
   return res.json();
 }
@@ -733,12 +742,14 @@ async function checkAuth() {
   try {
     const response = await fetch('/api/v1/auth/me', { credentials: 'same-origin' });
     if (response.ok) {
+      state.authed = true;
       $('loginBack').classList.remove('open');
       await loadAll();
     } else {
+      state.authed = false;
       showLogin();
     }
-  } catch { showLogin(); }
+  } catch { state.authed = false; showLogin(); }
 }
 
 async function renderBackups() {
@@ -779,6 +790,14 @@ async function loadAll() {
     $('healthText').textContent = 'SYSTEM DEGRADED';
     toast(String(error), true);
   }
+}
+
+async function refreshOnAir() {
+  if (!state.authed) return;
+  try {
+    state.channels = await api('/api/v1/channels');
+    renderRail(); renderChannels(); renderOnAir(); renderTv();
+  } catch {}
 }
 
 function renderAll() {
@@ -1068,12 +1087,13 @@ function renderGraphics() {
 }
 
 function renderStream() {
-  const stream = state.stream || { width: 1280, height: 720, preset: 'veryfast', crf: 22, audio_kbps: 160 };
+  const stream = state.stream || { width: 1280, height: 720, preset: 'veryfast', crf: 22, max_kbps: 0, audio_kbps: 160 };
   const resolution = `${stream.width}x${stream.height}`;
   const select = $('streamResolution');
   select.value = [...select.options].some(option => option.value === resolution) ? resolution : '1280x720';
   $('streamPreset').value = stream.preset || 'veryfast';
   $('streamCrf').value = stream.crf ?? 22;
+  $('streamMaxKbps').value = stream.max_kbps ?? 0;
   $('streamAudio').value = stream.audio_kbps ?? 160;
   $('streamAudioLanguage').value = stream.audio_language || '';
   $('streamAudioLanguage').placeholder = state.language?.audio_language ? `inherit global (${state.language.audio_language})` : 'inherit global';
@@ -1257,11 +1277,37 @@ function playUrl(url, label = 'HLS · 720p', target = 'player') {
   if (state.hls) { state.hls.destroy(); state.hls = null; }
   if (window.Hls && Hls.isSupported()) {
     const fromStart = label.startsWith('DVR') || label.startsWith('CATCH-UP');
-    state.hls = new Hls({ liveSyncDurationCount: 3, lowLatencyMode: false, startPosition: fromStart ? 0 : -1 });
+    state.hls = new Hls({
+      // Hold a deeper live buffer so short Starlink/uplink dips do not stall
+      // playback. The producer keeps 12 segments (48s) in the playlist.
+      liveSyncDurationCount: 5,
+      liveMaxLatencyDurationCount: 10,
+      maxBufferLength: 30,
+      maxMaxBufferLength: 60,
+      backBufferLength: 30,
+      lowLatencyMode: false,
+      startPosition: fromStart ? 0 : -1,
+      manifestLoadingMaxRetry: 4,
+      manifestLoadingRetryDelay: 800,
+      levelLoadingMaxRetry: 6,
+      levelLoadingRetryDelay: 800,
+      fragLoadingMaxRetry: 8,
+      fragLoadingRetryDelay: 800
+    });
     state.hls.loadSource(url);
     state.hls.attachMedia(video);
     state.hls.on(Hls.Events.MANIFEST_PARSED, () => video.play().catch(() => {}));
-    state.hls.on(Hls.Events.ERROR, (_e, data) => { if (data.fatal) toast(`HLS: ${data.type}`, true); });
+    state.hls.on(Hls.Events.ERROR, (_e, data) => {
+      if (!data.fatal) return;
+      if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+        toast('HLS network error, retrying…', true);
+        state.hls.startLoad();
+      } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+        state.hls.recoverMediaError();
+      } else {
+        toast(`HLS: ${data.type}`, true);
+      }
+    });
   } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
     video.src = url; video.play().catch(() => {});
   } else {
@@ -1346,7 +1392,9 @@ function playActive() {
   if (!c) { toast('Create a channel first.', true); return; }
   stopDvr(c);
   playUrl(`/channel/${encodeURIComponent(c.number)}.m3u8`, 'HLS · 720p');
-  setTimeout(loadAll, 1200);
+  // Refresh only the on-air metadata. A full loadAll here fires ten requests
+  // that compete with the manifest and first segments on a slow uplink.
+  setTimeout(refreshOnAir, 1500);
 }
 
 async function startCatchup() {
@@ -1571,6 +1619,7 @@ $('saveStreamBtn').addEventListener('click', async () => {
     width, height,
     preset: $('streamPreset').value,
     crf: Number($('streamCrf').value),
+    max_kbps: Number($('streamMaxKbps').value),
     audio_kbps: Number($('streamAudio').value),
     audio_language: $('streamAudioLanguage').value.trim() || null,
     subtitle_mode: $('streamSubtitleMode').value,
@@ -1684,12 +1733,9 @@ document.querySelectorAll('#kindTabs .tab').forEach(tab => tab.addEventListener(
   renderLibrary();
 }));
 setInterval(() => { $('clock').textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }); }, 1000);
-setInterval(async () => {
+setInterval(() => {
   if (document.hidden) return;
-  try {
-    state.channels = await api('/api/v1/channels');
-    renderRail(); renderChannels(); renderOnAir();
-  } catch {}
+  refreshOnAir();
 }, 10000);
 $('loginForm').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -1700,11 +1746,13 @@ $('loginForm').addEventListener('submit', async (e) => {
       body: JSON.stringify({ username: $('loginUser').value, password: $('loginPass').value })
     });
     if (!response.ok) { $('loginError').textContent = 'Invalid credentials'; return; }
+    state.authed = true;
     $('loginBack').classList.remove('open');
     await loadAll();
   } catch (error) { $('loginError').textContent = String(error); }
 });
 $('logoutBtn').addEventListener('click', async () => {
+  state.authed = false;
   try { await fetch('/api/v1/auth/logout', { method: 'POST', credentials: 'same-origin' }); } catch {}
   if (state.hls) { state.hls.destroy(); state.hls = null; }
   $('player').removeAttribute('src'); $('screenOff').style.display = 'grid';
