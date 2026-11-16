@@ -166,7 +166,7 @@ proxied locally before airing.
 | Phase | Status |
 |---|---|
 | C0 — real Google credentials/test folder | **Not done** |
-| C1 — provider trait, resumable scans, delta, edit, cache pinning, badges, metrics | **Partial** — core/Google adapter, scan/cache/policy; missing trait extraction, delta, edit, pins, badges, metrics |
+| C1 — provider trait, resumable scans, delta, edit, cache pinning, badges, metrics | **Partial** — core/Google adapter, source edit, full-rescan reconciliation, source badges/filter, and cloud metrics done; missing trait extraction, background/resumable scans, incremental delta, cache pins |
 | C2 — OAuth, webhooks, public exposure | **Split done; OAuth/webhooks not started** |
 | C3 — Dropbox, OneDrive, S3, WebDAV | **Not started** |
 | C4 — conformance, security review, performance, docs | **Not started** |

@@ -25,6 +25,10 @@ Implemented:
 - background caching and LRU eviction
 - engine, catch-up, and DVR resolution
 - Sources UI for add/browse/scan/delete
+- source edit: name, policy, enabled/disabled
+- full-rescan reconciliation for missing cloud media
+- Library source badges and Local/Cloud filter
+- per-source and global cloud metrics (media, cached media, cached bytes, errors)
 - public viewer/admin split (C2 dependency)
 
 Not complete:
@@ -33,12 +37,9 @@ Not complete:
 - interactive OAuth consent/callback
 - provider webhooks
 - shared-drive root browsing and shortcuts
-- delta sync/deletion reconciliation
-- policy editing after creation
-- source badges/filters in Library
+- incremental delta sync and rename reconciliation (full-rescan reconciliation is implemented)
 - active-playback/DVR cache pinning
 - Dropbox, OneDrive, S3, WebDAV adapters
-- operational metrics for cloud sync/cache
 
 ## Phases
 
@@ -71,14 +72,13 @@ Deliverables:
 
 - formal provider trait/registry instead of a Google-specific manager branch
 - background, resumable scan jobs with progress and cancellation
-- delta sync and deletion/rename reconciliation
+- incremental delta sync and rename reconciliation
 - shared-drive root browsing and Google shortcut handling
-- source edit: name, policy, roots, enabled/disabled
+- root editing and per-root enable/disable
 - cache pinning for active playback and DVR; cache usage UI
 - proxy hardening: HEAD, Range fallback when a provider ignores Range,
   redirects, content length, timeouts
-- Library source badge/filter and “scan this source” action
-- cloud sync/cache metrics
+- provider trait/registry instead of the Google-specific manager branch
 
 Exit criteria:
 

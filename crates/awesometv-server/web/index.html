@@ -228,6 +228,8 @@
   .collection-card .count { font-family: var(--mono); font-size: 10px; color: var(--dim); }
   .block-row { display: grid; grid-template-columns: 90px minmax(0,1fr) 90px 70px; gap: 8px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line-soft); font-size: 11px; }
   .block-row.wide-actions { grid-template-columns: 90px minmax(0,1fr) 90px 150px; }
+  .block-row.cloud-row { grid-template-columns: 42px minmax(0,1fr) 80px minmax(300px, auto); }
+  .cloud-actions { display: flex; gap: 4px; justify-content: flex-end; flex-wrap: wrap; }
   .block-row:last-child { border-bottom: 0; }
   .block-row .days { color: var(--muted); font-family: var(--mono); font-size: 9px; }
   .daychecks { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -481,6 +483,7 @@
             <button class="tab" data-kind="music">Music</button>
             <button class="tab" data-kind="image">Images</button>
           </div>
+          <select class="search" id="originFilter" style="max-width:160px"><option value="all">All sources</option><option value="local">Local</option><option value="cloud">Cloud</option></select>
           <input class="search" id="mediaSearch" placeholder="Search title…">
           <button class="btn ghost" id="selectAllBtn">Select all</button>
           <button class="btn ghost" id="clearSelBtn">Clear</button>
@@ -671,6 +674,7 @@
         </div>
         <div class="panel panel-pad" style="margin-top:14px;">
           <div class="source-top"><div><h3>Cloud sources</h3><div class="muted small">Google Drive via service account or access token. Provider secrets are encrypted at rest.</div></div></div>
+          <div class="source-path" id="cloudMetrics"></div>
           <div id="cloudSourceList"></div>
           <div class="form-row" style="margin-top:12px;">
             <div class="field"><label for="cloudName">Name</label><input id="cloudName" placeholder="Google Drive"></div>
@@ -805,7 +809,7 @@
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
 <script>
 const $ = (id) => document.getElementById(id);
-const state = { config: null, sources: [], stats: null, media: [], channels: [], collections: [], blocks: [], classicItems: [], templates: [], overrides: [], graphics: null, stream: null, metrics: null, language: null, tvNumber: null, playerTarget: null, cloudSources: [], cloudBrowse: null, programChannel: null, programMode: 'blocks', selected: new Set(), kind: 'all', search: '', activeChannel: null, hls: null, modalMode: null, autoPlayed: false, authed: false, tokens: [] };
+const state = { config: null, sources: [], stats: null, media: [], channels: [], collections: [], blocks: [], classicItems: [], templates: [], overrides: [], graphics: null, stream: null, metrics: null, language: null, tvNumber: null, playerTarget: null, cloudSources: [], cloudMetrics: null, cloudBrowse: null, programChannel: null, programMode: 'blocks', selected: new Set(), kind: 'all', origin: 'all', search: '', activeChannel: null, hls: null, modalMode: null, autoPlayed: false, authed: false, tokens: [] };
 const KIND_LABEL = { movie: 'Movie', episode: 'Episode', music: 'Music', image: 'Image', other: 'Video' };
 
 function toast(text, error = false) {
@@ -880,10 +884,10 @@ async function renderBackups() {
 
 async function loadAll() {
   try {
-    const [config, sources, stats, media, channels, collections, templates, metrics, language, cloudSources, precache, tokens] = await Promise.all([
-      api('/api/v1/config'), api('/api/v1/sources'), api('/api/v1/stats'), api('/api/v1/media'), api('/api/v1/channels'), api('/api/v1/collections'), api('/api/v1/templates'), api('/api/v1/metrics'), api('/api/v1/settings/language'), api('/api/v1/cloud/sources'), api('/api/v1/precache'), api('/api/v1/tokens')
+    const [config, sources, stats, media, channels, collections, templates, metrics, language, cloudSources, precache, tokens, cloudMetrics] = await Promise.all([
+      api('/api/v1/config'), api('/api/v1/sources'), api('/api/v1/stats'), api('/api/v1/media'), api('/api/v1/channels'), api('/api/v1/collections'), api('/api/v1/templates'), api('/api/v1/metrics'), api('/api/v1/settings/language'), api('/api/v1/cloud/sources'), api('/api/v1/precache'), api('/api/v1/tokens'), api('/api/v1/cloud/metrics')
     ]);
-    state.config = config; state.sources = sources; state.stats = stats; state.media = media; state.channels = channels; state.collections = collections; state.templates = templates; state.metrics = metrics; state.language = language; state.cloudSources = cloudSources; state.precache = precache; state.tokens = tokens;
+    state.config = config; state.sources = sources; state.stats = stats; state.media = media; state.channels = channels; state.collections = collections; state.templates = templates; state.metrics = metrics; state.language = language; state.cloudSources = cloudSources; state.precache = precache; state.tokens = tokens; state.cloudMetrics = cloudMetrics;
     preloadCast();
     const requested = new URLSearchParams(location.search).get('channel');
     if (requested) {
@@ -1013,6 +1017,7 @@ function renderChannels() {
 function renderLibrary() {
   const filtered = state.media.filter(m =>
     (state.kind === 'all' || m.kind === state.kind) &&
+    (state.origin === 'all' || (state.origin === 'cloud') === String(m.path || '').startsWith('cloud://')) &&
     (!state.search || m.title.toLowerCase().includes(state.search.toLowerCase()))
   );
   $('libraryCount').textContent = `${filtered.length} of ${state.media.length} items`;
@@ -1023,7 +1028,7 @@ function renderLibrary() {
   const rows = filtered.slice(0, 400).map(m => `
     <div class="tr">
       <input type="checkbox" data-id="${esc(m.id)}" ${state.selected.has(m.id) ? 'checked' : ''}>
-      <div class="name">${esc(m.title)}</div>
+      <div class="name">${esc(m.title)}${String(m.path || '').startsWith('cloud://') ? ' <span class="badge">Cloud</span>' : ''}</div>
       <div class="kind"><span class="badge">${esc(KIND_LABEL[m.kind] || m.kind)}</span></div>
       <div class="mono tiny dim">${fmtDuration(m.duration_ms)}</div>
       <div class="mono tiny dim">${m.width ? `${m.width}×${m.height}` : '—'}</div>
@@ -1284,14 +1289,32 @@ function renderCloudSources() {
     list.innerHTML = `<div class="empty" style="border:0;padding:14px"><b>No cloud sources</b>Add a Google Drive source to browse and scan cloud media.</div>`;
     return;
   }
-  list.innerHTML = state.cloudSources.map(source => `
-    <div class="block-row wide-actions">
+  const metrics = Object.fromEntries((state.cloudMetrics?.by_source || []).map(item => [item.id, item]));
+  if (state.cloudMetrics) {
+    $('cloudMetrics').textContent = `${state.cloudMetrics.sources} sources · ${state.cloudMetrics.media} media · ${state.cloudMetrics.cached_media} cached (${(state.cloudMetrics.cached_bytes / 1073741824).toFixed(1)} GB)`;
+  } else {
+    $('cloudMetrics').textContent = '—';
+  }
+  list.innerHTML = state.cloudSources.map(source => {
+    const stat = metrics[source.id];
+    return `
+    <div class="block-row cloud-row">
       <div class="days">☁</div>
-      <div>${esc(source.name)}<div class="dim tiny">${esc(source.provider)} · ${esc(source.auth_type)} · ${esc(source.policy)}${source.last_error ? ` · ${esc(source.last_error)}` : ''}</div></div>
+      <div>${esc(source.name)} ${source.enabled ? '' : '<span class="badge warn">disabled</span>'}<div class="dim tiny">${esc(source.provider)} · ${esc(source.auth_type)} · ${esc(source.policy)} · ${stat ? `${stat.media} items · ${stat.cached_media} cached` : 'no metrics'}${source.last_error ? ` · ${esc(source.last_error)}` : ''}</div></div>
       <div class="mono tiny dim">${source.last_sync_at ? 'synced' : 'never'}</div>
-      <div class="row"><button class="btn small" data-cloud-scan="${esc(source.id)}">Scan</button><button class="btn small ghost" data-cloud-del="${esc(source.id)}">Delete</button></div>
-    </div>`).join('');
+      <div class="cloud-actions">
+        <button class="btn small" data-cloud-scan="${esc(source.id)}" ${source.enabled ? '' : 'disabled'}>Scan</button>
+        <button class="btn small ghost" data-cloud-full="${esc(source.id)}" ${source.enabled ? '' : 'disabled'}>Full rescan</button>
+        <button class="btn small ghost" data-cloud-edit="${esc(source.id)}">Edit</button>
+        <button class="btn small ghost" data-cloud-toggle="${esc(source.id)}">${source.enabled ? 'Disable' : 'Enable'}</button>
+        <button class="btn small ghost" data-cloud-del="${esc(source.id)}">Delete</button>
+      </div>
+    </div>`;
+  }).join('');
   list.querySelectorAll('button[data-cloud-scan]').forEach(btn => btn.addEventListener('click', () => scanCloudSource(btn.dataset.cloudScan)));
+  list.querySelectorAll('button[data-cloud-full]').forEach(btn => btn.addEventListener('click', () => scanCloudSource(btn.dataset.cloudFull, true)));
+  list.querySelectorAll('button[data-cloud-edit]').forEach(btn => btn.addEventListener('click', () => editCloudSource(btn.dataset.cloudEdit)));
+  list.querySelectorAll('button[data-cloud-toggle]').forEach(btn => btn.addEventListener('click', () => toggleCloudSource(btn.dataset.cloudToggle)));
   list.querySelectorAll('button[data-cloud-del]').forEach(btn => btn.addEventListener('click', async () => {
     if (!confirm('Delete this cloud source and its indexed media?')) return;
     try { await api(`/api/v1/cloud/sources/${encodeURIComponent(btn.dataset.cloudDel)}`, { method: 'DELETE' }); await loadAll(); toast('Cloud source deleted.'); }
@@ -1299,11 +1322,35 @@ function renderCloudSources() {
   }));
 }
 
-async function scanCloudSource(id) {
+async function toggleCloudSource(id) {
+  const source = state.cloudSources.find(item => item.id === id);
+  if (!source) return;
   try {
-    const report = await api(`/api/v1/cloud/sources/${encodeURIComponent(id)}/scan`, { method: 'POST', body: JSON.stringify({ limit: 1000 }) });
+    await api(`/api/v1/cloud/sources/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ enabled: !source.enabled }) });
     await loadAll();
-    toast(`Cloud scan: ${report.scanned} scanned, ${report.probed} probed, ${report.skipped} skipped, ${report.errors} errors.`);
+    toast(source.enabled ? 'Cloud source disabled.' : 'Cloud source enabled.');
+  } catch (error) { toast(String(error), true); }
+}
+
+async function editCloudSource(id) {
+  const source = state.cloudSources.find(item => item.id === id);
+  if (!source) return;
+  const name = prompt('Source name', source.name);
+  if (name === null) return;
+  const policy = prompt('Policy: auto, cache_all, stream_all', source.policy);
+  if (policy === null) return;
+  try {
+    await api(`/api/v1/cloud/sources/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ name: name.trim(), policy: policy.trim() }) });
+    await loadAll();
+    toast('Cloud source updated.');
+  } catch (error) { toast(String(error), true); }
+}
+
+async function scanCloudSource(id, full = false) {
+  try {
+    const report = await api(`/api/v1/cloud/sources/${encodeURIComponent(id)}/scan`, { method: 'POST', body: JSON.stringify({ limit: full ? 50000 : 1000, full }) });
+    await loadAll();
+    toast(`Cloud scan: ${report.scanned} scanned, ${report.probed} probed, ${report.skipped} skipped, ${report.errors} errors${report.removed ? `, ${report.removed} removed` : ''}.${report.complete ? '' : ' Scan incomplete; stale media was kept.'}`);
   } catch (error) { toast(String(error), true); }
 }
 
@@ -1710,6 +1757,7 @@ $('createTokenBtn').addEventListener('click', async () => {
     toast('Token created. Copy it now — it will not be shown again.');
   } catch (error) { toast(String(error), true); }
 });
+$('originFilter').addEventListener('change', () => { state.origin = $('originFilter').value; renderLibrary(); });
 $('metricsRefreshBtn').addEventListener('click', async () => {
   try { state.metrics = await api('/api/v1/metrics'); renderStreamHealth(); } catch (error) { toast(String(error), true); }
 });
@@ -1745,7 +1793,7 @@ $('dvrBtn').addEventListener('click', startDvr);
 $('modalCancel').addEventListener('click', closeModal);
 $('modalBack').addEventListener('click', (e) => { if (e.target === $('modalBack')) closeModal(); });
 $('modalConfirm').addEventListener('click', confirmModal);
-$('selectAllBtn').addEventListener('click', () => { state.media.filter(m => state.kind === 'all' || m.kind === state.kind).forEach(m => state.selected.add(m.id)); renderLibrary(); });
+$('selectAllBtn').addEventListener('click', () => { state.media.filter(m => (state.kind === 'all' || m.kind === state.kind) && (state.origin === 'all' || (state.origin === 'cloud') === String(m.path || '').startsWith('cloud://'))).forEach(m => state.selected.add(m.id)); renderLibrary(); });
 $('progChannel').addEventListener('change', (e) => { state.programChannel = e.target.value; loadProgramming(); });
 $('addBlockBtn').addEventListener('click', () => {
   const days = [...document.querySelectorAll('#blockDays input:checked')].reduce((mask, box) => mask | (1 << Number(box.value)), 0);

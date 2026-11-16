@@ -428,9 +428,8 @@ all adapters target it:
 - Real Google service-account validation (the code path compiles but was tested
   only with access-token/mock credentials).
 - Shared-drive root browsing in the UI; folder IDs work.
-- Delta sync and deletion reconciliation; scans are full listings.
-- Source policy editing after creation (delete/recreate for now).
-- Cloud badges in Library; currently items appear without a source badge.
+- Incremental delta sync and rename reconciliation; scans are full listings. A full rescan removes cloud media that disappeared.
+- Background/resumable scan jobs with progress and cancellation.
 - LRU eviction does not yet pin active DVR/playback sessions.
 
 

@@ -243,7 +243,11 @@ pub fn router(state: AppState) -> Router {
             "/api/v1/cloud/sources",
             get(cloud_sources).post(create_cloud_source),
         )
-        .route("/api/v1/cloud/sources/{id}", delete(delete_cloud_source))
+        .route(
+            "/api/v1/cloud/sources/{id}",
+            delete(delete_cloud_source).patch(update_cloud_source),
+        )
+        .route("/api/v1/cloud/metrics", get(cloud_metrics))
         .route(
             "/api/v1/cloud/sources/{id}/roots",
             get(cloud_roots).post(add_cloud_root),
@@ -1189,12 +1193,27 @@ async fn create_cloud_source(
     Ok(Json(state.cloud.create_source(&input).await?))
 }
 
+async fn update_cloud_source(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(update): Json<db::CloudSourceUpdate>,
+) -> Result<Json<db::CloudSource>, ApiError> {
+    if db::cloud_source(&state.pool, &id).await?.is_none() {
+        return Err(ApiError::not_found("cloud source not found"));
+    }
+    Ok(Json(state.cloud.update_source(&id, &update).await?))
+}
+
 async fn delete_cloud_source(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     state.cloud.delete_source(&id).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn cloud_metrics(State(state): State<AppState>) -> Result<Json<db::CloudMetrics>, ApiError> {
+    Ok(Json(state.cloud.metrics().await?))
 }
 
 async fn cloud_roots(
@@ -1248,6 +1267,8 @@ async fn cloud_drives(
 #[derive(Deserialize, Default)]
 struct CloudScanRequest {
     limit: Option<usize>,
+    #[serde(default)]
+    full: bool,
 }
 
 async fn scan_cloud(
@@ -1255,10 +1276,16 @@ async fn scan_cloud(
     Path(id): Path<String>,
     Json(request): Json<CloudScanRequest>,
 ) -> Result<Json<crate::cloud::CloudScanReport>, ApiError> {
+    let source = db::cloud_source(&state.pool, &id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("cloud source not found"))?;
+    if !source.enabled {
+        return Err(ApiError::bad_request("cloud source is disabled"));
+    }
     Ok(Json(
         state
             .cloud
-            .scan_source(&id, request.limit.unwrap_or(1000))
+            .scan_source(&id, request.limit.unwrap_or(1000), request.full)
             .await?,
     ))
 }
