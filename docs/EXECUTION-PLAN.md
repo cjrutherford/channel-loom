@@ -30,7 +30,7 @@ Detailed plan: [`CLOUD-COMPLETION.md`](CLOUD-COMPLETION.md)
 | Phase | Focus | Status |
 |---|---|---|
 | C0 | Real Google service account, test folder, provider test assets | not done |
-| C1 | Background scans, incremental delta, cache pins, provider registry | partial — source edit, full reconciliation, badges, and metrics done |
+| C1 | Resumable scans, incremental delta, cache pins, provider registry | partial — source edit, background scans with progress/cancel, full reconciliation, badges, and metrics done |
 | C2 | Interactive OAuth, webhooks, public/admin split | split done; OAuth/webhooks not started |
 | C3 | Dropbox, OneDrive, S3-compatible, WebDAV | not started |
 | C4 | Real-provider tests, security review, performance, docs | not started |

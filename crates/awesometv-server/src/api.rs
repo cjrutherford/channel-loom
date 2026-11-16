@@ -248,6 +248,12 @@ pub fn router(state: AppState) -> Router {
             delete(delete_cloud_source).patch(update_cloud_source),
         )
         .route("/api/v1/cloud/metrics", get(cloud_metrics))
+        .route("/api/v1/cloud/scans", get(cloud_scan_jobs))
+        .route("/api/v1/cloud/scans/{job_id}", get(cloud_scan_job))
+        .route(
+            "/api/v1/cloud/scans/{job_id}/cancel",
+            post(cancel_cloud_scan),
+        )
         .route(
             "/api/v1/cloud/sources/{id}/roots",
             get(cloud_roots).post(add_cloud_root),
@@ -933,6 +939,40 @@ async fn prometheus(State(state): State<AppState>) -> Result<Response, ApiError>
             "awesometv_media_items{{kind=\"{kind}\"}} {count}\n"
         ));
     }
+    if let Ok(cloud) = state.cloud.metrics().await {
+        body.push_str("# HELP awesometv_cloud_sources Configured cloud sources.\n");
+        body.push_str("# TYPE awesometv_cloud_sources gauge\n");
+        body.push_str(&format!("awesometv_cloud_sources {}\n", cloud.sources));
+        body.push_str("# HELP awesometv_cloud_enabled_sources Enabled cloud sources.\n");
+        body.push_str("# TYPE awesometv_cloud_enabled_sources gauge\n");
+        body.push_str(&format!(
+            "awesometv_cloud_enabled_sources {}\n",
+            cloud.enabled_sources
+        ));
+        body.push_str("# HELP awesometv_cloud_media Indexed cloud media.\n");
+        body.push_str("# TYPE awesometv_cloud_media gauge\n");
+        body.push_str(&format!("awesometv_cloud_media {}\n", cloud.media));
+        body.push_str("# HELP awesometv_cloud_cached_media Cloud media with a local cache copy.\n");
+        body.push_str("# TYPE awesometv_cloud_cached_media gauge\n");
+        body.push_str(&format!(
+            "awesometv_cloud_cached_media {}\n",
+            cloud.cached_media
+        ));
+        body.push_str("# HELP awesometv_cloud_cached_bytes Bytes held in the cloud cache.\n");
+        body.push_str("# TYPE awesometv_cloud_cached_bytes gauge\n");
+        body.push_str(&format!(
+            "awesometv_cloud_cached_bytes {}\n",
+            cloud.cached_bytes
+        ));
+        body.push_str(
+            "# HELP awesometv_cloud_sources_with_errors Cloud sources whose last scan failed.\n",
+        );
+        body.push_str("# TYPE awesometv_cloud_sources_with_errors gauge\n");
+        body.push_str(&format!(
+            "awesometv_cloud_sources_with_errors {}\n",
+            cloud.sources_with_errors
+        ));
+    }
     body.push_str("# HELP awesometv_producer_segments HLS segments on disk per channel.\n");
     body.push_str("# TYPE awesometv_producer_segments gauge\n");
     for producer in &metrics.producers {
@@ -1275,19 +1315,50 @@ async fn scan_cloud(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Json(request): Json<CloudScanRequest>,
-) -> Result<Json<crate::cloud::CloudScanReport>, ApiError> {
+) -> Result<(StatusCode, Json<crate::cloud::CloudScanJob>), ApiError> {
     let source = db::cloud_source(&state.pool, &id)
         .await?
         .ok_or_else(|| ApiError::not_found("cloud source not found"))?;
     if !source.enabled {
         return Err(ApiError::bad_request("cloud source is disabled"));
     }
-    Ok(Json(
-        state
-            .cloud
-            .scan_source(&id, request.limit.unwrap_or(1000), request.full)
-            .await?,
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(
+            state
+                .cloud
+                .start_scan(&id, request.limit.unwrap_or(1000), request.full)
+                .await?,
+        ),
     ))
+}
+
+async fn cloud_scan_jobs(State(state): State<AppState>) -> Json<Vec<crate::cloud::CloudScanJob>> {
+    Json(state.cloud.scan_jobs().await)
+}
+
+async fn cloud_scan_job(
+    State(state): State<AppState>,
+    Path(job_id): Path<String>,
+) -> Result<Json<crate::cloud::CloudScanJob>, ApiError> {
+    state
+        .cloud
+        .scan_job(&job_id)
+        .await
+        .map(Json)
+        .ok_or_else(|| ApiError::not_found("scan job not found"))
+}
+
+async fn cancel_cloud_scan(
+    State(state): State<AppState>,
+    Path(job_id): Path<String>,
+) -> Result<Json<crate::cloud::CloudScanJob>, ApiError> {
+    state
+        .cloud
+        .cancel_scan(&job_id)
+        .await
+        .map(Json)
+        .ok_or_else(|| ApiError::not_found("scan job not found"))
 }
 
 #[derive(Deserialize)]

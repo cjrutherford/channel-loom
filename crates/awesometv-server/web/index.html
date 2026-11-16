@@ -675,6 +675,7 @@
         <div class="panel panel-pad" style="margin-top:14px;">
           <div class="source-top"><div><h3>Cloud sources</h3><div class="muted small">Google Drive via service account or access token. Provider secrets are encrypted at rest.</div></div></div>
           <div class="source-path" id="cloudMetrics"></div>
+          <div id="cloudScanStatus" style="display:none; margin-top:10px;"></div>
           <div id="cloudSourceList"></div>
           <div class="form-row" style="margin-top:12px;">
             <div class="field"><label for="cloudName">Name</label><input id="cloudName" placeholder="Google Drive"></div>
@@ -809,7 +810,7 @@
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
 <script>
 const $ = (id) => document.getElementById(id);
-const state = { config: null, sources: [], stats: null, media: [], channels: [], collections: [], blocks: [], classicItems: [], templates: [], overrides: [], graphics: null, stream: null, metrics: null, language: null, tvNumber: null, playerTarget: null, cloudSources: [], cloudMetrics: null, cloudBrowse: null, programChannel: null, programMode: 'blocks', selected: new Set(), kind: 'all', origin: 'all', search: '', activeChannel: null, hls: null, modalMode: null, autoPlayed: false, authed: false, tokens: [] };
+const state = { config: null, sources: [], stats: null, media: [], channels: [], collections: [], blocks: [], classicItems: [], templates: [], overrides: [], graphics: null, stream: null, metrics: null, language: null, tvNumber: null, playerTarget: null, cloudSources: [], cloudMetrics: null, cloudBrowse: null, programChannel: null, programMode: 'blocks', selected: new Set(), kind: 'all', origin: 'all', search: '', activeChannel: null, hls: null, modalMode: null, autoPlayed: false, authed: false, tokens: [], cloudScanJob: null };
 const KIND_LABEL = { movie: 'Movie', episode: 'Episode', music: 'Music', image: 'Image', other: 'Video' };
 
 function toast(text, error = false) {
@@ -1348,10 +1349,58 @@ async function editCloudSource(id) {
 
 async function scanCloudSource(id, full = false) {
   try {
-    const report = await api(`/api/v1/cloud/sources/${encodeURIComponent(id)}/scan`, { method: 'POST', body: JSON.stringify({ limit: full ? 50000 : 1000, full }) });
-    await loadAll();
-    toast(`Cloud scan: ${report.scanned} scanned, ${report.probed} probed, ${report.skipped} skipped, ${report.errors} errors${report.removed ? `, ${report.removed} removed` : ''}.${report.complete ? '' : ' Scan incomplete; stale media was kept.'}`);
+    const job = await api(`/api/v1/cloud/sources/${encodeURIComponent(id)}/scan`, { method: 'POST', body: JSON.stringify({ limit: full ? 50000 : 1000, full }) });
+    state.cloudScanJob = job.id;
+    showCloudScanStatus(job);
+    pollCloudScan(job.id);
   } catch (error) { toast(String(error), true); }
+}
+
+function showCloudScanStatus(job) {
+  const box = $('cloudScanStatus');
+  if (!box) return;
+  box.style.display = 'block';
+  box.innerHTML = `<div style="display:flex; gap:10px; align-items:center; justify-content:space-between; flex-wrap:wrap">
+    <span>Scanning <b>${esc(job.source_name)}</b>… ${job.scanned} scanned · ${job.probed} probed · ${job.errors} errors</span>
+    <button class="btn small ghost" id="cancelCloudScanBtn">Cancel</button>
+  </div>`;
+  $('cancelCloudScanBtn').addEventListener('click', async () => {
+    try {
+      await api(`/api/v1/cloud/scans/${encodeURIComponent(job.id)}/cancel`, { method: 'POST' });
+      toast('Cancelling cloud scan…');
+    } catch (error) { toast(String(error), true); }
+  });
+}
+
+async function pollCloudScan(id) {
+  while (state.cloudScanJob === id) {
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    let job;
+    try {
+      job = await api(`/api/v1/cloud/scans/${encodeURIComponent(id)}`);
+    } catch (error) {
+      state.cloudScanJob = null;
+      $('cloudScanStatus').style.display = 'none';
+      toast(String(error), true);
+      return;
+    }
+    if (job.status === 'running') {
+      showCloudScanStatus(job);
+      continue;
+    }
+    state.cloudScanJob = null;
+    $('cloudScanStatus').style.display = 'none';
+    await loadAll();
+    const summary = `${job.scanned} scanned, ${job.probed} probed, ${job.skipped} skipped, ${job.errors} errors${job.removed ? `, ${job.removed} removed` : ''}`;
+    if (job.status === 'completed') {
+      toast(`Cloud scan complete: ${summary}.${job.complete ? '' : ' Incomplete; stale media was kept.'}`);
+    } else if (job.status === 'cancelled') {
+      toast(`Cloud scan cancelled: ${summary}.`);
+    } else {
+      toast(`Cloud scan failed: ${job.message || summary}`, true);
+    }
+    return;
+  }
 }
 
 async function browseCloud() {
