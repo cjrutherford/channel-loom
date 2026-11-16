@@ -452,7 +452,10 @@ async fn icon(Path(file): Path<String>) -> Result<Response, ApiError> {
             include_bytes!("../web/icons/apple-touch-icon.png"),
             "image/png",
         ),
-        "channelloom.ico" => (include_bytes!("../web/icons/channelloom.ico"), "image/x-icon"),
+        "channelloom.ico" => (
+            include_bytes!("../web/icons/channelloom.ico"),
+            "image/x-icon",
+        ),
         "channelloom-app-icon.png" => (
             include_bytes!("../web/icons/channelloom-app-icon.png"),
             "image/png",
