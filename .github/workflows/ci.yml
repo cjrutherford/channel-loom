@@ -1,0 +1,139 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  server:
+    name: Rust server
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.98.1
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Test
+        run: cargo test --workspace
+      - name: Release build
+        run: cargo build --release -p awesometv-server
+      - name: Upload server binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: awesometv-server-linux-amd64
+          path: target/release/awesometv-server
+          if-no-files-found: error
+
+  docker:
+    name: Docker image
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          tags: awesometv:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  android-tv:
+    name: Android TV APK
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Install Android SDK 36
+        env:
+          ANDROID_HOME: /usr/local/lib/android/sdk
+          ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+        run: |
+          SDKMANAGER=$(find "$ANDROID_HOME" -type f -path '*/bin/sdkmanager' | sort -V | tail -1)
+          echo "Using $SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+          "$SDKMANAGER" "platforms;android-36" "build-tools;36.0.0"
+      - name: Build debug APK
+        run: |
+          chmod +x android-tv/gradlew
+          cd android-tv
+          ./gradlew assembleDebug --no-daemon --stacktrace
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: awesometv-android-tv-debug
+          path: android-tv/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+  desktop:
+    name: Tauri desktop bundle
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux webview dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential curl wget file pkg-config \
+            libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev \
+            libayatana-appindicator3-dev libxdo-dev libssl-dev patchelf
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.98.1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --version '^2' --locked
+      - name: Build desktop bundle
+        run: |
+          cd desktop
+          cargo tauri build --bundles deb
+      - name: Upload desktop bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: awesometv-desktop-linux-amd64
+          path: desktop/src-tauri/target/release/bundle/**/*
+          if-no-files-found: warn
+
+  pwa-assets:
+    name: PWA assets
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate manifest and service worker
+        run: |
+          python3 -m json.tool crates/awesometv-server/web/manifest.webmanifest >/dev/null
+          node --check crates/awesometv-server/web/sw.js
+          test -f crates/awesometv-server/web/icons/icon-192.png
+          test -f crates/awesometv-server/web/icons/icon-512.png
+          test -f crates/awesometv-server/web/icons/icon-maskable-512.png
+          test -f crates/awesometv-server/web/icons/apple-touch-icon.png
+          grep -q 'manifest.webmanifest' crates/awesometv-server/web/index.html
+          grep -q 'serviceWorker.register' crates/awesometv-server/web/index.html
+          test -f crates/awesometv-server/web/public.html
+          test -f crates/awesometv-server/web/login.html
+          test -f crates/awesometv-server/web/cast-receiver.html
+          grep -q '/api/v1/public/channels' crates/awesometv-server/web/public.html
+          grep -q '/api/v1/auth/login' crates/awesometv-server/web/login.html
+          grep -q 'cast_receiver_framework' crates/awesometv-server/web/cast-receiver.html
+          grep -q 'castMode' crates/awesometv-server/web/public.html

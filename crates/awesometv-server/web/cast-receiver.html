@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ChannelLoom — Cast Receiver</title>
+<meta name="theme-color" content="#10162B">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700&family=IBM+Plex+Mono:wght@400;500&family=Nunito+Sans:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink: #10162b;
+    --paper: #f5f7ff;
+    --muted: #a8b3d4;
+    --signal: #22d3cf;
+    --red: #ff6b7a;
+    --display: "Baloo 2", ui-rounded, "Trebuchet MS", sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, monospace;
+  }
+  html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: var(--ink); color: var(--paper); font-family: "Nunito Sans", system-ui, sans-serif; }
+  cast-media-player {
+    --video-bg-color: #000;
+    --splash-image: url("/icons/channelloom-app-icon.png");
+    --splash-background: #10162b;
+    width: 100%; height: 100%;
+  }
+  .brand {
+    position: fixed; top: 28px; left: 32px; z-index: 10; display: block;
+  }
+  .brand-wordmark { height: 54px; width: auto; display: block; filter: drop-shadow(0 8px 24px rgba(0,0,0,.6)); }
+  .mark {
+    width: 46px; height: 46px; border-radius: 12px; overflow: hidden;
+    background: #0b1120 url("/icons/icon-192.png") center/cover no-repeat;
+    box-shadow: 0 0 0 1px rgba(34,211,207,.4), 0 12px 34px rgba(0,0,0,.55);
+  }
+  .live {
+    position: fixed; top: 40px; right: 34px; z-index: 10; display: inline-flex; align-items: center; gap: 7px;
+    padding: 7px 11px; border-radius: 999px; border: 1px solid rgba(255,107,122,.4);
+    background: rgba(16,22,43,.72); color: var(--red); font-family: var(--mono); font-size: 11px;
+    letter-spacing: .18em; text-transform: uppercase; backdrop-filter: blur(10px);
+  }
+  .dot { width: 7px; height: 7px; border-radius: 99px; background: var(--red); animation: pulse 1.8s infinite; }
+  @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(255,107,122,.5); } 70% { box-shadow: 0 0 0 8px rgba(255,107,122,0); } 100% { box-shadow: 0 0 0 0 rgba(255,107,122,0); } }
+  .now {
+    position: fixed; top: 96px; left: 34px; z-index: 10; max-width: min(70vw, 900px);
+    text-shadow: 0 2px 20px rgba(0,0,0,.8);
+  }
+  .now[hidden] { display: none; }
+  .now .title { font-family: var(--display); font-size: clamp(26px, 3.2vw, 46px); line-height: .98; letter-spacing: -.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .now .sub { margin-top: 5px; font-family: var(--mono); font-size: 12px; letter-spacing: .08em; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .footer {
+    position: fixed; bottom: 26px; right: 34px; z-index: 10; font-family: var(--mono); font-size: 10px;
+    letter-spacing: .18em; text-transform: uppercase; color: var(--muted); text-shadow: 0 2px 12px rgba(0,0,0,.8);
+  }
+</style>
+</head>
+<body>
+<cast-media-player id="player"></cast-media-player>
+<div class="brand"><img class="brand-wordmark" src="/icons/channelloom-wordmark.png" alt="ChannelLoom"></div>
+<div class="live"><span class="dot"></span> Live</div>
+<div class="now" id="nowPanel" hidden>
+  <div class="title" id="nowTitle">ChannelLoom</div>
+  <div class="sub" id="nowSub">Your favorites are always on</div>
+</div>
+<div class="footer">ChannelLoom · Your favorites are always on</div>
+
+<script src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
+<script>
+  const context = cast.framework.CastReceiverContext.getInstance();
+  const playerManager = context.getPlayerManager();
+  const nowTitle = document.getElementById('nowTitle');
+  const nowSub = document.getElementById('nowSub');
+
+  function refreshNowPlaying() {
+    try {
+      const info = playerManager.getMediaInformation();
+      const metadata = info && info.metadata;
+      if (!metadata) return;
+      if (metadata.title) nowTitle.textContent = metadata.title;
+      if (metadata.subtitle) nowSub.textContent = metadata.subtitle;
+      else if (metadata.seriesTitle) nowSub.textContent = metadata.seriesTitle;
+      document.getElementById('nowPanel').hidden = false;
+    } catch {}
+  }
+
+  context.start({ disableIdleTimeout: true });
+  try {
+    context.addEventListener(cast.framework.system.EventType.READY, refreshNowPlaying);
+  } catch {}
+  try {
+    playerManager.addEventListener(
+      cast.framework.events.EventType.PLAYER_LOADING,
+      refreshNowPlaying
+    );
+  } catch {}
+  setInterval(refreshNowPlaying, 1500);
+</script>
+</body>
+</html>

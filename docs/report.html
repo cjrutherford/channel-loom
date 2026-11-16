@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ChannelLoom — Research & Rebuild Plan</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: #000 !important;
+    color: #fff !important;
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+    overflow-x: hidden;
+  }
+  body { line-height: 1.55; }
+  h1, h2, h3, h4, p, li, td, th, span, div, strong, em, b, small {
+    color: #fff !important;
+  }
+  a { color: #fff !important; text-decoration: underline; }
+  .wrap { width: 100%; max-width: 1040px; margin: 0 auto; padding: 18px; }
+  .hero { padding: 8px 0 24px; border-bottom: 1px solid #555; margin-bottom: 26px; }
+  .eyebrow { font-size: 12px; letter-spacing: .12em; text-transform: uppercase; font-weight: 700; }
+  .dot { width: 7px; height: 7px; border-radius: 99px; background: #fff; display: inline-block; }
+  h1 { font-size: clamp(30px, 5vw, 48px); line-height: 1.08; letter-spacing: -.035em; margin: 14px 0 12px; font-weight: 760; }
+  h2 { font-size: clamp(22px, 3vw, 30px); letter-spacing: -.02em; margin: 0 0 6px; }
+  h3 { font-size: 16px; margin: 0 0 6px; }
+  p { margin: 0 0 12px; }
+  .lede { font-size: clamp(16px, 2vw, 20px); max-width: 800px; margin: 0; }
+  .meta { display: flex; flex-wrap: wrap; gap: 10px 18px; margin-top: 18px; font-size: 13px; }
+  .meta b { font-weight: 650; }
+  .section { margin: 38px 0 0; }
+  .section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
+  .kicker { font-size: 12px; text-transform: uppercase; letter-spacing: .1em; font-weight: 700; }
+  .callout { border-left: 4px solid #fff; background: #111; padding: 16px 18px; border-radius: 0 8px 8px 0; margin: 20px 0; }
+  .grid { display: grid; gap: 12px; }
+  .g2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .g3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .card, .stat, .tl, .flowbox, .list-card {
+    background: #0a0a0a;
+    border: 1px solid #555;
+    border-radius: 8px;
+    padding: 16px;
+  }
+  .card p:last-child { margin-bottom: 0; }
+  .card .icon { font-size: 18px; display: inline-block; margin-bottom: 6px; }
+  .small { font-size: 13px; }
+  .tiny { font-size: 12px; }
+  .tag {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 650;
+    border: 1px solid #888;
+    background: #111;
+    white-space: nowrap;
+  }
+  ul { margin: 8px 0 0; padding-left: 18px; }
+  li { margin: 4px 0; }
+  .stat-row { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 18px; }
+  .stat { padding: 12px 14px; }
+  .stat .num { font-size: 22px; font-weight: 750; letter-spacing: -.02em; }
+  .stat .lbl { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; margin-top: 2px; }
+  .timeline { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 14px; }
+  .tl { padding: 14px; }
+  .tl .when { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+  .tl .what { font-weight: 700; margin: 4px 0; font-size: 14px; }
+  .tl .desc { font-size: 12px; }
+  .flow { display: grid; grid-template-columns: 1fr 26px 1.15fr 26px 1fr; align-items: stretch; gap: 0; margin-top: 8px; }
+  .flowbox { padding: 14px; }
+  .flowbox h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; }
+  .flowbox ul { padding-left: 16px; font-size: 12px; }
+  .arrow { display: flex; align-items: center; justify-content: center; font-size: 18px; }
+  table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 13px; background: #000; }
+  .tablewrap { overflow-x: auto; border: 1px solid #555; border-radius: 8px; }
+  th, td { text-align: left; padding: 9px 11px; border-bottom: 1px solid #444; vertical-align: top; overflow-wrap: anywhere; }
+  th { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; background: #151515; }
+  tr:nth-child(even) td { background: #0a0a0a; }
+  tr:last-child td { border-bottom: 0; }
+  .phase { display: grid; grid-template-columns: 86px 1fr; gap: 14px; padding: 14px 0; border-bottom: 1px solid #444; }
+  .phase:last-child { border-bottom: 0; }
+  .phase .pnum { font-size: 12px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+  .phase .ptitle { font-weight: 700; margin-bottom: 3px; }
+  .phase .pdesc { font-size: 13px; }
+  .phase .exit { font-size: 12px; margin-top: 5px; }
+  .split { display: grid; grid-template-columns: 1.05fr .95fr; gap: 16px; }
+  .decision { display: flex; gap: 12px; padding: 12px 0; border-bottom: 1px solid #444; }
+  .decision:last-child { border-bottom: 0; }
+  .decision .n {
+    width: 24px; height: 24px; flex: 0 0 24px; border-radius: 999px;
+    display: grid; place-items: center; font-size: 11px; font-weight: 800;
+    background: #000; border: 1px solid #fff;
+  }
+  .decision .q { font-weight: 650; font-size: 13px; }
+  .decision .a { font-size: 12px; }
+  .foot { margin-top: 40px; padding-top: 16px; border-top: 1px solid #555; font-size: 12px; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .92em; background: #151515; padding: 1px 5px; border-radius: 3px; border: 1px solid #444; }
+  .pillrow { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  @media (max-width: 820px) {
+    .g2, .g3, .timeline, .stat-row, .split { grid-template-columns: 1fr; }
+    .flow { grid-template-columns: 1fr; }
+    .arrow { height: 20px; transform: rotate(90deg); }
+    .phase { grid-template-columns: 1fr; gap: 4px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <div class="eyebrow"><span class="dot"></span> Research &amp; rebuild plan · November 2026</div>
+    <h1>ErsatzTV, understood.<br>ChannelLoom, planned.</h1>
+    <p class="lede">A clean-room replacement for ErsatzTV that keeps the programming depth, adopts a modern experience, and treats reliability as the product — not a configuration problem for the user to solve.</p>
+    <div class="meta">
+      <span>Working name <b>ChannelLoom</b></span>
+      <span>Status <b>Decisions locked · planning complete</b></span>
+      <span>Research baseline <b>ErsatzTV 26.12.0 · ErsatzTV Next 0.2.5 · Tunarr 2026.11.2</b></span>
+    </div>
+    <div class="pillrow">
+      <span class="tag good">All-in-one</span>
+      <span class="tag good">Deep parity v1</span>
+      <span class="tag good">Rust + React</span>
+      <span class="tag good">Own engine</span>
+      <span class="tag good">Multi-arch</span>
+      <span class="tag good">MIT / Apache-2.0</span>
+    </div>
+    <div class="stat-row">
+      <div class="stat"><div class="num">5</div><div class="lbl">scheduling models in ErsatzTV</div></div>
+      <div class="stat"><div class="num">7</div><div class="lbl">media kinds supported locally</div></div>
+      <div class="stat"><div class="num">7</div><div class="lbl">hardware accel backends</div></div>
+      <div class="stat"><div class="num">0</div><div class="lbl">feature releases after 26.12</div></div>
+    </div>
+  </header>
+
+  <div class="callout">
+    <b>The gap is not “another Tunarr.”</b> ErsatzTV is deep but frozen and operationally heavy. ErsatzTV Next is a reliable engine with no scheduler, library, or UI. Tunarr is modern and active but deliberately simpler, with static lineups and a narrower content model. Nobody currently combines ErsatzTV's programming intent with a modern, trustworthy product.
+  </div>
+
+  <section class="section">
+    <div class="section-head"><div><div class="kicker">01 · What exists</div><h2>ErsatzTV in one screen</h2></div><span class="tag">Public docs + behaviour</span></div>
+    <div class="grid g3">
+      <div class="card"><div class="icon">📚</div><h3>Sources &amp; metadata</h3><p class="small">Local folders (movies, shows, music videos, other videos, songs, images, remote streams), Plex, Jellyfin, Emby. NFO metadata, media-server sync, path replacements, trash, deep scans.</p></div>
+      <div class="card"><div class="icon">🧩</div><h3>Organization</h3><p class="small">Manual collections, smart collections (saved searches), multi collections, playlists, rerun collections, Trakt lists, and a rich field-based search index.</p></div>
+      <div class="card"><div class="icon">🗓️</div><h3>Scheduling</h3><p class="small">Classic ordered schedules, block/daypart schedules with templates and decos, sequential YAML, scripted schedules, external JSON playouts, alternate date-range schedules.</p></div>
+      <div class="card"><div class="icon">📺</div><h3>Channels &amp; presentation</h3><p class="small">Decimal channel numbers, groups, logos, watermarks (permanent/intermittent/opacity expression), graphics engine (image/text/subtitle/motion/script), stream selection rules, on-demand and mirror channels.</p></div>
+      <div class="card"><div class="icon">⚡</div><h3>Transcoding</h3><p class="small">Per-channel FFmpeg profiles: NVENC, QSV, VAAPI, AMF, VideoToolbox, RKMPP, Vulkan; H.264/HEVC/MPEG-2; HDR/DV tonemapping; deinterlace; copy mode; loudness; subtitles burn/convert.</p></div>
+      <div class="card"><div class="icon">🛰️</div><h3>Delivery</h3><p class="small">HLS, MPEG-TS, HDHomeRun emulation, M3U, XMLTV. Plex, Jellyfin, Emby, Channels DVR, Kodi, TiviMate, generic IPTV. OIDC/JWT/API-key auth, health checks, diagnostics.</p></div>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="section-head"><div><div class="kicker">02 · Context</div><h2>The project changed under everyone</h2></div></div>
+    <div class="timeline">
+      <div class="tl"><div class="when">Feb 2026</div><div class="what">Final release announced</div><div class="desc">ErsatzTV 26.3 is called the final release; repositories are archived. Scope creep and support burden are cited.</div></div>
+      <div class="tl"><div class="when">Mar 2026</div><div class="what">ErsatzTV Next begins</div><div class="desc">A Rust rewrite of the streaming engine. Engine only: playouts in, HLS/M3U/XMLTV out. Scheduling explicitly out of scope.</div></div>
+      <div class="tl"><div class="when">Jul 2026</div><div class="what">Legacy unarchived</div><div class="desc">Legacy is unarchived, renamed, and updated to use Next as its default engine. Feature development stays frozen; security updates continue.</div></div>
+      <div class="tl"><div class="when">Nov 2026</div><div class="what">Tunarr adopts Next</div><div class="desc">Tunarr 2026.11.2 ships an experimental ErsatzTV Next backend. The ecosystem is converging on a shared engine, not a shared product.</div></div>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="section-head"><div><div class="kicker">03 · Landscape</div><h2>Who does what now</h2></div></div>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Product</th><th>Model</th><th>Strengths</th><th>Gaps that matter</th></tr></thead>
+        <tbody>
+          <tr><td><b>ErsatzTV Legacy</b></td><td>All-in-one · .NET</td><td>Deepest scheduling; broad media kinds; graphics; remote streams; mature edge cases</td><td>Frozen; complex mental model; static playouts; heavy hardware matrix; support burden</td></tr>
+          <tr><td><b>ErsatzTV Next</b></td><td>Engine only · Rust</td><td>Reliable normalized HLS; versioned JSON contract; probing; overlays; fallback</td><td>No library, scheduler, or UI; pre-1.0; requires an external playout producer</td></tr>
+          <tr><td><b>Tunarr</b></td><td>All-in-one · TypeScript</td><td>Modern UI; active; Plex/Jellyfin/Emby/local; slots; filler; stream profiles; backup</td><td>Static precomputed schedules; less scheduling depth; no remote streams; limited multi-audio/soft subs; Plex Windows caveat</td></tr>
+          <tr><td><b>dizqueTV</b></td><td>All-in-one · Node</td><td>Established Plex workflow; simple</td><td>Maintenance mode; Plex-only; basic scheduling; old stack</td></tr>
+          <tr><td><b>Threadfin / xTeVe</b></td><td>M3U/XMLTV proxy</td><td>Mature IPTV proxy and filtering</td><td>Not a channel generator; no library scheduling</td></tr>
+          <tr><td><b>Channels DVR</b></td><td>Commercial</td><td>Polished whole-home DVR and clients</td><td>Paid; different product category</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="section-head"><div><div class="kicker">04 · Opportunity</div><h2>What “modern” should mean</h2></div><span class="tag good">Product thesis</span></div>
+    <div class="grid g2">
+      <div class="card"><h3>Understandable</h3><p class="small">One channel studio. Start with channels, dayparts, shows, and breaks. Advanced rules appear only when needed. No five-schedule-type vocabulary before the first channel.</p></div>
+      <div class="card"><h3>Reliable</h3><p class="small">A bad file, a missing item, a media-server outage, or an engine crash does not take the channel offline. Fallback, retry, and self-healing are defaults.</p></div>
+      <div class="card"><h3>Fast</h3><p class="small">Warm segments, prefetch, and cached artifacts. Tune in in seconds, not ten. Copy/direct when the source already matches.</p></div>
+      <div class="card"><h3>Observable</h3><p class="small">Per-channel now/next, viewer sessions, transcode speed, buffer depth, cache hits, errors, and a one-click diagnostic bundle.</p></div>
+      <div class="card"><h3>Recoverable</h3><p class="small">Backup/restore built in. Safe migrations. Preview a schedule change and undo it. Never make the user erase history to fix a build.</p></div>
+      <div class="card"><h3>Interoperable</h3><p class="small">HLS/TS, M3U/XMLTV, HDHomeRun, Plex/Jellyfin/Emby, OpenAPI, import/export, and an optional external playout/engine contract.</p></div>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="section-head"><div><div class="kicker">05 · Architecture</div><h2>Small core, clear boundaries</h2></div><span class="tag good">Confirmed: Rust + React + SQLite + FFmpeg</span></div>
+    <div class="flow">
+      <div class="flowbox"><h3>Ingest</h3><ul><li>Local, Plex, Jellyfin, Emby</li><li>ffprobe, NFO, artwork</li><li>Subtitles, chapters, HDR</li><li>Incremental + deep scan</li></ul></div>
+      <div class="arrow">→</div>
+      <div class="flowbox"><h3>Program</h3><ul><li>Catalog + search</li><li>Collections, playlists</li><li>Dayparts + slots</li><li>Pure, deterministic timeline</li></ul></div>
+      <div class="arrow">→</div>
+      <div class="flowbox"><h3>Broadcast</h3><ul><li>Per-channel runtime</li><li>Segment cache + FFmpeg</li><li>HLS / MPEG-TS / HDHR</li><li>EPG from the same timeline</li></ul></div>
+    </div>
+    <div class="grid g2" style="margin-top:12px">
+      <div class="list-card"><h3>Scheduler is a library</h3><p class="small">No database, no wall clock, no random source. Inputs: plan, state, seed, time zone, interval. Outputs: items, state delta, warnings, coverage. This makes it testable and deterministic.</p></div>
+      <div class="list-card"><h3>Engine is a worker</h3><p class="small">One runtime per active channel. Per-item FFmpeg for fault isolation. Atomic segment publish. Fallback producer. TS gateway for Plex. Idle stop. Tuner limits.</p></div>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="section-head"><div><div class="kicker">06 · Scope</div><h2>Beta vs public v1 vs later</h2></div><span class="tag warn">Deep parity chosen</span></div>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Area</th><th>Beta — usable product</th><th>Public v1 — deep parity</th><th>Later</th></tr></thead>
+        <tbody>
+          <tr><td><b>Sources</b></td><td>Local, Jellyfin, Plex</td><td>+ Emby, remote HTTP/RTSP/script</td><td>Live sources, YouTube-style resolvers</td></tr>
+          <tr><td><b>Media</b></td><td>Movies, episodes, other videos</td><td>+ music videos, songs, images, remote streams</td><td>More kinds and metadata agents</td></tr>
+          <tr><td><b>Scheduling</b></td><td>Lineup + weekly dayparts + filler</td><td>Classic, block/deco, sequential, scripted, external JSON, alternates, mid-roll</td><td>Beyond-ErsatzTV automation</td></tr>
+          <tr><td><b>Presentation</b></td><td>Watermark, burn subtitles</td><td>Graphics engine, stream selection, WebVTT, HDR tonemap</td><td>Advanced broadcast graphics</td></tr>
+          <tr><td><b>Playback</b></td><td>HLS + TS gateway + HDHR</td><td>Copy-mode hardening, pre-segment cache, 4K/HDR, multi-arch</td><td>SSAI, DVR/catch-up</td></tr>
+          <tr><td><b>Ops</b></td><td>Docker, SQLite, admin, backup/restore, metrics</td><td>OIDC, roles, Postgres, import, audit</td><td>Plugins, multi-node, native apps</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="section-head"><div><div class="kicker">07 · Delivery</div><h2>Roadmap with exit criteria</h2></div><span class="tag warn">9–15 months for 2–4 engineers</span></div>
+    <div class="list-card">
+      <div class="phase"><div class="pnum">Phase 0<br><span class="muted tiny">3–4 wks</span></div><div><div class="ptitle">Foundations &amp; spikes</div><div class="pdesc">Lock the parity checklist, ADRs, clean-room policy, synthetic fixtures. Spike Rust HLS transitions, HDHR + Plex/Jellyfin/Emby/Channels, and a deterministic timeline builder.</div><div class="exit"><b>Exit:</b> spikes pass on Linux + one GPU + one ARM device; architecture accepted.</div></div></div>
+      <div class="phase"><div class="pnum">Phase 1<br><span class="muted tiny">6–8 wks</span></div><div><div class="ptitle">Walking skeleton</div><div class="pdesc">Rust workspace, SQLite, local movies/shows, collections, one channel, sequential timeline, HLS/M3U/XMLTV, browser preview, Docker multi-arch, single admin.</div><div class="exit"><b>Exit:</b> a local folder plays as a 24/7 channel; guide matches; restart resumes.</div></div></div>
+      <div class="phase"><div class="pnum">Phase 2<br><span class="muted tiny">8–12 wks</span></div><div><div class="ptitle">Beta: usable product</div><div class="pdesc">Plex/Jellyfin, dayparts, filler, watermark, per-channel profiles, TS + HDHR, Channel Studio, auth, backup/restore, diagnostics, metrics, hardware probe.</div><div class="exit"><b>Exit:</b> 3 channels run 7 days unattended; Plex and Jellyfin play; backup restores.</div></div></div>
+      <div class="phase"><div class="pnum">Phase 3<br><span class="muted tiny">10–14 wks</span></div><div><div class="ptitle">Deep parity A: programming</div><div class="pdesc">Classic schedules, block/deco/templates, sequential YAML, scripted/external JSON, alternates, mid-roll, stream selection, graphics, watermarks.</div><div class="exit"><b>Exit:</b> the scheduling parity checklist passes; timeline edge cases are covered.</div></div></div>
+      <div class="phase"><div class="pnum">Phase 4<br><span class="muted tiny">8–12 wks</span></div><div><div class="ptitle">Deep parity B: media, delivery, ops</div><div class="pdesc">Music/images/remote/Emby, subtitles, HDR tonemap, cache modes, import, OIDC/roles/Postgres, client hardening across Plex/Jellyfin/Emby/Channels/Kodi/TiviMate.</div><div class="exit"><b>Exit:</b> public v1; chosen parity matrix complete; 10+ channels; documented capacity and migration path.</div></div></div>
+      <div class="phase"><div class="pnum">Phase 5<br><span class="muted tiny">ongoing</span></div><div><div class="ptitle">Scale &amp; polish</div><div class="pdesc">4K/HDR, native apps/10-foot UI, live sources, DVR/catch-up, SSAI, plugin SDK.</div><div class="exit"><b>Exit:</b> measured capacity, stable releases, community docs.</div></div></div>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="section-head"><div><div class="kicker">08 · Risks</div><h2>What could sink it</h2></div></div>
+    <div class="grid g2">
+      <div class="card"><h3>Scope creep</h3><p class="small">The stated reason ErsatzTV wound down. Deep parity is broad. Mitigation: phased parity gates, a usable beta first, small core, say no.</p></div>
+      <div class="card"><h3>Rust iteration speed</h3><p class="small">Compile times and a smaller contributor pool can slow the product. Mitigation: small crate graph, nextest, incremental CI, strong contributor guide.</p></div>
+      <div class="card"><h3>Hardware / FFmpeg matrix</h3><p class="small">Every GPU and driver is a special case. Mitigation: probe, software fallback, conservative defaults, diagnostics, hardware CI.</p></div>
+      <div class="card"><h3>Client compatibility</h3><p class="small">Plex needs TS; Jellyfin/Emby vary; HLS clients vary. Mitigation: TS gateway, test matrix, documented known issues.</p></div>
+      <div class="card"><h3>Scheduler edge cases</h3><p class="small">Fixed starts, overruns, DST, impossible items. Mitigation: pure builder, invariants, simulation, golden tests, guardrails.</p></div>
+      <div class="card"><h3>Transcode cost</h3><p class="small">Continuous channels are expensive. Mitigation: on-demand, copy mode, cache, limits, capacity calculator.</p></div>
+      <div class="card"><h3>Security</h3><p class="small">Remote streams and scripts are dangerous. Mitigation: off by default, allowlists, SSRF/path/command protections, redaction.</p></div>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="section-head"><div><div class="kicker">09 · Decisions</div><h2>Locked direction</h2></div><span class="tag good">Confirmed</span></div>
+    <div class="list-card">
+      <div class="decision"><div class="n">✓</div><div><div class="q">All-in-one product</div><div class="a">Sources, library, scheduler, own engine, outputs, UI, and operations in one system.</div></div></div>
+      <div class="decision"><div class="n">✓</div><div><div class="q">Deep parity in public v1</div><div class="a">Classic, block/deco, sequential, scripted, external JSON, graphics, all media kinds. Phased so a usable beta lands first.</div></div></div>
+      <div class="decision"><div class="n">✓</div><div><div class="q">Rust backend + React UI</div><div class="a">Single binary, embedded web assets, SQLite default, FFmpeg sidecar. Small crate graph to keep compile times tolerable.</div></div></div>
+      <div class="decision"><div class="n">✓</div><div><div class="q">Own streaming engine only</div><div class="a">No dependency on ErsatzTV Next. Optional import/export of a public playout format for interoperability, implemented independently.</div></div></div>
+      <div class="decision"><div class="n">✓</div><div><div class="q">Sources and clients</div><div class="a">Local, Jellyfin, Plex, remote HTTP/RTSP/script. Plex, Jellyfin, Emby, Channels DVR, Kodi/TiviMate/generic IPTV.</div></div></div>
+      <div class="decision"><div class="n">✓</div><div><div class="q">Multi-arch and auth</div><div class="a">x86 GPU and low-power/ARM; single admin in beta, OIDC + roles in v1; MIT or Apache-2.0.</div></div></div>
+    </div>
+    <div class="section-head" style="margin-top:24px"><div><div class="kicker">Open items</div><h2>Not blocking Phase 0</h2></div><span class="tag warn">Needed before Phase 2</span></div>
+    <div class="list-card">
+      <div class="decision"><div class="n">1</div><div><div class="q">Team, hours, and first demo date</div><div class="a">Who is building, how much time per week, and what should the first demo show?</div></div></div>
+      <div class="decision"><div class="n">2</div><div><div class="q">Parity checklist</div><div class="a">Mark each ErsatzTV capability must-have / nice-to-have / later. Deep parity is broad; the checklist controls the release.</div></div></div>
+      <div class="decision"><div class="n">3</div><div><div class="q">Migration artifacts</div><div class="a">Which ErsatzTV/Tunarr channels, collections, schedules, settings, and history must import cleanly?</div></div></div>
+      <div class="decision"><div class="n">4</div><div><div class="q">Representative ARM target and license</div><div class="a">Raspberry Pi 4/5, RK3588, or ARM NAS? MIT vs Apache-2.0? Keep “ChannelLoom” or pick a launch name?</div></div></div>
+    </div>
+  </section>
+
+  <div class="foot">
+    <p><b>Read the full analysis:</b> <code>docs/RESEARCH.md</code> · <code>docs/PLAN.md</code> · <code>docs/CLEAN-ROOM.md</code></p>
+    <p>Sources: ErsatzTV docs and release notes; ErsatzTV Next README/schemas; Tunarr docs and 2026.11.2 notes; HDHomeRun HTTP API; Plex and Jellyfin Live TV documentation; HLS RFC 8216. Dates reflect November 2026.</p>
+  </div>
+
+</div>
+</body>
+</html>

@@ -1,0 +1,35 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/awesometv-scheduler",
+    "crates/awesometv-engine-spike",
+    "crates/awesometv-hdhr-spike",
+    "crates/awesometv-server",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+rust-version = "1.98"
+
+[workspace.dependencies]
+anyhow = "1"
+axum = "0.8"
+base64 = "0.22"
+ring = "0.17"
+url = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "macros", "migrate"] }
+time = { version = "0.3", features = ["serde", "macros", "parsing", "formatting"] }
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["io", "io-util"] }
+tokio-stream = "0.1"
+ureq = { version = "2.12", features = ["json"] }
+tower-http = { version = "0.6", features = ["trace", "fs"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v4", "v5"] }
+walkdir = "2"

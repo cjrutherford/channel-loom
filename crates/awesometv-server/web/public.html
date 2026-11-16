@@ -1,0 +1,953 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ChannelLoom — Watch</title>
+<meta name="theme-color" content="#10162B">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="ChannelLoom">
+<meta name="description" content="Your favorites are always on. Live channels and a guide from your own movie, TV, and music library.">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<link rel="apple-touch-startup-image" href="/icons/channelloom-splash.png">
+<link rel="icon" href="/icons/channelloom.ico" sizes="any">
+<link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&family=Nunito+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink: #10162b;
+    --ink-2: #0b1120;
+    --panel: #151d36;
+    --panel-2: #1b2444;
+    --line: #2b3557;
+    --line-soft: #202a49;
+    --paper: #f5f7ff;
+    --muted: #a8b3d4;
+    --dim: #7581a5;
+    --signal: #22d3cf;
+    --signal-deep: #0b3b3a;
+    --amber: #ff9972;
+    --blue: #368bee;
+    --violet: #9252df;
+    --red: #ff6b7a;
+    --display: "Baloo 2", ui-rounded, "Trebuchet MS", sans-serif;
+    --body: "Nunito Sans", ui-sans-serif, system-ui, sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    --ease: cubic-bezier(.2,.7,.2,1);
+  }
+  * { box-sizing: border-box; }
+  html { color-scheme: dark; }
+  html, body { margin: 0; min-height: 100%; background: var(--ink); color: var(--paper); font-family: var(--body); }
+  body {
+    background:
+      radial-gradient(1200px 700px at 8% -12%, rgba(34,211,207,.12), transparent 62%),
+      radial-gradient(900px 520px at 102% 4%, rgba(146,82,223,.10), transparent 60%),
+      var(--ink);
+    -webkit-font-smoothing: antialiased;
+  }
+  body::before {
+    content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 60; opacity: .05;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.6'/%3E%3C/svg%3E");
+  }
+  body::after {
+    content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 59; opacity: .035;
+    background: repeating-linear-gradient(to bottom, transparent 0 2px, #000 2px 3px);
+  }
+  a { color: var(--signal); }
+  button { font: inherit; cursor: pointer; }
+  button, a { -webkit-tap-highlight-color: transparent; }
+  :focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; border-radius: 4px; }
+  .mono { font-family: var(--mono); }
+  .tiny { font-size: 10px; }
+  .dim { color: var(--dim); }
+  .muted { color: var(--muted); }
+  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+
+  /* ---------- top bar ---------- */
+  .top {
+    position: sticky; top: 0; z-index: 30; display: flex; align-items: center; gap: 18px;
+    padding: 0 26px; height: 68px; border-bottom: 1px solid var(--line-soft);
+    background: rgba(16,22,43,.82); backdrop-filter: blur(16px) saturate(1.2);
+  }
+  .brand { display: grid; justify-items: start; gap: 3px; text-decoration: none; color: inherit; min-width: 0; }
+  .brand-wordmark { height: 40px; width: auto; display: block; filter: drop-shadow(0 8px 22px rgba(0,0,0,.5)); }
+  .brand-mark {
+    position: relative; width: 38px; height: 38px; border-radius: 11px; overflow: hidden;
+    display: block; background: #0b1120 url("/icons/icon-192.png") center/cover no-repeat;
+    box-shadow: 0 0 0 1px rgba(34,211,207,.35), 0 10px 30px rgba(0,0,0,.55);
+    flex: 0 0 auto;
+  }
+  .brand-mark::after {
+    content: ""; position: absolute; inset: -5px; border-radius: 15px; border: 1px solid rgba(34,211,207,.24);
+    pointer-events: none;
+  }
+  .brand-copy { display: grid; gap: 2px; min-width: 0; }
+  .brand-name { font-family: var(--display); font-size: 25px; font-weight: 700; letter-spacing: .01em; line-height: 1; white-space: nowrap; }
+  .brand-sub { display: flex; align-items: center; gap: 6px; font-family: var(--body); font-size: 11px; font-weight: 600; letter-spacing: .01em; color: var(--muted); white-space: nowrap; }
+  .brand-sub .dot { width: 5px; height: 5px; border-radius: 99px; background: var(--red); animation: pulse 2s infinite; }
+  .top-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+  .clock { font-family: var(--mono); font-size: 12px; color: var(--muted); letter-spacing: .06em; margin-right: 8px; font-variant-numeric: tabular-nums; }
+  .icon-btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 7px; height: 36px; padding: 0 12px;
+    border: 1px solid var(--line); border-radius: 9px; background: rgba(20,24,27,.65); color: var(--paper);
+    font-size: 12px; font-weight: 600; text-decoration: none; transition: border-color .2s var(--ease), background .2s var(--ease), transform .2s var(--ease);
+  }
+  .icon-btn:hover { border-color: #3a454d; background: #181d21; transform: translateY(-1px); }
+  .icon-btn.solid { background: var(--signal); color: #06202b; border-color: var(--signal); font-weight: 800; }
+  .icon-btn.solid:hover { background: #5ce6e1; border-color: #5ce6e1; }
+  .icon-btn svg { width: 15px; height: 15px; flex: 0 0 auto; }
+  .icon-btn .label { white-space: nowrap; }
+  .icon-btn[hidden] { display: none; }
+
+  /* ---------- layout ---------- */
+  .wrap { max-width: 1580px; margin: 0 auto; padding: 22px 26px 54px; }
+  .stage { display: grid; grid-template-columns: minmax(0, 1fr) 356px; gap: 18px; align-items: start; }
+  .panel { border: 1px solid var(--line); background: linear-gradient(180deg, rgba(255,255,255,.025), transparent 46%), var(--panel); border-radius: 16px; }
+  .player { position: relative; overflow: hidden; box-shadow: 0 26px 80px rgba(0,0,0,.5), 0 0 0 1px rgba(255,255,255,.02) inset; }
+  .screen { position: relative; background: #000; aspect-ratio: 16 / 9; overflow: hidden; }
+  .screen video { display: block; width: 100%; height: 100%; object-fit: contain; background: #000; }
+  .screen::after {
+    content: ""; position: absolute; inset: 0; pointer-events: none;
+    background: linear-gradient(to top, rgba(0,0,0,.36), transparent 26%), linear-gradient(to bottom, rgba(0,0,0,.24), transparent 18%);
+  }
+  .badges { position: absolute; top: 14px; left: 14px; right: 14px; z-index: 4; display: flex; justify-content: space-between; gap: 8px; }
+  .badges-right { display: flex; gap: 7px; align-items: center; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border-radius: 999px;
+    font-family: var(--mono); font-size: 9px; letter-spacing: .14em; text-transform: uppercase;
+    background: rgba(7,8,9,.76); border: 1px solid rgba(255,255,255,.15); backdrop-filter: blur(10px); color: var(--paper);
+  }
+  .chip.live { color: var(--red); border-color: rgba(255,107,122,.35); }
+  .chip.live .dot { width: 6px; height: 6px; border-radius: 99px; background: var(--red); animation: pulse 1.8s infinite; }
+  @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(255,107,122,.5); } 70% { box-shadow: 0 0 0 7px rgba(255,107,122,0); } 100% { box-shadow: 0 0 0 0 rgba(255,107,122,0); } }
+  button.chip { cursor: pointer; }
+  button.chip:hover { border-color: rgba(255,255,255,.42); }
+  .tuning {
+    position: absolute; inset: 0; z-index: 3; display: grid; place-items: center; text-align: center; padding: 24px;
+    background: radial-gradient(circle at 50% 45%, #18224a 0, #0a0f1f 68%);
+    transition: opacity .5s var(--ease), visibility .5s;
+  }
+  .tuning[hidden] { display: none; }
+  .tuning-mark { width: 46px; height: 46px; margin: 0 auto 16px; border-radius: 50%; border: 1px solid rgba(34,211,207,.28); display: grid; place-items: center; }
+  .tuning-mark::before { content: ""; width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--signal); border-top-color: transparent; animation: spin 1s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .tuning-title { font-family: var(--display); font-size: clamp(30px, 4vw, 54px); line-height: .95; letter-spacing: -.015em; color: var(--paper); }
+  .tuning-sub { font-family: var(--mono); font-size: 10px; letter-spacing: .18em; color: var(--dim); text-transform: uppercase; margin-top: 9px; }
+  .hero-meta { padding: 17px 20px 18px; border-top: 1px solid var(--line); background: linear-gradient(180deg, rgba(255,255,255,.02), transparent 70%); }
+  .hero-top { display: flex; gap: 15px; align-items: flex-start; }
+  .channel-no { font-family: var(--display); font-size: 56px; line-height: .78; color: var(--amber); font-variant-numeric: tabular-nums; min-width: 54px; }
+  .hero-copy { min-width: 0; flex: 1; }
+  .kicker { font-family: var(--mono); font-size: 9px; letter-spacing: .2em; text-transform: uppercase; color: var(--signal); }
+  .hero-title { font-family: var(--display); font-size: clamp(28px, 3.1vw, 44px); line-height: .98; letter-spacing: -.015em; margin: 3px 0 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .hero-next { font-size: 12px; color: var(--muted); margin-top: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .hero-next b { color: var(--paper); font-weight: 500; }
+  .hero-actions { display: flex; gap: 7px; flex: 0 0 auto; }
+  .hero-actions .icon-btn { height: 32px; padding: 0 10px; font-size: 11px; }
+  .timeline { display: flex; align-items: center; gap: 9px; margin-top: 13px; }
+  .timeline .t { font-family: var(--mono); font-size: 9px; color: var(--dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .bar { flex: 1; height: 3px; border-radius: 99px; background: #22292e; overflow: hidden; }
+  .bar > span { display: block; height: 100%; width: 0; border-radius: 99px; background: linear-gradient(90deg, var(--signal), var(--amber)); transition: width 1s linear; box-shadow: 0 0 12px rgba(34,211,207,.35); }
+
+  .player.casting .screen video { opacity: .16; }
+  .player.casting .badges { display: none; }
+  .cast-mode {
+    position: absolute; inset: 0; z-index: 6; display: grid; place-items: center; padding: 28px; text-align: center;
+    background:
+      radial-gradient(circle at 50% 34%, rgba(34,211,207,.14), transparent 46%),
+      radial-gradient(circle at 50% 34%, #17224a 0, #0a0f1f 70%);
+  }
+  .cast-mode[hidden] { display: none; }
+  .cast-inner { display: grid; justify-items: center; gap: 3px; max-width: 560px; }
+  .cast-brand { display: flex; align-items: center; gap: 10px; font-family: var(--display); font-size: 22px; letter-spacing: .09em; text-transform: uppercase; }
+  .cast-brand .brand-wordmark { height: 48px; }
+  .cast-kicker { margin-top: 16px; font-family: var(--mono); font-size: 9px; letter-spacing: .24em; text-transform: uppercase; color: var(--signal); }
+  .cast-device { font-family: var(--display); font-size: clamp(28px, 4.2vw, 48px); line-height: .98; letter-spacing: -.015em; }
+  .cast-now { margin-top: 3px; font-family: var(--mono); font-size: 10px; letter-spacing: .08em; color: var(--muted); max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cast-controls { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px; margin-top: 20px; }
+  .cast-controls .icon-btn { height: 34px; padding: 0 12px; font-size: 11px; }
+  .cast-volume { width: 140px; accent-color: var(--signal); }
+  @media (max-width: 620px) {
+    .cast-device { font-size: 30px; }
+    .cast-controls { gap: 6px; }
+    .cast-volume { width: 110px; }
+  }
+
+  /* ---------- channel rail ---------- */
+  .rail { display: grid; gap: 8px; }
+  .rail-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 10px; padding: 2px 2px 4px; }
+  .rail-title { font-family: var(--display); font-size: 24px; letter-spacing: -.01em; line-height: 1; margin: 0; }
+  .rail-count { font-family: var(--mono); font-size: 9px; letter-spacing: .14em; color: var(--dim); text-transform: uppercase; }
+  .rail-list { display: grid; gap: 7px; max-height: min(calc(100vh - 230px), 760px); overflow-y: auto; padding-right: 4px; scrollbar-width: thin; scrollbar-color: #2a333a transparent; }
+  .rail-list::-webkit-scrollbar { width: 6px; }
+  .rail-list::-webkit-scrollbar-thumb { background: #2a333a; border-radius: 99px; }
+  .rail-card {
+    position: relative; display: grid; grid-template-columns: 44px minmax(0, 1fr) 18px; gap: 11px; align-items: center;
+    width: 100%; padding: 10px 11px; border: 1px solid var(--line-soft); border-radius: 11px;
+    background: rgba(255,255,255,.017); color: inherit; text-align: left; overflow: hidden;
+    transition: border-color .2s var(--ease), background .2s var(--ease), transform .2s var(--ease);
+  }
+  .rail-card::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 2px; background: transparent; transition: background .2s; }
+  .rail-card:hover { border-color: #3a454d; background: rgba(255,255,255,.04); transform: translateX(2px); }
+  .rail-card.active { border-color: rgba(34,211,207,.55); background: linear-gradient(90deg, rgba(34,211,207,.09), rgba(34,211,207,.015)); box-shadow: 0 0 0 1px rgba(34,211,207,.12) inset, 0 8px 24px rgba(0,0,0,.25); }
+  .rail-card.active::before { background: var(--signal); box-shadow: 0 0 12px rgba(34,211,207,.5); }
+  .rail-no { font-family: var(--display); font-size: 27px; line-height: .8; color: var(--amber); font-variant-numeric: tabular-nums; }
+  .rail-copy { min-width: 0; display: grid; gap: 2px; }
+  .rail-name { font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; letter-spacing: .01em; }
+  .rail-now { font-size: 10px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .rail-play { display: grid; place-items: center; color: var(--signal); font-size: 9px; opacity: .8; }
+  .rail-card.active .rail-play { opacity: 1; }
+  .rail-progress { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: transparent; }
+  .rail-progress > span { display: block; height: 100%; width: 0; background: linear-gradient(90deg, var(--signal), transparent); opacity: .45; }
+  .rail-skeleton { height: 60px; border-radius: 11px; border: 1px solid var(--line-soft); background: linear-gradient(100deg, #101417 30%, #171d21 50%, #101417 70%); background-size: 200% 100%; animation: shimmer 1.5s infinite; }
+  @keyframes shimmer { to { background-position: -200% 0; } }
+
+  /* ---------- guide ---------- */
+  .guide-section { margin-top: 30px; }
+  .section-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 14px; margin-bottom: 12px; }
+  .eyebrow { font-family: var(--mono); font-size: 9px; letter-spacing: .2em; text-transform: uppercase; color: var(--signal); margin-bottom: 5px; }
+  h2 { font-family: var(--display); font-size: 30px; letter-spacing: -.015em; margin: 0; font-weight: 700; }
+  .guide-shell { border: 1px solid var(--line); border-radius: 13px; overflow: hidden; background: var(--panel); }
+  .guide-scroll { overflow-x: auto; scrollbar-width: thin; scrollbar-color: #2a333a transparent; }
+  .guide-inner { min-width: 980px; }
+  .guide-ticks { display: grid; grid-template-columns: 150px minmax(0, 1fr); background: var(--ink-2); border-bottom: 1px solid var(--line-soft); position: sticky; top: 0; z-index: 2; }
+  .guide-ticks .spacer { border-right: 1px solid var(--line-soft); }
+  .ticks { display: grid; font-family: var(--mono); font-size: 9px; color: var(--dim); letter-spacing: .04em; }
+  .ticks span { padding: 8px 0 8px 8px; border-left: 1px solid var(--line-soft); }
+  .guide-row { display: grid; grid-template-columns: 150px minmax(0, 1fr); min-height: 48px; border-bottom: 1px solid var(--line-soft); cursor: pointer; }
+  .guide-row:last-child { border-bottom: 0; }
+  .guide-row:hover { background: rgba(255,255,255,.022); }
+  .guide-label { display: flex; align-items: center; gap: 9px; padding: 7px 11px; border-right: 1px solid var(--line-soft); background: var(--ink-2); min-width: 0; position: sticky; left: 0; z-index: 1; }
+  .guide-label .n { font-family: var(--display); font-size: 21px; color: var(--amber); min-width: 19px; }
+  .guide-label .nm { font-size: 10px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .guide-label .live-dot { width: 5px; height: 5px; border-radius: 99px; background: var(--signal); margin-left: auto; flex: 0 0 auto; }
+  .guide-track { position: relative; min-height: 48px; background-image: linear-gradient(90deg, transparent calc(100% - 1px), rgba(255,255,255,.035) 0); background-size: calc(100% / 6) 100%; }
+  .guide-block {
+    position: absolute; top: 6px; bottom: 6px; border-radius: 5px; padding: 5px 8px; overflow: hidden;
+    font-size: 10px; line-height: 1.15; color: #06202b; background: linear-gradient(180deg, #4ee4dd, #22d3cf);
+    border: 1px solid rgba(0,0,0,.18); transition: filter .2s, transform .2s;
+  }
+  .guide-block:hover { filter: brightness(1.08); transform: translateY(-1px); z-index: 2; }
+  .guide-block.filler { background: linear-gradient(180deg, #ffb38f, #ff9972); }
+  .guide-block span { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
+  .guide-block .when { font-family: var(--mono); font-size: 8px; opacity: .62; margin-top: 1px; }
+  .guide-now { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--red); z-index: 3; box-shadow: 0 0 8px rgba(255,107,122,.65); }
+  .guide-now::before { content: ""; position: absolute; top: 0; left: -2.5px; width: 6px; height: 6px; border-radius: 99px; background: var(--red); }
+  .guide-empty { padding: 30px 18px; text-align: center; color: var(--dim); }
+  .guide-skeleton { height: 48px; border-bottom: 1px solid var(--line-soft); background: linear-gradient(100deg, #0f1316 30%, #171d21 50%, #0f1316 70%); background-size: 200% 100%; animation: shimmer 1.5s infinite; }
+
+  footer { border-top: 1px solid var(--line-soft); margin-top: 34px; padding: 15px 26px 22px; display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; color: var(--dim); font-family: var(--mono); font-size: 9px; letter-spacing: .12em; text-transform: uppercase; }
+  footer .right { display: flex; gap: 14px; align-items: center; }
+  footer a { color: var(--dim); text-decoration: none; }
+  footer a:hover { color: var(--signal); }
+  .toast-wrap { position: fixed; right: 18px; bottom: 18px; z-index: 120; display: grid; gap: 8px; }
+  .toast { background: var(--paper); color: var(--ink); border-radius: 9px; padding: 10px 13px; font-size: 12px; font-weight: 600; box-shadow: 0 14px 40px rgba(0,0,0,.5); max-width: 360px; animation: toast .25s var(--ease) both; }
+  .toast.err { background: var(--red); color: #fff; }
+  @keyframes toast { from { opacity: 0; transform: translateY(8px); } }
+
+  @media (max-width: 1180px) {
+    .stage { grid-template-columns: minmax(0, 1fr) 320px; }
+    .hero-actions .label { display: none; }
+    .hero-actions .icon-btn { width: 32px; padding: 0; }
+  }
+  @media (max-width: 980px) {
+    .stage { grid-template-columns: 1fr; }
+    .rail-list { display: flex; gap: 8px; overflow-x: auto; overflow-y: hidden; max-height: none; padding-bottom: 8px; scroll-snap-type: x mandatory; }
+    .rail-card { flex: 0 0 252px; scroll-snap-align: start; }
+    .rail-card:hover { transform: none; }
+  }
+  @media (max-width: 620px) {
+    .top { height: 60px; padding: 0 14px; gap: 10px; }
+    .brand-wordmark { height: 32px; }
+    .brand-sub, .clock { display: none; }
+    .icon-btn { width: 34px; padding: 0; }
+    .icon-btn .label { display: none; }
+    .wrap { padding: 14px 14px 40px; }
+    .hero-meta { padding: 13px 14px 14px; }
+    .channel-no { font-size: 44px; min-width: 42px; }
+    .hero-title { font-size: clamp(25px, 8vw, 34px); }
+    .hero-top { gap: 11px; }
+    .hero-actions { position: absolute; right: 12px; top: 12px; display: none; }
+    .timeline { margin-top: 10px; }
+    .guide-inner { min-width: 860px; }
+    .guide-ticks, .guide-row { grid-template-columns: 112px minmax(0, 1fr); }
+    .guide-label .nm { font-size: 9px; }
+    footer { padding: 13px 14px 18px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
+  }
+</style>
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="/" aria-label="ChannelLoom Watch home">
+    <img class="brand-wordmark" src="/icons/channelloom-wordmark.png" alt="ChannelLoom">
+    <span class="brand-sub"><span class="dot"></span> Your favorites are always on</span>
+  </a>
+  <div class="top-right">
+    <span class="clock" id="clock"></span>
+    <button class="icon-btn" id="castBtn" aria-label="Cast to a device">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 17.5V20h2.5M4 13.5A6.5 6.5 0 0 1 10.5 20M4 9.5A10.5 10.5 0 0 1 14.5 20"/><rect x="3" y="4" width="18" height="12" rx="2"/></svg>
+      <span class="label">Cast</span>
+    </button>
+    <button class="icon-btn" id="unmuteBtn" aria-label="Turn sound on" hidden>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M11 5 6 9H3v6h3l5 4V5Z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18 6a8.5 8.5 0 0 1 0 12"/></svg>
+      <span class="label">Sound</span>
+    </button>
+    <a class="icon-btn solid" href="/admin" aria-label="Open ChannelLoom Studio">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="8" r="3.2"/><path d="M5 20c.8-3.4 3.4-5.2 7-5.2s6.2 1.8 7 5.2"/></svg>
+      <span class="label">Studio</span>
+    </a>
+  </div>
+</header>
+
+<main class="wrap">
+  <section class="stage">
+    <div class="panel player">
+      <div class="screen">
+        <video id="player" controls playsinline preload="metadata"></video>
+        <div class="tuning" id="tuning">
+          <div>
+            <div class="tuning-mark" aria-hidden="true"></div>
+            <div class="tuning-title" id="tuningTitle">Tuning in</div>
+            <div class="tuning-sub" id="tuningSub">Tuning in…</div>
+          </div>
+        </div>
+        <div class="badges">
+          <span class="chip live"><span class="dot"></span> Live</span>
+          <span class="badges-right">
+            <button class="chip" id="goLiveBtn" hidden>Go live</button>
+            <span class="chip" id="bufferChip" hidden>Buffering</span>
+            <span class="chip" id="qualityChip">HLS</span>
+          </span>
+        </div>
+        <div class="cast-mode" id="castMode" hidden>
+          <div class="cast-inner">
+            <div class="cast-brand"><img class="brand-wordmark" src="/icons/channelloom-wordmark.png" alt="ChannelLoom"></div>
+            <div class="cast-kicker">Casting to</div>
+            <div class="cast-device" id="castDevice">Chromecast</div>
+            <div class="cast-now" id="castNow">Getting things ready…</div>
+            <div class="cast-controls">
+              <button class="icon-btn" id="castPlay">Pause</button>
+              <button class="icon-btn" id="castMute">Mute</button>
+              <input class="cast-volume" id="castVolume" type="range" min="0" max="1" step="0.05" value="1" aria-label="Cast volume">
+              <button class="icon-btn solid" id="castStop">Stop casting</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="hero-meta">
+        <div class="hero-top">
+          <div class="channel-no" id="channelNo">—</div>
+          <div class="hero-copy">
+            <div class="kicker" id="channelName">Live</div>
+            <h1 class="hero-title" id="nowTitle">Loading…</h1>
+            <div class="hero-next" id="nextTitle"></div>
+          </div>
+          <div class="hero-actions">
+            <button class="icon-btn" id="guideBtn" aria-label="Jump to guide">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+              <span class="label">Guide</span>
+            </button>
+            <button class="icon-btn" id="fullBtn" aria-label="Fullscreen">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
+            </button>
+          </div>
+        </div>
+        <div class="timeline">
+          <span class="t" id="startTime">--:--</span>
+          <div class="bar"><span id="progress"></span></div>
+          <span class="t" id="endTime">--:--</span>
+        </div>
+      </div>
+    </div>
+
+    <aside class="rail" aria-label="Live channels">
+      <div class="rail-head">
+        <h2 class="rail-title">Channels</h2>
+        <span class="rail-count" id="channelCount">—</span>
+      </div>
+      <div class="rail-list" id="rail">
+        <div class="rail-skeleton"></div><div class="rail-skeleton"></div><div class="rail-skeleton"></div>
+        <div class="rail-skeleton"></div><div class="rail-skeleton"></div><div class="rail-skeleton"></div>
+      </div>
+    </aside>
+  </section>
+
+  <section class="guide-section" id="guide">
+    <div class="section-head">
+      <div>
+        <div class="eyebrow">What's on</div>
+        <h2>What's on</h2>
+      </div>
+      <div class="mono tiny dim" id="guideRange"></div>
+    </div>
+    <div class="guide-shell">
+      <div class="guide-scroll">
+        <div class="guide-inner" id="guideBody">
+          <div class="guide-skeleton"></div><div class="guide-skeleton"></div><div class="guide-skeleton"></div>
+          <div class="guide-skeleton"></div><div class="guide-skeleton"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <span>ChannelLoom · Self-hosted</span>
+  <span class="right">
+    <span id="statusLine">Connecting</span>
+    <a href="/admin">Studio</a>
+  </span>
+</footer>
+<div class="toast-wrap" id="toasts" aria-live="polite"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const state = {
+  channels: [],
+  active: null,
+  hls: null,
+  muted: true,
+  guideHours: 6,
+  started: false,
+  playing: false,
+  fromCache: false,
+  castReceiverId: 'CC1AD845',
+  castBase: location.origin,
+  castDevice: '',
+  castLoading: false
+};
+
+function esc(value) {
+  return String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+function toast(text, error = false) {
+  const el = document.createElement('div');
+  el.className = `toast${error ? ' err' : ''}`;
+  el.textContent = text;
+  $('toasts').append(el);
+  setTimeout(() => el.remove(), 4200);
+}
+function fmtClock(ms) {
+  return new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+function progress(item) {
+  if (!item) return 0;
+  const now = Date.now();
+  return Math.max(0, Math.min(100, ((now - item.start_ms) / Math.max(1, item.end_ms - item.start_ms)) * 100));
+}
+function current() {
+  return state.channels.find((channel) => channel.number === state.active) || null;
+}
+function readCache(key) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || Date.now() - parsed.at > 10 * 60_000) return null;
+    return parsed.data;
+  } catch { return null; }
+}
+function writeCache(key, data) {
+  try { localStorage.setItem(key, JSON.stringify({ at: Date.now(), data })); } catch {}
+}
+
+function renderRail() {
+  const rail = $('rail');
+  $('channelCount').textContent = state.channels.length ? `${state.channels.length} live` : '—';
+  if (!state.channels.length) {
+    rail.innerHTML = '<div class="guide-empty" style="grid-column:1/-1">No channels are live right now.</div>';
+    return;
+  }
+  rail.innerHTML = state.channels.map((channel) => `
+    <button class="rail-card ${channel.number === state.active ? 'active' : ''}" data-number="${esc(channel.number)}" aria-label="Watch ${esc(channel.name)}">
+      <span class="rail-no">${esc(channel.number)}</span>
+      <span class="rail-copy">
+        <span class="rail-name">${esc(channel.name)}</span>
+        <span class="rail-now">${esc(channel.now?.title || 'Off air')}</span>
+      </span>
+      <span class="rail-play" aria-hidden="true">${channel.number === state.active ? '●' : '▶'}</span>
+      <span class="rail-progress"><span style="width:${channel.now ? progress(channel.now) : 0}%"></span></span>
+    </button>`).join('');
+  rail.querySelectorAll('[data-number]').forEach((button) => {
+    button.addEventListener('click', () => selectChannel(button.dataset.number, true));
+  });
+}
+
+function renderNow() {
+  const channel = current();
+  if (!channel) return;
+  $('channelNo').textContent = channel.number;
+  $('channelName').textContent = channel.name;
+  $('nowTitle').textContent = channel.now?.title || 'Off air';
+  $('nextTitle').innerHTML = channel.next
+    ? `Next at <b>${fmtClock(channel.next.start_ms)}</b> · ${esc(channel.next.title)}`
+    : 'Live now';
+  $('startTime').textContent = channel.now ? fmtClock(channel.now.start_ms) : '--:--';
+  $('endTime').textContent = channel.now ? fmtClock(channel.now.end_ms) : '--:--';
+  $('progress').style.width = `${channel.now ? progress(channel.now) : 0}%`;
+  document.title = `${channel.name} — ChannelLoom`;
+  $('tuningTitle').textContent = channel.name;
+  $('tuningSub').textContent = channel.now?.title || 'Tuning in…';
+}
+
+let hlsLoader = null;
+function loadHls() {
+  if (window.Hls) return Promise.resolve();
+  if (!hlsLoader) {
+    hlsLoader = new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = 'https://cdn.jsdelivr.net/npm/hls.js@1';
+      script.onload = resolve;
+      script.onerror = () => reject(new Error('player failed to load'));
+      document.head.appendChild(script);
+    });
+  }
+  return hlsLoader;
+}
+
+function showTuning(show) {
+  $('tuning').hidden = !show;
+}
+
+async function play(channel) {
+  if (!channel) return;
+  const video = $('player');
+  showTuning(true);
+  try {
+    await loadHls();
+  } catch (error) {
+    toast(String(error), true);
+    showTuning(false);
+    return;
+  }
+  if (state.hls) { state.hls.destroy(); state.hls = null; }
+  state.playing = false;
+  const source = `/channel/${encodeURIComponent(channel.number)}.m3u8`;
+  if (window.Hls && Hls.isSupported()) {
+    const hls = new Hls({
+      liveSyncDurationCount: 2,
+      liveMaxLatencyDurationCount: 6,
+      // Never speed up playback; the "Go live" chip jumps to the edge.
+      maxLiveSyncPlaybackRate: 1,
+      maxBufferLength: 30,
+      maxMaxBufferLength: 60,
+      backBufferLength: 30,
+      startFragPrefetch: true,
+      testBandwidth: false,
+      manifestLoadingMaxRetry: 6,
+      manifestLoadingRetryDelay: 800,
+      levelLoadingMaxRetry: 8,
+      levelLoadingRetryDelay: 800,
+      fragLoadingMaxRetry: 10,
+      fragLoadingRetryDelay: 800
+    });
+    state.hls = hls;
+    hls.on(Hls.Events.LEVEL_UPDATED, updateLiveLag);
+    hls.on(Hls.Events.MANIFEST_PARSED, () => {
+      video.muted = state.muted;
+      video.play().catch(() => {
+        state.muted = true;
+        video.muted = true;
+        video.play().catch(() => {});
+      });
+    });
+    hls.on(Hls.Events.ERROR, (_event, data) => {
+      if (!data.fatal) return;
+      if (data.type === Hls.ErrorTypes.NETWORK_ERROR) hls.startLoad();
+      else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) hls.recoverMediaError();
+      else toast(`Playback error: ${data.type}`, true);
+    });
+    hls.loadSource(source);
+    hls.attachMedia(video);
+  } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+    video.src = source;
+    video.play().catch(() => {});
+  } else {
+    toast('This browser cannot play HLS.', true);
+  }
+  state.started = true;
+}
+
+function selectChannel(number, autoplay) {
+  const channel = state.channels.find((entry) => entry.number === String(number));
+  if (!channel) return;
+  state.active = channel.number;
+  const url = new URL(location.href);
+  url.searchParams.set('channel', channel.number);
+  history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
+  renderRail();
+  renderNow();
+  if (autoplay) {
+    if (casting()) loadOnCast(channel).catch((error) => toast(String(error), true));
+    else play(channel);
+  }
+}
+
+async function refreshChannels() {
+  try {
+    const response = await fetch('/api/v1/public/channels', { cache: 'no-store' });
+    if (!response.ok) throw new Error(`${response.status}`);
+    const channels = await response.json();
+    state.channels = channels;
+    state.fromCache = false;
+    writeCache('atv:channels', channels);
+    if (!channels.length) {
+      $('nowTitle').textContent = 'No channels yet';
+      renderRail();
+      return;
+    }
+    if (!state.active) {
+      const requested = new URLSearchParams(location.search).get('channel');
+      const match = channels.find((channel) => channel.number === requested);
+      state.active = match ? match.number : channels[0].number;
+    } else if (!channels.some((channel) => channel.number === state.active)) {
+      state.active = channels[0].number;
+    }
+    renderRail();
+    renderNow();
+    if (!state.started) {
+      const channel = current();
+      if (channel) play(channel);
+    }
+    $('statusLine').textContent = `Live · ${channels.length} channels`;
+  } catch {
+    if (!state.channels.length) {
+      $('statusLine').textContent = 'Offline';
+      toast('We could not load your channels.', true);
+    }
+  }
+}
+
+async function loadGuide() {
+  try {
+    const response = await fetch(`/api/v1/public/guide?hours=${state.guideHours}`, { cache: 'no-store' });
+    if (!response.ok) throw new Error(`${response.status}`);
+    const guide = await response.json();
+    writeCache('atv:guide', guide);
+    renderGuide(guide);
+  } catch {
+    if (!$('guideBody').querySelector('.guide-row')) {
+      $('guideBody').innerHTML = '<div class="guide-empty">Guide unavailable.</div>';
+    }
+  }
+}
+
+function renderGuide(guide) {
+  const now = Date.now();
+  const start = Math.floor((now - 3_600_000) / 3_600_000) * 3_600_000;
+  const span = state.guideHours * 3_600_000;
+  const nowLeft = Math.max(0, Math.min(100, ((now - start) / span) * 100));
+  const ticks = Array.from({ length: state.guideHours }, (_, index) =>
+    `<span>${fmtClock(start + index * 3_600_000)}</span>`).join('');
+  const rows = guide.map((channel) => {
+    const blocks = channel.items.filter((item) => item.end_ms > start && item.start_ms < start + span).map((item) => {
+      const left = Math.max(0, ((item.start_ms - start) / span) * 100);
+      const width = Math.min(100 - left, ((item.end_ms - item.start_ms) / span) * 100);
+      return `<div class="guide-block ${item.kind === 'filler' ? 'filler' : ''}" style="left:${left}%;width:${Math.max(1, width)}%" title="${esc(item.title)} · ${fmtClock(item.start_ms)}">
+        <span>${esc(item.title)}</span><span class="when">${fmtClock(item.start_ms)}</span>
+      </div>`;
+    }).join('');
+    return `<div class="guide-row" data-number="${esc(channel.number)}">
+      <div class="guide-label"><span class="n">${esc(channel.number)}</span><span class="nm">${esc(channel.name)}</span>${channel.number === state.active ? '<span class="live-dot"></span>' : ''}</div>
+      <div class="guide-track">${blocks}<div class="guide-now" style="left:${nowLeft}%"></div></div>
+    </div>`;
+  }).join('');
+  $('guideBody').innerHTML = `
+    <div class="guide-ticks"><div class="spacer"></div><div class="ticks" style="grid-template-columns:repeat(${state.guideHours},1fr)">${ticks}</div></div>
+    ${rows}`;
+  $('guideRange').textContent = `${fmtClock(start)} – ${fmtClock(start + span)}`;
+  $('guideBody').querySelectorAll('.guide-row[data-number]').forEach((row) => {
+    row.addEventListener('click', () => {
+      selectChannel(row.dataset.number, true);
+      $('player').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+  });
+}
+
+function updateLiveLag() {
+  const edge = state.hls?.liveSyncPosition;
+  const video = $('player');
+  if (edge == null || !Number.isFinite(edge)) { $('goLiveBtn').hidden = true; return; }
+  const lag = edge - video.currentTime;
+  $('goLiveBtn').hidden = !(lag > 10);
+  if (Number.isFinite(lag) && lag > 0) $('goLiveBtn').textContent = `Live −${Math.round(lag)}s`;
+}
+
+$('goLiveBtn').addEventListener('click', () => {
+  const video = $('player');
+  const edge = state.hls?.liveSyncPosition;
+  if (edge != null && Number.isFinite(edge)) video.currentTime = edge;
+  video.play().catch(() => {});
+  $('goLiveBtn').hidden = true;
+});
+$('guideBtn').addEventListener('click', () => $('guide').scrollIntoView({ behavior: 'smooth' }));
+$('fullBtn').addEventListener('click', () => {
+  const video = $('player');
+  if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+  else video.requestFullscreen?.().catch(() => {});
+});
+
+let castSdkPromise = null;
+let castInitialized = false;
+let remotePlayer = null;
+let remoteController = null;
+
+function castContextOrNull() {
+  return window.cast?.framework?.CastContext?.getInstance?.() || null;
+}
+function castSession() {
+  return castContextOrNull()?.getCurrentSession() || null;
+}
+function casting() {
+  return !!castSession();
+}
+function loadCastSdk() {
+  if (window.cast && window.cast.framework) return Promise.resolve();
+  if (castSdkPromise) return castSdkPromise;
+  castSdkPromise = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('Cast SDK load timed out')), 12000);
+    window.__onGCastApiAvailable = (available) => {
+      clearTimeout(timer);
+      if (available) resolve(); else reject(new Error('Cast SDK unavailable'));
+    };
+    const script = document.createElement('script');
+    script.src = 'https://www.gstatic.com/cv/js/sender/v1/cast_sender.js?loadCastFramework=1';
+    script.onerror = () => { clearTimeout(timer); reject(new Error('Failed to load Cast SDK')); };
+    document.head.appendChild(script);
+  });
+  return castSdkPromise;
+}
+function updateCastButton() {
+  const active = casting();
+  $('castBtn').classList.toggle('casting', active);
+  const label = $('castBtn').querySelector('.label');
+  if (label) label.textContent = active ? 'Stop' : 'Cast';
+}
+function updateCastUI() {
+  if (!remotePlayer) return;
+  $('castPlay').textContent = remotePlayer.isPaused ? 'Resume' : 'Pause';
+  $('castMute').textContent = remotePlayer.isMuted ? 'Unmute' : 'Mute';
+  if (Number.isFinite(remotePlayer.volumeLevel)) $('castVolume').value = remotePlayer.volumeLevel;
+  const info = remotePlayer.mediaInfo;
+  const title = info?.metadata?.title;
+  const subtitle = info?.metadata?.subtitle;
+  if (title) $('castNow').textContent = subtitle ? `${title} · ${subtitle}` : title;
+}
+function enterCastMode() {
+  const session = castSession();
+  if (!session) return;
+  state.castDevice = session.getCastDevice()?.friendlyName || 'Chromecast';
+  $('castDevice').textContent = state.castDevice;
+  $('castMode').hidden = false;
+  document.querySelector('.player').classList.add('casting');
+  const video = $('player');
+  video.controls = false;
+  video.pause();
+  if (state.hls) state.hls.stopLoad();
+  $('unmuteBtn').hidden = true;
+  updateCastButton();
+  updateCastUI();
+}
+function exitCastMode() {
+  $('castMode').hidden = true;
+  document.querySelector('.player').classList.remove('casting');
+  const video = $('player');
+  video.controls = true;
+  if (state.hls) state.hls.startLoad();
+  video.play().catch(() => {});
+  $('unmuteBtn').hidden = !video.muted;
+  updateCastButton();
+}
+async function onSessionStateChanged(event) {
+  if (event.sessionState === 'SESSION_STARTED' || event.sessionState === 'SESSION_RESUMED') {
+    enterCastMode();
+    if (!state.castLoading && !remotePlayer?.mediaInfo) {
+      const channel = current();
+      if (channel) loadOnCast(channel).catch((error) => toast(String(error), true));
+    }
+  } else if (event.sessionState === 'SESSION_ENDED') {
+    exitCastMode();
+  } else if (event.sessionState === 'SESSION_START_FAILED') {
+    toast('Could not start the Cast session.', true);
+  }
+}
+async function initializeCast() {
+  const context = castContextOrNull();
+  if (!context) return null;
+  if (!castInitialized) {
+    context.setOptions({
+      receiverApplicationId: state.castReceiverId || 'CC1AD845',
+      autoJoinPolicy: chrome.cast.AutoJoinPolicy.ORIGIN_SCOPED
+    });
+    remotePlayer = new cast.framework.RemotePlayer();
+    remoteController = new cast.framework.RemotePlayerController(remotePlayer);
+    const events = [
+      cast.framework.RemotePlayerEventType.IS_PAUSED_CHANGED,
+      cast.framework.RemotePlayerEventType.IS_MUTED_CHANGED,
+      cast.framework.RemotePlayerEventType.VOLUME_LEVEL_CHANGED,
+      cast.framework.RemotePlayerEventType.MEDIA_INFO_CHANGED,
+      cast.framework.RemotePlayerEventType.PLAYER_STATE_CHANGED
+    ];
+    events.forEach((event) => remoteController.addEventListener(event, updateCastUI));
+    context.addEventListener(
+      cast.framework.CastContextEventType.SESSION_STATE_CHANGED,
+      onSessionStateChanged
+    );
+    castInitialized = true;
+  }
+  return context;
+}
+async function loadOnCast(channel) {
+  const session = castSession();
+  if (!session) { play(channel); return; }
+  const response = await fetch(`/api/v1/public/channels/${encodeURIComponent(channel.number)}/cast`, { method: 'POST' });
+  if (!response.ok) throw new Error(`Cast request failed (${response.status})`);
+  const info = await response.json();
+  const mediaInfo = new chrome.cast.media.MediaInfo(info.media_url, info.content_type);
+  mediaInfo.metadata = new chrome.cast.media.GenericMediaMetadata();
+  mediaInfo.metadata.title = info.title;
+  mediaInfo.metadata.subtitle = `${channel.name} · Channel ${channel.number}`;
+  mediaInfo.metadata.seriesTitle = 'ChannelLoom';
+  mediaInfo.metadata.studio = 'ChannelLoom';
+  mediaInfo.metadata.images = [{ url: `${String(state.castBase).replace(/\/$/, '')}/icons/icon-512.png` }];
+  const request = new chrome.cast.media.LoadRequest(mediaInfo);
+  request.autoplay = true;
+  await session.loadMedia(request);
+  $('castNow').textContent = `${info.title} · ${channel.name}`;
+  updateCastUI();
+}
+async function castActiveChannel() {
+  const channel = current();
+  if (!channel) { toast('Select a channel first.', true); return; }
+  if (!(location.protocol === 'https:' || ['localhost', '127.0.0.1'].includes(location.hostname))) {
+    toast('Cast requires HTTPS or localhost.', true);
+    return;
+  }
+  const context = castContextOrNull();
+  if (!context) {
+    toast('Cast is unavailable. Use Chrome with the Cast extension and a Chromecast on the same network.', true);
+    return;
+  }
+  try {
+    await initializeCast();
+    if (!context.getCurrentSession()) {
+      state.castLoading = true;
+      await context.requestSession();
+    }
+    await loadOnCast(channel);
+    enterCastMode();
+    toast(`Casting ${channel.name}.`);
+  } catch (error) {
+    const message = String(error?.description || error?.message || error);
+    toast(message.toLowerCase().includes('cancel') ? 'Cast cancelled.' : `Cast failed: ${message}`, true);
+  } finally {
+    state.castLoading = false;
+  }
+}
+function stopCasting() {
+  const session = castSession();
+  if (session) session.endSession(true);
+  updateCastButton();
+}
+$('castPlay').addEventListener('click', () => remoteController?.playOrPause());
+$('castMute').addEventListener('click', () => remoteController?.muteOrUnmute());
+$('castVolume').addEventListener('input', (event) => remoteController?.setVolumeLevel(Number(event.target.value)));
+$('castStop').addEventListener('click', () => stopCasting());
+$('castBtn').addEventListener('click', () => {
+  if (castSession()) stopCasting();
+  else castActiveChannel();
+});
+
+const video = $('player');
+$('unmuteBtn').addEventListener('click', () => {
+  if (casting()) {
+    remoteController?.muteOrUnmute();
+    return;
+  }
+  state.muted = false;
+  video.muted = false;
+  video.play().catch(() => {});
+  $('unmuteBtn').hidden = true;
+});
+video.addEventListener('volumechange', () => {
+  if (casting()) return;
+  state.muted = video.muted;
+  $('unmuteBtn').hidden = !video.muted;
+});
+video.addEventListener('waiting', () => { $('bufferChip').hidden = false; });
+video.addEventListener('playing', () => {
+  state.playing = true;
+  $('bufferChip').hidden = true;
+  showTuning(false);
+});
+video.addEventListener('canplay', () => { $('bufferChip').hidden = true; });
+
+document.addEventListener('keydown', (event) => {
+  if (event.target && /input|textarea|select/i.test(event.target.tagName)) return;
+  const index = state.channels.findIndex((channel) => channel.number === state.active);
+  if (event.key === 'ArrowDown' || event.key === ']') {
+    event.preventDefault();
+    const next = state.channels[Math.min(state.channels.length - 1, index + 1)];
+    if (next) selectChannel(next.number, true);
+  } else if (event.key === 'ArrowUp' || event.key === '[') {
+    event.preventDefault();
+    const previous = state.channels[Math.max(0, index - 1)];
+    if (previous) selectChannel(previous.number, true);
+  } else if (event.key.toLowerCase() === 'm') {
+    video.muted = !video.muted;
+  } else if (event.key.toLowerCase() === 'f') {
+    video.requestFullscreen?.().catch(() => {});
+  }
+});
+
+setInterval(() => {
+  $('clock').textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const channel = current();
+  if (channel?.now) $('progress').style.width = `${progress(channel.now)}%`;
+  updateLiveLag();
+}, 1000);
+setInterval(refreshChannels, 15000);
+setInterval(loadGuide, 600000);
+
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js').catch(() => {});
+}
+(async () => {
+  try {
+    const response = await fetch('/api/v1/public/config', { cache: 'no-store' });
+    if (response.ok) {
+      const config = await response.json();
+      if (config.cast_receiver_id) state.castReceiverId = config.cast_receiver_id;
+      if (config.cast_base_url) state.castBase = config.cast_base_url;
+    }
+  } catch {}
+  if (location.protocol === 'https:' || ['localhost', '127.0.0.1'].includes(location.hostname)) {
+    loadCastSdk().then(() => initializeCast()).catch(() => {});
+  }
+})();
+
+const cachedChannels = readCache('atv:channels');
+if (cachedChannels && cachedChannels.length) {
+  state.channels = cachedChannels;
+  const requested = new URLSearchParams(location.search).get('channel');
+  const match = cachedChannels.find((channel) => channel.number === requested);
+  state.active = match ? match.number : cachedChannels[0].number;
+  renderRail();
+  renderNow();
+  showTuning(true);
+}
+const cachedGuide = readCache('atv:guide');
+if (cachedGuide && cachedGuide.length) renderGuide(cachedGuide);
+
+refreshChannels();
+loadGuide();
+if (location.hash === '#guide') setTimeout(() => $('guide').scrollIntoView({ behavior: 'smooth' }), 400);
+</script>
+</body>
+</html>

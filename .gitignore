@@ -1,0 +1,17 @@
+# generated test media and build output
+/testdata/generated/
+/target/
+/.spike/
+*.log
+.env
+/data/
+
+# Android TV build output
+/android-tv/.gradle/
+/android-tv/build/
+/android-tv/app/build/
+/android-tv/local.properties
+
+# Tauri desktop build output
+/desktop/src-tauri/target/
+/desktop/src-tauri/gen/
