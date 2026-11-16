@@ -481,7 +481,7 @@ impl CloudManager {
                     }
                     report.scanned += 1;
                     progress_tick += 1;
-                    if progress_tick % 10 == 0 {
+                    if progress_tick.is_multiple_of(10) {
                         self.update_scan_job(job_id, &report).await;
                     }
                 }
