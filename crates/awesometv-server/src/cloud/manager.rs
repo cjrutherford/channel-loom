@@ -69,7 +69,7 @@ impl CloudManager {
             pool,
             data_dir,
             secret,
-            google: GoogleClient::new(),
+            google: GoogleClient::new()?,
             internal_base: format!(
                 "http://{}:{port}",
                 if bind == "0.0.0.0" || bind == "::" {
@@ -101,6 +101,26 @@ impl CloudManager {
         let cache_prefix = self.data_dir.join("cloud-cache").join(id);
         let _ = tokio::fs::remove_dir_all(cache_prefix).await;
         db::delete_cloud_source(&self.pool, id).await
+    }
+
+    /// Rewrite secrets that were encrypted with a previous key. Enable this by
+    /// setting the new primary `AWESOMETV_SECRET_KEY` and the old key in
+    /// `AWESOMETV_SECRET_KEY_PREVIOUS`, then restarting once.
+    pub async fn rotate_secrets(&self) -> Result<usize> {
+        let mut rotated = 0;
+        for (id, blob) in db::cloud_secret_blobs(&self.pool).await? {
+            match self.secret.rotate(&blob) {
+                Ok(Some(updated)) => {
+                    db::update_cloud_secret_blob(&self.pool, &id, &updated).await?;
+                    rotated += 1;
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    tracing::warn!(%error, source = %id, "cloud secret could not be re-encrypted");
+                }
+            }
+        }
+        Ok(rotated)
     }
 
     pub async fn list_sources(&self) -> Result<Vec<db::CloudSource>> {
@@ -512,7 +532,8 @@ fn parse_google_credentials(auth_type: &str, secret: &str) -> Result<GoogleCrede
                 token_uri: value
                     .get("token_uri")
                     .and_then(|value| value.as_str())
-                    .map(str::to_string),
+                    .map(|uri| super::google::validate_https_endpoint(uri, "token_uri"))
+                    .transpose()?,
             })
         }
         "access_token" => Ok(GoogleCredentials::AccessToken {
@@ -539,7 +560,8 @@ fn parse_google_credentials(auth_type: &str, secret: &str) -> Result<GoogleCrede
                 token_uri: value
                     .get("token_uri")
                     .and_then(|value| value.as_str())
-                    .map(str::to_string),
+                    .map(|uri| super::google::validate_https_endpoint(uri, "token_uri"))
+                    .transpose()?,
             })
         }
         other => bail!("unsupported Google auth type: {other}"),

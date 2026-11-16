@@ -22,7 +22,8 @@ area, is in [`PLAN-REVIEW.md`](PLAN-REVIEW.md).
 | Precache | 24 h look-ahead, 100 GB LRU, raw copy or 720p proxy for slow sources; status and removal in the admin Sources view |
 | Playback | HLS + MPEG-TS/HDHomeRun; trimmed in/out playback; catch-up restart; rolling DVR buffer; music/image items; subtitles, overlays, HDR tonemap, VAAPI; slate fallback |
 | Auth | **Watch** at `/`; **Studio** at `/admin` (login-gated shell, session cookies marked `Secure` behind TLS, per-IP login throttling, Basic auth for API clients) |
-| Abuse controls | Per-client public budgets for API, HLS playlists, media segments, Cast, and MPEG-TS; `429` with `Retry-After` |
+| Abuse controls | Per-client public budgets for API, HLS playlists, media segments, Cast, and MPEG-TS; global and per-client MPEG-TS stream leases; `429`/`503` with retry guidance |
+| API tokens | Revocable Bearer tokens in Studio Settings; SHA-256 hashes at rest; full admin API access |
 | Backups | Create/list/download, staged restore on restart |
 | Sources | Jellyfin import configured; Emby import implemented (no live instance configured) |
 | UI | ChannelLoom Watch and Studio: cinematic player, channel rail, guide timeline, cast mode, skeletons, responsive layouts, and a 10-foot TV mode |

@@ -1,6 +1,7 @@
+use std::net::IpAddr;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use ring::rand::SystemRandom;
@@ -55,27 +56,25 @@ pub struct GoogleClient {
 }
 
 impl GoogleClient {
-    pub fn new() -> Self {
+    pub fn new() -> Result<Self> {
         let api_base = std::env::var("GOOGLE_DRIVE_API_BASE")
             .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| "https://www.googleapis.com/drive/v3".into())
-            .trim_end_matches('/')
-            .to_string();
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| "https://www.googleapis.com/drive/v3".into());
+        let api_base = validate_https_endpoint(&api_base, "GOOGLE_DRIVE_API_BASE")?;
         let token_url = std::env::var("GOOGLE_OAUTH_TOKEN_URL")
             .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
+            .filter(|value| !value.trim().is_empty())
             .unwrap_or_else(|| "https://oauth2.googleapis.com/token".into());
+        let token_url = validate_https_endpoint(&token_url, "GOOGLE_OAUTH_TOKEN_URL")?;
         let agent = ureq::AgentBuilder::new()
             .timeout(Duration::from_secs(60))
             .build();
-        Self {
+        Ok(Self {
             agent,
             api_base,
             token_url,
-        }
+        })
     }
 
     pub fn access_token(&self, credentials: &GoogleCredentials) -> Result<String> {
@@ -233,10 +232,7 @@ impl GoogleClient {
         remote_id: &str,
         range: Option<&str>,
     ) -> Result<ureq::Response> {
-        let mut url = Url::parse(&format!("{}/files/{}", self.api_base, remote_id))?;
-        url.query_pairs_mut()
-            .append_pair("alt", "media")
-            .append_pair("supportsAllDrives", "true");
+        let url = file_url(&self.api_base, remote_id)?;
         let mut request = self
             .agent
             .get(url.as_str())
@@ -257,6 +253,67 @@ impl GoogleClient {
             .call()
             .map_err(|error| anyhow::anyhow!("Google Drive request failed: {error}"))?;
         response.into_json().context("parse Google Drive response")
+    }
+}
+
+fn file_url(api_base: &str, remote_id: &str) -> Result<Url> {
+    let mut url = Url::parse(&format!("{}/files", api_base.trim_end_matches('/')))?;
+    url.path_segments_mut()
+        .map_err(|_| anyhow::anyhow!("Google API base cannot be a base URL"))?
+        .pop_if_empty()
+        .push(remote_id);
+    url.query_pairs_mut()
+        .append_pair("alt", "media")
+        .append_pair("supportsAllDrives", "true");
+    Ok(url)
+}
+
+/// Reject plaintext and obviously internal endpoints. Operator environment
+/// values and service-account `token_uri` fields both pass through here so a
+/// cloud source cannot turn the server into an SSRF relay.
+pub(crate) fn validate_https_endpoint(value: &str, label: &str) -> Result<String> {
+    let trimmed = value.trim();
+    let parsed = Url::parse(trimmed).with_context(|| format!("{label} must be a URL"))?;
+    if parsed.scheme() != "https" {
+        bail!("{label} must use https");
+    }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        bail!("{label} must not include credentials");
+    }
+    let host = parsed
+        .host_str()
+        .with_context(|| format!("{label} must include a host"))?;
+    let host_lower = host.to_ascii_lowercase();
+    if host_lower == "localhost"
+        || host_lower.ends_with(".localhost")
+        || host_lower.ends_with(".internal")
+        || host_lower == "metadata"
+    {
+        bail!("{label} must not target an internal host");
+    }
+    if let Ok(ip) = host.parse::<IpAddr>()
+        && is_private_or_loopback(ip)
+    {
+        bail!("{label} must not target a private or loopback address");
+    }
+    Ok(trimmed.trim_end_matches('/').to_string())
+}
+
+fn is_private_or_loopback(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(address) => {
+            address.is_loopback()
+                || address.is_private()
+                || address.is_link_local()
+                || address.is_unspecified()
+                || (address.octets()[0] == 100 && (64..=127).contains(&address.octets()[1]))
+        }
+        IpAddr::V6(address) => {
+            address.is_loopback()
+                || address.is_unspecified()
+                || address.is_unique_local()
+                || address.is_unicast_link_local()
+        }
     }
 }
 
@@ -302,4 +359,43 @@ fn pem_to_der(pem: &str) -> Result<Vec<u8>> {
     STANDARD
         .decode(body)
         .context("decode service account private key PEM")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accepts_google_https_endpoints() {
+        assert_eq!(
+            validate_https_endpoint("https://www.googleapis.com/drive/v3/", "api").unwrap(),
+            "https://www.googleapis.com/drive/v3"
+        );
+        assert!(validate_https_endpoint("https://oauth2.googleapis.com/token", "token").is_ok());
+    }
+
+    #[test]
+    fn rejects_plaintext_and_internal_endpoints() {
+        for value in [
+            "http://www.googleapis.com/drive/v3",
+            "https://localhost/token",
+            "https://127.0.0.1/token",
+            "https://10.0.0.5/token",
+            "https://169.254.169.254/latest/meta-data",
+            "https://metadata.google.internal/token",
+            "https://user:pass@example.com/token",
+        ] {
+            assert!(
+                validate_https_endpoint(value, "test").is_err(),
+                "accepted {value}"
+            );
+        }
+    }
+
+    #[test]
+    fn encodes_remote_ids_as_one_path_segment() {
+        let url = file_url("https://www.googleapis.com/drive/v3", "a/b?c#d").unwrap();
+        assert!(url.path().ends_with("/files/a%2Fb%3Fc%23d"));
+        assert_eq!(url.query(), Some("alt=media&supportsAllDrives=true"));
+    }
 }

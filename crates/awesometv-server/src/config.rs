@@ -40,6 +40,8 @@ pub struct Config {
     pub rate_limit_playlist_per_min: u32,
     pub rate_limit_segment_per_min: u32,
     pub rate_limit_stream_per_min: u32,
+    pub max_concurrent_streams: u32,
+    pub max_streams_per_client: u32,
 }
 
 impl Config {
@@ -134,6 +136,8 @@ impl Config {
         let rate_limit_playlist_per_min = env_u32("AWESOMETV_RATE_LIMIT_PLAYLIST_PER_MIN", 120);
         let rate_limit_segment_per_min = env_u32("AWESOMETV_RATE_LIMIT_SEGMENT_PER_MIN", 1_800);
         let rate_limit_stream_per_min = env_u32("AWESOMETV_RATE_LIMIT_STREAM_PER_MIN", 12);
+        let max_concurrent_streams = env_u32("AWESOMETV_MAX_CONCURRENT_STREAMS", 4).max(1);
+        let max_streams_per_client = env_u32("AWESOMETV_MAX_STREAMS_PER_CLIENT", 2);
 
         Self {
             bind,
@@ -171,6 +175,8 @@ impl Config {
             rate_limit_playlist_per_min,
             rate_limit_segment_per_min,
             rate_limit_stream_per_min,
+            max_concurrent_streams,
+            max_streams_per_client,
         }
     }
 }

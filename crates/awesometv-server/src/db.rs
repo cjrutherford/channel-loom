@@ -287,6 +287,20 @@ pub async fn init(data_dir: &Path) -> Result<SqlitePool> {
 
     sqlx::query(
         r#"
+        CREATE TABLE IF NOT EXISTS api_tokens (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            token_hash TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            last_used_at INTEGER
+        );
+        "#,
+    )
+    .execute(&pool)
+    .await?;
+
+    sqlx::query(
+        r#"
         CREATE TABLE IF NOT EXISTS cloud_sources (
             id TEXT PRIMARY KEY,
             provider TEXT NOT NULL,
@@ -2892,4 +2906,104 @@ pub async fn channel_by_id(pool: &SqlitePool, id: &str) -> Result<Option<Channel
 
 pub fn now_ms() -> i64 {
     time::OffsetDateTime::now_utc().unix_timestamp() * 1000
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ApiToken {
+    pub id: String,
+    pub name: String,
+    pub created_at: i64,
+    pub last_used_at: Option<i64>,
+}
+
+pub async fn create_api_token(
+    pool: &SqlitePool,
+    id: &str,
+    name: &str,
+    token_hash: &str,
+) -> Result<ApiToken> {
+    let created_at = now_ms();
+    sqlx::query("INSERT INTO api_tokens (id, name, token_hash, created_at) VALUES (?, ?, ?, ?)")
+        .bind(id)
+        .bind(name)
+        .bind(token_hash)
+        .bind(created_at)
+        .execute(pool)
+        .await?;
+    Ok(ApiToken {
+        id: id.to_string(),
+        name: name.to_string(),
+        created_at,
+        last_used_at: None,
+    })
+}
+
+pub async fn list_api_tokens(pool: &SqlitePool) -> Result<Vec<ApiToken>> {
+    let rows = sqlx::query(
+        "SELECT id, name, created_at, last_used_at FROM api_tokens ORDER BY created_at DESC",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| ApiToken {
+            id: row.get("id"),
+            name: row.get("name"),
+            created_at: row.get("created_at"),
+            last_used_at: row.get("last_used_at"),
+        })
+        .collect())
+}
+
+pub async fn delete_api_token(pool: &SqlitePool, id: &str) -> Result<bool> {
+    let result = sqlx::query("DELETE FROM api_tokens WHERE id = ?")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(result.rows_affected() > 0)
+}
+
+pub async fn api_token_hash(pool: &SqlitePool, id: &str) -> Result<Option<String>> {
+    let row = sqlx::query("SELECT token_hash FROM api_tokens WHERE id = ? LIMIT 1")
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row.map(|row| row.get("token_hash")))
+}
+
+pub async fn touch_api_token(pool: &SqlitePool, id: &str, now: i64) -> Result<()> {
+    sqlx::query(
+        "UPDATE api_tokens SET last_used_at = ? WHERE id = ? AND (last_used_at IS NULL OR last_used_at < ?)",
+    )
+    .bind(now)
+    .bind(id)
+    .bind(now - 60_000)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn cloud_secret_blobs(pool: &SqlitePool) -> Result<Vec<(String, String)>> {
+    let rows = sqlx::query(
+        "SELECT id, secret_blob FROM cloud_sources WHERE secret_blob IS NOT NULL AND secret_blob != ''",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| (row.get("id"), row.get("secret_blob")))
+        .collect())
+}
+
+pub async fn update_cloud_secret_blob(
+    pool: &SqlitePool,
+    id: &str,
+    secret_blob: &str,
+) -> Result<()> {
+    sqlx::query("UPDATE cloud_sources SET secret_blob = ? WHERE id = ?")
+        .bind(secret_blob)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
 }

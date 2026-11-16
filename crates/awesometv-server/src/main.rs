@@ -11,6 +11,7 @@ mod precache;
 mod programming;
 mod scan;
 mod scripted;
+mod tokens;
 
 use std::sync::Arc;
 
@@ -19,7 +20,7 @@ use anyhow::Context;
 use crate::api::{AppState, LoginThrottle};
 use crate::config::Config;
 use crate::engine::Engine;
-use crate::limits::{MediaRateLimiter, RateLimits};
+use crate::limits::{MediaRateLimiter, RateLimits, StreamLimiter};
 use crate::precache::Precache;
 
 #[tokio::main]
@@ -63,6 +64,11 @@ async fn main() -> anyhow::Result<()> {
         cloud.clone(),
         config.stream_max_kbps,
     ));
+    if let Ok(rotated) = cloud.rotate_secrets().await
+        && rotated > 0
+    {
+        tracing::info!(rotated, "re-encrypted cloud secrets with the primary key");
+    }
     let precache = Arc::new(Precache::new(&config, pool.clone()));
     precache.start();
     let state = AppState {
@@ -80,6 +86,10 @@ async fn main() -> anyhow::Result<()> {
             segment_per_min: config.rate_limit_segment_per_min,
             stream_per_min: config.rate_limit_stream_per_min,
         }))),
+        streams: Arc::new(StreamLimiter::new(
+            config.max_concurrent_streams as usize,
+            config.max_streams_per_client as usize,
+        )),
         precache: precache.clone(),
     };
     let prewarm = engine.clone();

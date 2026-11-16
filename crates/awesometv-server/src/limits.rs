@@ -1,5 +1,8 @@
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
+use std::sync::{Arc, Mutex};
+
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use axum::http::HeaderMap;
 
@@ -60,6 +63,65 @@ impl RateLimits {
             MediaClass::Segment => self.segment_per_min,
             MediaClass::Stream => self.stream_per_min,
         }
+    }
+}
+
+/// Global and per-client caps for long-lived MPEG-TS sessions. A lease is held
+/// until the ffmpeg child exits, so a client cannot open an unlimited number of
+/// tuners or starve every other viewer.
+pub struct StreamLimiter {
+    global: Arc<Semaphore>,
+    per_client: Mutex<HashMap<String, usize>>,
+    max_per_client: usize,
+}
+
+pub struct StreamLease {
+    limiter: Arc<StreamLimiter>,
+    key: String,
+    _permit: OwnedSemaphorePermit,
+}
+
+impl StreamLimiter {
+    pub fn new(max_global: usize, max_per_client: usize) -> Self {
+        Self {
+            global: Arc::new(Semaphore::new(max_global.max(1))),
+            per_client: Mutex::new(HashMap::new()),
+            max_per_client,
+        }
+    }
+
+    pub fn try_acquire(self: &Arc<Self>, key: &str) -> Option<StreamLease> {
+        let permit = self.global.clone().try_acquire_owned().ok()?;
+        let mut counts = self.per_client.lock().ok()?;
+        let count = counts.get(key).copied().unwrap_or(0);
+        if self.max_per_client > 0 && count >= self.max_per_client {
+            return None;
+        }
+        counts.insert(key.to_string(), count + 1);
+        Some(StreamLease {
+            limiter: self.clone(),
+            key: key.to_string(),
+            _permit: permit,
+        })
+    }
+
+    fn release(&self, key: &str) {
+        let Ok(mut counts) = self.per_client.lock() else {
+            return;
+        };
+        let Some(count) = counts.get_mut(key) else {
+            return;
+        };
+        *count = count.saturating_sub(1);
+        if *count == 0 {
+            counts.remove(key);
+        }
+    }
+}
+
+impl Drop for StreamLease {
+    fn drop(&mut self) {
+        self.limiter.release(&self.key);
     }
 }
 
@@ -291,6 +353,18 @@ mod tests {
             client_key(&headers, Some(peer("10.0.0.2:1234"))),
             "203.0.113.9"
         );
+    }
+
+    #[test]
+    fn stream_leases_enforce_global_and_client_caps() {
+        let limiter = Arc::new(StreamLimiter::new(2, 1));
+        let first = limiter.try_acquire("a").expect("first stream");
+        assert!(limiter.try_acquire("a").is_none());
+        let second = limiter.try_acquire("b").expect("second stream");
+        assert!(limiter.try_acquire("c").is_none());
+        drop(first);
+        assert!(limiter.try_acquire("c").is_some());
+        drop(second);
     }
 
     #[test]

@@ -25,10 +25,11 @@ use crate::db::{self, Channel, ChannelItem, Media};
 use crate::engine::Engine;
 use crate::external;
 use crate::jellyfin;
-use crate::limits::{MediaClass, MediaRateLimiter, client_key};
+use crate::limits::{MediaClass, MediaRateLimiter, StreamLimiter, client_key};
 use crate::programming;
 use crate::scan;
 use crate::scripted;
+use crate::tokens;
 
 #[derive(Clone)]
 pub struct Session {
@@ -186,6 +187,7 @@ pub struct AppState {
     pub sessions: Arc<Mutex<HashMap<String, Session>>>,
     pub login_throttle: Arc<Mutex<LoginThrottle>>,
     pub media_limits: Arc<Mutex<MediaRateLimiter>>,
+    pub streams: Arc<StreamLimiter>,
     pub precache: Arc<crate::precache::Precache>,
 }
 
@@ -197,6 +199,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/sources/jellyfin/sync", post(jellyfin_sync))
         .route("/api/v1/sources/emby/sync", post(emby_sync))
         .route("/api/v1/stats", get(stats))
+        .route("/api/v1/tokens", get(list_tokens).post(create_token))
+        .route("/api/v1/tokens/{id}", delete(delete_token))
         .route("/api/v1/metrics", get(metrics))
         .route("/api/v1/precache", get(precache_status))
         .route("/api/v1/precache/{media_id}", delete(remove_precache))
@@ -2357,7 +2361,7 @@ async fn discover(State(state): State<AppState>) -> Response {
         "DeviceAuth": "awesometv",
         "BaseURL": base,
         "LineupURL": format!("{base}/lineup.json"),
-        "TunerCount": 4
+        "TunerCount": state.config.max_concurrent_streams
     }))
     .into_response()
 }
@@ -2401,19 +2405,26 @@ async fn device_xml(State(state): State<AppState>) -> Response {
     <manufacturer>Silicondust</manufacturer>
     <modelName>HDHR-AWESOME</modelName>
     <modelNumber>HDHR-AWESOME</modelNumber>
-    <tunerCount>4</tunerCount>
+    <tunerCount>{}</tunerCount>
     <serialNumber>A11CE001</serialNumber>
     <UDN>uuid:A11CE001</UDN>
   </device>
-</root>"#
+</root>"#,
+        state.config.max_concurrent_streams
     );
     ([(header::CONTENT_TYPE, "application/xml")], body).into_response()
 }
 
 async fn ts_stream(
     State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
     Path(params): Path<std::collections::HashMap<String, String>>,
 ) -> Result<Response, ApiError> {
+    let lease = state
+        .streams
+        .try_acquire(&client_key(&headers, Some(peer)))
+        .ok_or_else(|| ApiError::service_unavailable("all tuners are in use"))?;
     let file = params
         .get("file")
         .ok_or_else(|| ApiError::bad_request("missing channel"))?;
@@ -2453,6 +2464,7 @@ async fn ts_stream(
         .take()
         .ok_or_else(|| ApiError::service_unavailable("TS muxer has no output"))?;
     tokio::spawn(async move {
+        let _lease = lease;
         let _ = child.wait().await;
     });
     Ok((
@@ -2463,6 +2475,100 @@ async fn ts_stream(
         Body::from_stream(ReaderStream::new(stdout)),
     )
         .into_response())
+}
+
+#[derive(Deserialize)]
+struct CreateTokenRequest {
+    name: String,
+}
+
+#[derive(Serialize)]
+struct CreatedToken {
+    id: String,
+    name: String,
+    token: String,
+    created_at: i64,
+}
+
+async fn list_tokens(State(state): State<AppState>) -> Result<Json<Vec<db::ApiToken>>, ApiError> {
+    Ok(Json(db::list_api_tokens(&state.pool).await.map_err(
+        |error| ApiError::internal(format!("list tokens: {error}")),
+    )?))
+}
+
+async fn create_token(
+    State(state): State<AppState>,
+    Json(request): Json<CreateTokenRequest>,
+) -> Result<Json<CreatedToken>, ApiError> {
+    let name = request.name.trim();
+    if name.is_empty() {
+        return Err(ApiError::bad_request("token name is required"));
+    }
+    if name.len() > 80 {
+        return Err(ApiError::bad_request("token name is too long"));
+    }
+    let generated =
+        tokens::generate().map_err(|error| ApiError::internal(format!("create token: {error}")))?;
+    let created = db::create_api_token(&state.pool, &generated.id, name, &generated.hash)
+        .await
+        .map_err(|error| ApiError::internal(format!("store token: {error}")))?;
+    tracing::info!(token = %generated.id, name, "API token created");
+    Ok(Json(CreatedToken {
+        id: created.id,
+        name: created.name,
+        token: generated.token,
+        created_at: created.created_at,
+    }))
+}
+
+async fn delete_token(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let removed = db::delete_api_token(&state.pool, &id)
+        .await
+        .map_err(|error| ApiError::internal(format!("delete token: {error}")))?;
+    if !removed {
+        return Err(ApiError::not_found("token not found"));
+    }
+    tracing::info!(token = %id, "API token revoked");
+    Ok(StatusCode::NO_CONTENT)
+}
+
+fn bearer_token(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split_once(' '))
+        .and_then(|(scheme, value)| {
+            scheme
+                .eq_ignore_ascii_case("bearer")
+                .then_some(value.trim())
+        })
+        .filter(|value| !value.is_empty())
+}
+
+async fn verify_api_token(state: &AppState, token: &str) -> bool {
+    let Some((id, secret)) = tokens::parse(token) else {
+        return false;
+    };
+    let stored = match db::api_token_hash(&state.pool, id).await {
+        Ok(value) => value,
+        Err(error) => {
+            tracing::warn!(%error, "API token lookup failed");
+            return false;
+        }
+    };
+    let Some(stored) = stored else {
+        return false;
+    };
+    if !tokens::verify_secret(secret, &stored) {
+        return false;
+    }
+    if let Err(error) = db::touch_api_token(&state.pool, id, db::now_ms()).await {
+        tracing::warn!(%error, "could not update API token last-used time");
+    }
+    true
 }
 
 async fn request_is_authorized(state: &AppState, headers: &HeaderMap) -> bool {
@@ -2477,11 +2583,13 @@ async fn request_is_authorized(state: &AppState, headers: &HeaderMap) -> bool {
         })
         .and_then(|bytes| String::from_utf8(bytes).ok())
         .is_some_and(|credentials| {
-            credentials
-                == format!(
+            constant_time_eq(
+                &credentials,
+                &format!(
                     "{}:{}",
                     state.config.admin_user, state.config.admin_password
-                )
+                ),
+            )
         });
 
     let session_ok = if let Some(token) = session_token(headers) {
@@ -2498,15 +2606,52 @@ async fn request_is_authorized(state: &AppState, headers: &HeaderMap) -> bool {
         false
     };
 
-    basic_ok || session_ok
+    let bearer_ok = match bearer_token(headers) {
+        Some(token) => verify_api_token(state, token).await,
+        None => false,
+    };
+
+    basic_ok || session_ok || bearer_ok
 }
 
-async fn basic_auth(State(state): State<AppState>, request: Request, next: Next) -> Response {
+async fn basic_auth(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let key = client_key(request.headers(), Some(peer));
+    let now = db::now_ms();
+    if let Some(retry_after) = state.login_throttle.lock().await.retry_after(&key, now) {
+        let mut response = (
+            StatusCode::TOO_MANY_REQUESTS,
+            "Too many failed authentication attempts\n",
+        )
+            .into_response();
+        if let Ok(value) = HeaderValue::from_str(&retry_after.to_string()) {
+            response.headers_mut().insert(header::RETRY_AFTER, value);
+        }
+        return response;
+    }
     if request_is_authorized(&state, request.headers()).await {
         next.run(request).await
     } else {
+        state.login_throttle.lock().await.record_failure(&key, now);
         (StatusCode::UNAUTHORIZED, "Authentication required\n").into_response()
     }
+}
+
+fn constant_time_eq(left: &str, right: &str) -> bool {
+    let left = left.as_bytes();
+    let right = right.as_bytes();
+    if left.len() != right.len() {
+        return false;
+    }
+    let mut difference = 0u8;
+    for (left, right) in left.iter().zip(right) {
+        difference |= left ^ right;
+    }
+    difference == 0
 }
 
 fn session_token(headers: &HeaderMap) -> Option<String> {

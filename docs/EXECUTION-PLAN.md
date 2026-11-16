@@ -122,10 +122,11 @@ Cast is a first-class playback target, not an afterthought.
 
 - Admin/public route split: **done**.
 - Public login throttling and secure cookies: **done**.
+- API tokens (Bearer, hashed, revocable in Studio): **done**.
 - Rate limits for public HLS, Cast, catch-up, DVR, and webhooks: **public media and API budgets done**; webhook limits will land with webhook verification.
-- Secrets encrypted at rest; key rotation documented: **partial**.
-- SSRF protections for cloud and peer URLs: **not reviewed**.
-- Provider/webhook signature verification: **not started**.
+- Secrets encrypted at rest; key rotation with previous keys and startup re-encryption: **done**.
+- SSRF protections for cloud and peer URLs: **reviewed for current surfaces**; repeat before P2P/provider webhooks.
+- Provider/webhook signature verification: **not started**; no webhook receiver exists yet.
 - No admin or library data on public/peer surfaces: **public API projections are clean; peer surfaces do not exist yet**.
 
 ## Sequencing
@@ -176,7 +177,7 @@ Recommended order:
 - Cache budget and secret-key recovery policy.
 - P2P discovery, pairing, share scope, numbering, re-sharing policy.
 - OIDC/roles/audit scope and whether `/admin` stays LAN/Tailscale-only until then.
-- Public capacity policy and concurrent tuner/stream caps.
+- Public capacity policy and capacity calculator (stream caps are in place).
 - ARM target and hardware profiles.
 
 Decided: public hostname and reverse proxy (`atv.christopherrutherford.net`),
