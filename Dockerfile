@@ -1,6 +1,9 @@
 FROM rust:1.98-bookworm AS build
 WORKDIR /app
-COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
+# The base image already provides the pinned Rust release. Copying the
+# rust-toolchain file makes rustup try to sync the toolchain on every build,
+# which fails when the builder has no DNS.
+COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 RUN cargo build --release -p awesometv-server
 

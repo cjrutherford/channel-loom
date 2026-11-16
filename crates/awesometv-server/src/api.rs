@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::process::Stdio;
 use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 
 use axum::body::Body;
 use axum::extract::{Path, Query, Request, State};
@@ -1903,7 +1904,7 @@ async fn cast_playlist(
     let channel = db::channel_by_number(&state.pool, number)
         .await?
         .ok_or_else(|| ApiError::not_found("channel not found"))?;
-    let playlist = state.engine.ensure(&channel).await?;
+    let playlist = playlist_for_channel(&state, &channel).await?;
     let body = tokio::fs::read_to_string(&playlist).await?;
     let base = cast_base(&state.config);
     let body = body
@@ -2100,6 +2101,56 @@ async fn catchup_segment(
         .into_response())
 }
 
+fn playlist_is_fresh(path: &std::path::Path, max_age: Duration) -> bool {
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return false;
+    };
+    let Ok(modified) = metadata.modified() else {
+        return false;
+    };
+    let Ok(age) = SystemTime::now().duration_since(modified) else {
+        return false;
+    };
+    if age > max_age {
+        return false;
+    }
+    let Ok(body) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    body.lines().any(|line| line.ends_with(".ts"))
+}
+
+/// Return the current playlist immediately when it is live, and warm the next
+/// producer in the background. This keeps a receiver's playlist requests from
+/// blocking on a slow probe at an item boundary.
+async fn playlist_for_channel(
+    state: &AppState,
+    channel: &Channel,
+) -> Result<std::path::PathBuf, ApiError> {
+    let path = state
+        .config
+        .data_dir
+        .join("hls")
+        .join(channel.number.replace('.', "_"))
+        .join("index.m3u8");
+    if playlist_is_fresh(&path, Duration::from_secs(15)) {
+        let engine = state.engine.clone();
+        let channel = channel.clone();
+        let number = channel.number.clone();
+        tokio::spawn(async move {
+            if let Err(error) = engine.ensure(&channel).await {
+                tracing::warn!(%error, channel = %number, "background playlist ensure failed");
+            }
+        });
+        return Ok(path);
+    }
+    state
+        .engine
+        .ensure(channel)
+        .await
+        .map_err(|error| ApiError::service_unavailable(format!("{error:#}")))
+}
+
 async fn hls_playlist(
     State(state): State<AppState>,
     Path(file): Path<String>,
@@ -2110,11 +2161,7 @@ async fn hls_playlist(
     let channel = db::channel_by_number(&state.pool, number)
         .await?
         .ok_or_else(|| ApiError::not_found("channel not found"))?;
-    let playlist = state
-        .engine
-        .ensure(&channel)
-        .await
-        .map_err(|error| ApiError::service_unavailable(format!("{error:#}")))?;
+    let playlist = playlist_for_channel(&state, &channel).await?;
     let body = tokio::fs::read_to_string(&playlist).await?;
     // The producer writes relative segment names. Prefix them with the channel
     // number so they resolve under /channel/{number}/{file}.

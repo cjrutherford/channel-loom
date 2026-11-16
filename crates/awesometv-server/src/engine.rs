@@ -316,6 +316,7 @@ impl Engine {
             &media_kind,
             watermark_path,
             self.max_kbps,
+            false,
         )?;
         wait_for_ready(&playlist, Duration::from_secs(20), 1).await?;
         let mut catchups = self.catchups.lock().await;
@@ -603,7 +604,9 @@ impl Engine {
             .join(channel.number.replace('.', "_"));
         tokio::fs::create_dir_all(&out_dir).await?;
 
+        let mut preserve_playlist = false;
         if let Some(runner) = runners.get_mut(&channel.id) {
+            preserve_playlist = true;
             if runner.item_key == item_key {
                 match runner.child.try_wait()? {
                     None => return Ok(runner.playlist.clone()),
@@ -639,6 +642,7 @@ impl Engine {
                 &media_kind,
                 watermark_path,
                 self.max_kbps,
+                preserve_playlist,
             )?
         };
         let segment_seconds = channel.stream.segment_seconds.clamp(2, 10);
@@ -678,11 +682,14 @@ fn start_producer(
     media_kind: &str,
     watermark: Option<&Path>,
     max_kbps: i64,
+    preserve_playlist: bool,
 ) -> Result<(PathBuf, Child)> {
     let playlist = out_dir.join("index.m3u8");
-    // Drop the previous run's segments so a viewer cannot be served a stale
-    // playlist while the restarted producer fills.
-    clear_hls_dir(out_dir);
+    // On an item transition keep the existing playlist so the next producer can
+    // append with a discontinuity and receivers never see a reset.
+    if !preserve_playlist {
+        clear_hls_dir(out_dir);
+    }
     let log_dir = data_dir.join("logs");
     std::fs::create_dir_all(&log_dir)?;
     let log_path = log_dir.join(format!("channel-{}.log", channel.number));
@@ -750,6 +757,8 @@ fn start_producer(
     if media_kind == "music" {
         if let Some(index) = probe.audio_index {
             command.arg("-map").arg(format!("0:{index}"));
+        } else {
+            command.arg("-map").arg("0:a:0?");
         }
         command.arg("-vn");
     } else {
@@ -762,7 +771,9 @@ fn start_producer(
             if let Some(index) = probe.audio_index {
                 command.arg("-map").arg(format!("0:{index}"));
             } else {
-                command.arg("-an");
+                // The probe may have timed out; keep the first audio track
+                // instead of silently producing a video-only stream.
+                command.arg("-map").arg("0:a:0?");
             }
         }
         if animated_watermark.is_some() {
@@ -1077,6 +1088,7 @@ async fn run_dvr(
             &resolved.kind,
             watermark_path,
             max_kbps,
+            false,
         ) {
             Ok(value) => value,
             Err(error) => {
@@ -1346,6 +1358,23 @@ fn media_input(path: &Path) -> String {
 }
 
 fn probe_streams(path: &Path, stream: &crate::db::StreamSettings) -> StreamProbe {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let source = path.to_path_buf();
+    let label = path.display().to_string();
+    let settings = stream.clone();
+    std::thread::spawn(move || {
+        let _ = sender.send(probe_streams_blocking(&source, &settings));
+    });
+    match receiver.recv_timeout(Duration::from_secs(6)) {
+        Ok(probe) => probe,
+        Err(_) => {
+            tracing::warn!(path = %label, "ffprobe timed out; using defaults");
+            StreamProbe::default()
+        }
+    }
+}
+
+fn probe_streams_blocking(path: &Path, stream: &crate::db::StreamSettings) -> StreamProbe {
     let output = Command::new("ffprobe")
         .arg("-v")
         .arg("error")

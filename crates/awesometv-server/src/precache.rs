@@ -267,10 +267,11 @@ impl Precache {
                 .map(|part| String::from_utf8_lossy(part))
                 .collect::<Vec<_>>()
                 .join(" ");
-            if command.contains("ffmpeg")
-                && command.contains("-i /media/")
-                && !command.contains("/precache/")
-            {
+            let media_path = command.contains("/media/") && !command.contains("/precache/");
+            let is_live =
+                command.contains("ffmpeg") && command.contains("-i /media/") && media_path;
+            let is_probe = command.contains("ffprobe") && media_path;
+            if is_live || is_probe {
                 return true;
             }
         }
