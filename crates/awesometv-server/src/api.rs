@@ -4,8 +4,8 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use axum::body::Body;
-use axum::extract::{Path, Query, Request, State};
-use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
+use axum::extract::{ConnectInfo, Path, Query, Request, State};
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{delete, get, post};
@@ -25,6 +25,7 @@ use crate::db::{self, Channel, ChannelItem, Media};
 use crate::engine::Engine;
 use crate::external;
 use crate::jellyfin;
+use crate::limits::{MediaClass, MediaRateLimiter, client_key};
 use crate::programming;
 use crate::scan;
 use crate::scripted;
@@ -133,6 +134,49 @@ mod throttle_tests {
     }
 }
 
+#[cfg(test)]
+mod rate_limit_tests {
+    use super::*;
+
+    #[test]
+    fn classifies_public_surfaces() {
+        assert_eq!(
+            media_class(&Method::GET, "/api/v1/public/channels"),
+            Some(MediaClass::Api)
+        );
+        assert_eq!(
+            media_class(&Method::POST, "/api/v1/public/channels/1/cast"),
+            Some(MediaClass::Cast)
+        );
+        assert_eq!(
+            media_class(&Method::GET, "/channel/1.m3u8"),
+            Some(MediaClass::Playlist)
+        );
+        assert_eq!(
+            media_class(&Method::GET, "/channel/1/00001.ts"),
+            Some(MediaClass::Segment)
+        );
+        assert_eq!(
+            media_class(&Method::GET, "/cast/1.m3u8"),
+            Some(MediaClass::Playlist)
+        );
+        assert_eq!(
+            media_class(&Method::GET, "/catchup/abc/00001.ts"),
+            Some(MediaClass::Segment)
+        );
+        assert_eq!(
+            media_class(&Method::GET, "/auto/v1.ts"),
+            Some(MediaClass::Stream)
+        );
+        assert_eq!(
+            media_class(&Method::GET, "/discover.json"),
+            Some(MediaClass::Api)
+        );
+        assert_eq!(media_class(&Method::GET, "/"), None);
+        assert_eq!(media_class(&Method::GET, "/admin"), None);
+    }
+}
+
 #[derive(Clone)]
 pub struct AppState {
     pub config: Config,
@@ -141,6 +185,7 @@ pub struct AppState {
     pub cloud: Arc<CloudManager>,
     pub sessions: Arc<Mutex<HashMap<String, Session>>>,
     pub login_throttle: Arc<Mutex<LoginThrottle>>,
+    pub media_limits: Arc<Mutex<MediaRateLimiter>>,
     pub precache: Arc<crate::precache::Precache>,
 }
 
@@ -278,7 +323,11 @@ pub fn router(state: AppState) -> Router {
         .route("/dvr/{number}/{file}", get(dvr_segment))
         .route("/cloud/{source}/{remote_id}", get(cloud_proxy))
         .route("/cast/{file}", get(cast_playlist))
-        .route("/cast/{number}/{file}", get(cast_segment));
+        .route("/cast/{number}/{file}", get(cast_segment))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            public_rate_limit,
+        ));
 
     protected.merge(public).with_state(state)
 }
@@ -313,33 +362,86 @@ fn request_is_secure(headers: &HeaderMap) -> bool {
         })
 }
 
-/// Prefer the header the reverse proxy sets itself. `X-Forwarded-For` is
-/// append-only, so the last entry is the one added by the closest proxy; using
-/// the first entry would let a client spoof its way around the limiter.
-fn client_key(headers: &HeaderMap) -> String {
-    headers
-        .get("x-real-ip")
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .or_else(|| {
-            headers
-                .get("x-forwarded-for")
-                .and_then(|value| value.to_str().ok())
-                .and_then(|value| value.rsplit(',').next())
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-        })
-        .unwrap_or("unknown")
-        .to_string()
+fn media_class(method: &Method, path: &str) -> Option<MediaClass> {
+    if path.starts_with("/api/v1/public/") {
+        if *method == Method::POST && path.ends_with("/cast") {
+            return Some(MediaClass::Cast);
+        }
+        return Some(MediaClass::Api);
+    }
+    if path.starts_with("/iptv/")
+        || matches!(
+            path,
+            "/discover.json" | "/lineup.json" | "/lineup_status.json" | "/device.xml"
+        )
+    {
+        return Some(MediaClass::Api);
+    }
+    if path.starts_with("/channel/")
+        || path.starts_with("/cast/")
+        || path.starts_with("/dvr/")
+        || path.starts_with("/catchup/")
+    {
+        return Some(if path.ends_with(".m3u8") {
+            MediaClass::Playlist
+        } else {
+            MediaClass::Segment
+        });
+    }
+    if path.starts_with("/auto/") || path.starts_with("/tuner/") {
+        return Some(MediaClass::Stream);
+    }
+    if path.starts_with("/cloud/") {
+        return Some(MediaClass::Segment);
+    }
+    None
+}
+
+async fn public_rate_limit(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+    request: Request,
+    next: Next,
+) -> Response {
+    let Some(class) = media_class(request.method(), request.uri().path()) else {
+        return next.run(request).await;
+    };
+    let key = client_key(&headers, Some(peer));
+    let now = db::now_ms();
+    let retry_after = state.media_limits.lock().await.check(&key, class, now);
+    if let Some(seconds) = retry_after {
+        tracing::warn!(
+            client = %key,
+            class = class.as_str(),
+            path = %request.uri().path(),
+            "public rate limit exceeded"
+        );
+        let mut response = (
+            StatusCode::TOO_MANY_REQUESTS,
+            [
+                (header::CONTENT_TYPE, "text/plain; charset=utf-8"),
+                (header::CACHE_CONTROL, "no-store"),
+                (header::ACCESS_CONTROL_ALLOW_ORIGIN, "*"),
+            ],
+            "Too many requests. Please slow down.",
+        )
+            .into_response();
+        if let Ok(value) = HeaderValue::from_str(&seconds.to_string()) {
+            response.headers_mut().insert(header::RETRY_AFTER, value);
+        }
+        return response;
+    }
+    next.run(request).await
 }
 
 async fn login(
     State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
     Json(request): Json<LoginRequest>,
 ) -> Result<Response, ApiError> {
-    let key = client_key(&headers);
+    let key = client_key(&headers, Some(peer));
     let now = db::now_ms();
     if let Some(retry_after) = state.login_throttle.lock().await.retry_after(&key, now) {
         let mut response = (

@@ -122,7 +122,7 @@ Cast is a first-class playback target, not an afterthought.
 
 - Admin/public route split: **done**.
 - Public login throttling and secure cookies: **done**.
-- Rate limits for public HLS, Cast, catch-up, DVR, and webhooks: **not done**.
+- Rate limits for public HLS, Cast, catch-up, DVR, and webhooks: **public media and API budgets done**; webhook limits will land with webhook verification.
 - Secrets encrypted at rest; key rotation documented: **partial**.
 - SSRF protections for cloud and peer URLs: **not reviewed**.
 - Provider/webhook signature verification: **not started**.
@@ -176,7 +176,7 @@ Recommended order:
 - Cache budget and secret-key recovery policy.
 - P2P discovery, pairing, share scope, numbering, re-sharing policy.
 - OIDC/roles/audit scope and whether `/admin` stays LAN/Tailscale-only until then.
-- Public media rate limits and capacity policy.
+- Public capacity policy and concurrent tuner/stream caps.
 - ARM target and hardware profiles.
 
 Decided: public hostname and reverse proxy (`atv.christopherrutherford.net`),

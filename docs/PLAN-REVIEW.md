@@ -154,7 +154,7 @@ proxied locally before airing.
 | PostgreSQL optional | **Not started** |
 | OpenAPI, diagnostics bundle, capacity calculator, update check | **Not started** |
 | Prometheus metrics | **Done** — endpoint only, no dashboards |
-| Public media rate limits (HLS/Cast/DVR) | **Not started** |
+| Public media rate limits (HLS/Cast/DVR) | **Done** — per-client budgets for API, playlists, segments, Cast, and MPEG-TS |
 | SSRF/path/command review, secret rotation | **Partial** — path checks/signing; formal review outstanding |
 | Docker arm64 / ARM runner validation | **Paused/not done** — scheduler cross-check only |
 
@@ -192,8 +192,8 @@ Design only: `docs/P2P-CHANNELS.md`.
   channel switching, and continuous item handoff are done. The receiver App ID
   still needs to be registered by the operator.
 - **Security:** public split, login throttle, secure cookies, signed media,
-  encrypted cloud secrets. Still open: public HLS/Cast/DVR rate limits, API
-  tokens, OIDC/RBAC/audit, SSRF review, webhook verification, secret rotation.
+  encrypted cloud secrets, and public HLS/Cast/DVR rate limits. Still open:
+  API tokens, OIDC/RBAC/audit, SSRF review, webhook verification, secret rotation.
 
 ## Plan deviations and decisions
 
@@ -220,7 +220,7 @@ Design only: `docs/P2P-CHANNELS.md`.
 Recommended order, independent of calendar estimates:
 
 1. **Public security hardening**
-   - rate limits for public HLS/Cast/DVR
+   - ~~rate limits for public HLS/Cast/DVR~~ (done)
    - API tokens; decide OIDC/roles/audit
    - SSRF/path/command review; secret rotation runbook
    - decide whether `/admin` should be LAN/Tailscale-only until SSO exists

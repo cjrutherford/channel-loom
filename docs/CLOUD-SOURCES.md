@@ -177,7 +177,7 @@ Provider-specific notes:
 - Public exposure:
   - a dedicated public hostname/port via Tailscale Funnel or a reverse proxy
   - admin hostname/path remains private or separately protected
-  - rate limits and concurrency caps on public HLS and webhook routes
+  - webhook rate limits and concurrency caps (public HLS budgets are in place)
 
 ## Scanning and metadata
 

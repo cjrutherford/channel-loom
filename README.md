@@ -26,6 +26,7 @@ A clean-room, modern replacement for [ErsatzTV](https://ersatztv.org/): turn a p
 - [Parity checklist](docs/PARITY.md)
 - [ADRs](docs/adr/)
 - [Brand guide](docs/BRAND.md)
+- [Security and public exposure](docs/SECURITY.md)
 - [Clean-room policy](docs/CLEAN-ROOM.md)
 
 ## Serving

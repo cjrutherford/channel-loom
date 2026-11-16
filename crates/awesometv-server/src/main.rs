@@ -6,6 +6,7 @@ mod db;
 mod engine;
 mod external;
 mod jellyfin;
+mod limits;
 mod precache;
 mod programming;
 mod scan;
@@ -18,6 +19,7 @@ use anyhow::Context;
 use crate::api::{AppState, LoginThrottle};
 use crate::config::Config;
 use crate::engine::Engine;
+use crate::limits::{MediaRateLimiter, RateLimits};
 use crate::precache::Precache;
 
 #[tokio::main]
@@ -70,6 +72,14 @@ async fn main() -> anyhow::Result<()> {
         cloud: cloud.clone(),
         sessions: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
         login_throttle: Arc::new(tokio::sync::Mutex::new(LoginThrottle::default())),
+        media_limits: Arc::new(tokio::sync::Mutex::new(MediaRateLimiter::new(RateLimits {
+            enabled: config.rate_limit_enabled,
+            api_per_min: config.rate_limit_api_per_min,
+            cast_per_min: config.rate_limit_cast_per_min,
+            playlist_per_min: config.rate_limit_playlist_per_min,
+            segment_per_min: config.rate_limit_segment_per_min,
+            stream_per_min: config.rate_limit_stream_per_min,
+        }))),
         precache: precache.clone(),
     };
     let prewarm = engine.clone();
@@ -110,12 +120,15 @@ async fn main() -> anyhow::Result<()> {
     }
     println!();
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(async move {
-            shutdown_signal().await;
-            engine.stop_all().await;
-        })
-        .await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(async move {
+        shutdown_signal().await;
+        engine.stop_all().await;
+    })
+    .await?;
     Ok(())
 }
 

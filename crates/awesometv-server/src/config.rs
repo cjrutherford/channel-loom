@@ -34,6 +34,12 @@ pub struct Config {
     pub precache_proxy_height: i64,
     pub precache_copy_mbps: i64,
     pub producer_max_lag_seconds: i64,
+    pub rate_limit_enabled: bool,
+    pub rate_limit_api_per_min: u32,
+    pub rate_limit_cast_per_min: u32,
+    pub rate_limit_playlist_per_min: u32,
+    pub rate_limit_segment_per_min: u32,
+    pub rate_limit_stream_per_min: u32,
 }
 
 impl Config {
@@ -120,6 +126,14 @@ impl Config {
             .ok()
             .and_then(|value| value.parse().ok())
             .unwrap_or(0);
+        let rate_limit_enabled = env::var("AWESOMETV_RATE_LIMIT_ENABLED")
+            .map(|value| !matches!(value.trim(), "0" | "false" | "no"))
+            .unwrap_or(true);
+        let rate_limit_api_per_min = env_u32("AWESOMETV_RATE_LIMIT_API_PER_MIN", 120);
+        let rate_limit_cast_per_min = env_u32("AWESOMETV_RATE_LIMIT_CAST_PER_MIN", 20);
+        let rate_limit_playlist_per_min = env_u32("AWESOMETV_RATE_LIMIT_PLAYLIST_PER_MIN", 120);
+        let rate_limit_segment_per_min = env_u32("AWESOMETV_RATE_LIMIT_SEGMENT_PER_MIN", 1_800);
+        let rate_limit_stream_per_min = env_u32("AWESOMETV_RATE_LIMIT_STREAM_PER_MIN", 12);
 
         Self {
             bind,
@@ -151,6 +165,19 @@ impl Config {
             precache_proxy_height,
             precache_copy_mbps,
             producer_max_lag_seconds,
+            rate_limit_enabled,
+            rate_limit_api_per_min,
+            rate_limit_cast_per_min,
+            rate_limit_playlist_per_min,
+            rate_limit_segment_per_min,
+            rate_limit_stream_per_min,
         }
     }
+}
+
+fn env_u32(name: &str, fallback: u32) -> u32 {
+    env::var(name)
+        .ok()
+        .and_then(|value| value.trim().parse().ok())
+        .unwrap_or(fallback)
 }
