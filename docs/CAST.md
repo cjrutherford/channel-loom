@@ -30,6 +30,10 @@ Cold casts wait for the producer to become ready before returning the media
 URL, avoiding the receiver's media-load timeout. The app also returns
 `Access-Control-Allow-Origin: *` on cast playlists and segments.
 
+For a step-by-step walkthrough of the developer console, device registration,
+and where to copy the App ID, see
+[Getting a Cast receiver App ID](CAST-APP-ID.md).
+
 ## Branding
 
 ### Default Media Receiver
@@ -54,7 +58,9 @@ series, and the app icon as artwork.
    ```
 
 This gives the TV a branded splash/background with the Awesome TV logo while
-keeping Google's media playback UI.
+keeping Google's media playback UI. Unpublished receivers only run on devices
+registered in the console; add the Chromecast serial under **Cast Receiver
+Devices**.
 
 ### Custom receiver (full control)
 

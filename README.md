@@ -17,6 +17,7 @@ A clean-room, modern replacement for [ErsatzTV](https://ersatztv.org/): turn a p
 - [Current execution plan](docs/EXECUTION-PLAN.md)
 - [nginx reverse proxy](deploy/nginx/README.md)
 - [Casting and branded receivers](docs/CAST.md)
+- [Getting a Cast receiver App ID](docs/CAST-APP-ID.md)
 - [Canonical media sources](docs/SOURCES.md)
 - [Parity checklist](docs/PARITY.md)
 - [ADRs](docs/adr/)
