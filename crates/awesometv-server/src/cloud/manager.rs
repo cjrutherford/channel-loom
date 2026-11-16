@@ -39,6 +39,8 @@ pub struct CloudScanReport {
     pub probed: usize,
     pub skipped: usize,
     pub errors: usize,
+    pub removed: usize,
+    pub complete: bool,
 }
 
 pub struct CloudManager {
@@ -127,6 +129,18 @@ impl CloudManager {
         db::list_cloud_sources(&self.pool).await
     }
 
+    pub async fn update_source(
+        &self,
+        id: &str,
+        update: &db::CloudSourceUpdate,
+    ) -> Result<db::CloudSource> {
+        db::update_cloud_source(&self.pool, id, update).await
+    }
+
+    pub async fn metrics(&self) -> Result<db::CloudMetrics> {
+        db::cloud_metrics(&self.pool).await
+    }
+
     pub async fn browse(&self, source_id: &str, folder_id: &str) -> Result<Vec<RemoteEntry>> {
         let source = db::cloud_source(&self.pool, source_id)
             .await?
@@ -152,21 +166,33 @@ impl CloudManager {
         db::add_cloud_root(&self.pool, source_id, root).await
     }
 
-    pub async fn scan_source(&self, source_id: &str, limit: usize) -> Result<CloudScanReport> {
+    pub async fn scan_source(
+        &self,
+        source_id: &str,
+        limit: usize,
+        full: bool,
+    ) -> Result<CloudScanReport> {
         let source = db::cloud_source(&self.pool, source_id)
             .await?
             .context("cloud source not found")?;
+        if !source.enabled {
+            bail!("cloud source is disabled");
+        }
         let roots = db::list_cloud_roots(&self.pool, source_id).await?;
         if roots.is_empty() {
             bail!("add at least one cloud folder root before scanning");
         }
         let token = self.access_token(&source).await?;
         let limit = limit.clamp(1, 50_000);
+        let scan_started = db::now_ms();
+        let mut complete = true;
         let mut report = CloudScanReport {
             scanned: 0,
             probed: 0,
             skipped: 0,
             errors: 0,
+            removed: 0,
+            complete: true,
         };
         let mut queue: Vec<(String, String)> = roots
             .iter()
@@ -175,6 +201,7 @@ impl CloudManager {
         let mut seen_folders = HashSet::new();
         while let Some((folder_id, folder_path)) = queue.pop() {
             if report.scanned >= limit {
+                complete = false;
                 break;
             }
             if !seen_folders.insert(folder_id.clone()) {
@@ -193,6 +220,7 @@ impl CloudManager {
                     };
                 for entry in entries {
                     if report.scanned >= limit {
+                        complete = false;
                         break;
                     }
                     if entry.is_folder {
@@ -282,7 +310,30 @@ impl CloudManager {
                 page = next;
             }
         }
-        db::record_cloud_sync(&self.pool, source_id, None).await?;
+        report.complete = complete && report.errors == 0;
+        if full && report.complete {
+            for media_id in db::stale_cloud_media(&self.pool, source_id, scan_started).await? {
+                match db::delete_cloud_media(&self.pool, &media_id).await {
+                    Ok(cache_path) => {
+                        if let Some(path) = cache_path {
+                            let _ = tokio::fs::remove_file(path).await;
+                        }
+                        report.removed += 1;
+                    }
+                    Err(error) => {
+                        report.errors += 1;
+                        tracing::warn!(%error, %media_id, "could not remove stale cloud media");
+                    }
+                }
+            }
+            report.complete = report.errors == 0;
+        }
+        let error = if report.complete {
+            None
+        } else {
+            Some("scan incomplete; stale media was not reconciled")
+        };
+        db::record_cloud_sync(&self.pool, source_id, error).await?;
         Ok(report)
     }
 
@@ -330,6 +381,9 @@ impl CloudManager {
         let source = db::cloud_source(&self.pool, &cloud.source_id)
             .await?
             .context("cloud source not found")?;
+        if !source.enabled {
+            bail!("cloud source is disabled");
+        }
         let should_cache = match source.policy.as_str() {
             "cache_all" => true,
             "auto" => cloud
@@ -404,6 +458,9 @@ impl CloudManager {
         let source = db::cloud_source(&self.pool, source_id)
             .await?
             .context("cloud source not found")?;
+        if !source.enabled {
+            bail!("cloud source is disabled");
+        }
         let token = self.access_token(&source).await?;
         self.google.download(&token, remote_id, range)
     }
@@ -418,6 +475,9 @@ impl CloudManager {
         let source = db::cloud_source(&self.pool, source_id)
             .await?
             .context("cloud source not found")?;
+        if !source.enabled {
+            bail!("cloud source is disabled");
+        }
         let token = self.access_token(&source).await?;
         let response = self.google.download(&token, remote_id, None)?;
         let dir = self.data_dir.join("cloud-cache").join(source_id);

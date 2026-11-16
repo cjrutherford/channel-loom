@@ -1976,6 +1976,13 @@ fn default_cloud_policy() -> String {
     "auto".into()
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct CloudSourceUpdate {
+    pub name: Option<String>,
+    pub policy: Option<String>,
+    pub enabled: Option<bool>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CloudRootInput {
     pub remote_id: String,
@@ -2069,6 +2076,43 @@ pub async fn list_cloud_sources(pool: &SqlitePool) -> Result<Vec<CloudSource>> {
     Ok(rows.into_iter().map(cloud_source_row).collect())
 }
 
+pub async fn update_cloud_source(
+    pool: &SqlitePool,
+    id: &str,
+    update: &CloudSourceUpdate,
+) -> Result<CloudSource> {
+    let name = match update.name.as_deref() {
+        Some(value) => {
+            let value = value.trim();
+            if value.is_empty() {
+                bail!("cloud source name cannot be empty");
+            }
+            Some(value)
+        }
+        None => None,
+    };
+    if let Some(policy) = update.policy.as_deref()
+        && !matches!(policy, "auto" | "cache_all" | "stream_all")
+    {
+        bail!("cloud policy must be auto, cache_all, or stream_all");
+    }
+    let result = sqlx::query(
+        "UPDATE cloud_sources SET name = COALESCE(?, name), policy = COALESCE(?, policy), enabled = COALESCE(?, enabled) WHERE id = ?",
+    )
+    .bind(name)
+    .bind(update.policy.as_deref())
+    .bind(update.enabled.map(|value| if value { 1 } else { 0 }))
+    .bind(id)
+    .execute(pool)
+    .await?;
+    if result.rows_affected() == 0 {
+        bail!("cloud source not found");
+    }
+    cloud_source(pool, id)
+        .await?
+        .context("cloud source disappeared after update")
+}
+
 pub async fn cloud_source(pool: &SqlitePool, id: &str) -> Result<Option<CloudSource>> {
     let row = sqlx::query(
         "SELECT id, provider, name, auth_type, policy, enabled, config_json, last_sync_at, last_error, created_at FROM cloud_sources WHERE id = ? LIMIT 1",
@@ -2153,6 +2197,57 @@ pub async fn delete_cloud_source(pool: &SqlitePool, id: &str) -> Result<()> {
         .await?;
     tx.commit().await?;
     Ok(())
+}
+
+pub async fn stale_cloud_media(
+    pool: &SqlitePool,
+    source_id: &str,
+    cutoff_ms: i64,
+) -> Result<Vec<String>> {
+    let rows = sqlx::query(
+        "SELECT media_id FROM cloud_media WHERE source_id = ? AND (last_seen_at IS NULL OR last_seen_at < ?)",
+    )
+    .bind(source_id)
+    .bind(cutoff_ms)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|row| row.get("media_id")).collect())
+}
+
+pub async fn delete_cloud_media(pool: &SqlitePool, media_id: &str) -> Result<Option<String>> {
+    let cache_path: Option<String> =
+        sqlx::query("SELECT cache_path FROM cloud_media WHERE media_id = ? LIMIT 1")
+            .bind(media_id)
+            .fetch_optional(pool)
+            .await?
+            .and_then(|row| row.get("cache_path"));
+    let mut tx = pool.begin().await?;
+    sqlx::query("DELETE FROM collection_items WHERE media_id = ?")
+        .bind(media_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM channel_items WHERE media_id = ?")
+        .bind(media_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM media_chapters WHERE media_id = ?")
+        .bind(media_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM precache_entries WHERE media_id = ?")
+        .bind(media_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM cloud_media WHERE media_id = ?")
+        .bind(media_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM media_items WHERE id = ?")
+        .bind(media_id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(cache_path)
 }
 
 pub async fn list_cloud_roots(pool: &SqlitePool, source_id: &str) -> Result<Vec<CloudRoot>> {
@@ -3006,4 +3101,113 @@ pub async fn update_cloud_secret_blob(
         .execute(pool)
         .await?;
     Ok(())
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CloudSourceMetrics {
+    pub id: String,
+    pub name: String,
+    pub enabled: bool,
+    pub media: i64,
+    pub cached_media: i64,
+    pub cached_bytes: i64,
+    pub last_sync_at: Option<i64>,
+    pub last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CloudMetrics {
+    pub sources: usize,
+    pub enabled_sources: usize,
+    pub media: i64,
+    pub cached_media: i64,
+    pub cached_bytes: i64,
+    pub sources_with_errors: usize,
+    pub by_source: Vec<CloudSourceMetrics>,
+}
+
+pub async fn cloud_metrics(pool: &SqlitePool) -> Result<CloudMetrics> {
+    let rows = sqlx::query(
+        "SELECT s.id, s.name, s.enabled, s.last_sync_at, s.last_error, \
+            COUNT(m.media_id) AS media, \
+            COALESCE(SUM(CASE WHEN m.cache_state = 'cached' THEN 1 ELSE 0 END), 0) AS cached_media, \
+            COALESCE(SUM(CASE WHEN m.cache_state = 'cached' THEN m.cached_bytes ELSE 0 END), 0) AS cached_bytes \
+         FROM cloud_sources s \
+         LEFT JOIN cloud_media m ON m.source_id = s.id \
+         GROUP BY s.id, s.name, s.enabled, s.last_sync_at, s.last_error \
+         ORDER BY s.name COLLATE NOCASE",
+    )
+    .fetch_all(pool)
+    .await?;
+    let by_source: Vec<CloudSourceMetrics> = rows
+        .into_iter()
+        .map(|row| CloudSourceMetrics {
+            id: row.get("id"),
+            name: row.get("name"),
+            enabled: row.get::<i64, _>("enabled") != 0,
+            media: row.get("media"),
+            cached_media: row.get("cached_media"),
+            cached_bytes: row.get("cached_bytes"),
+            last_sync_at: row.get("last_sync_at"),
+            last_error: row.get("last_error"),
+        })
+        .collect();
+    Ok(CloudMetrics {
+        sources: by_source.len(),
+        enabled_sources: by_source.iter().filter(|source| source.enabled).count(),
+        media: by_source.iter().map(|source| source.media).sum(),
+        cached_media: by_source.iter().map(|source| source.cached_media).sum(),
+        cached_bytes: by_source.iter().map(|source| source.cached_bytes).sum(),
+        sources_with_errors: by_source
+            .iter()
+            .filter(|source| source.last_error.is_some())
+            .count(),
+        by_source,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn full_scan_reconciliation_removes_missing_cloud_media() {
+        let dir = std::env::temp_dir().join(format!("awesometv-db-test-{}", Uuid::new_v4()));
+        let pool = init(&dir).await.unwrap();
+        let now = now_ms();
+        sqlx::query(
+            "INSERT INTO cloud_sources (id, provider, name, auth_type, policy, enabled, secret_blob, config_json, created_at) VALUES ('source', 'google', 'Test', 'access_token', 'auto', 1, 'x', '{}', ?)",
+        )
+        .bind(now)
+        .execute(&pool)
+        .await
+        .unwrap();
+        for (media_id, seen) in [("fresh", now), ("stale", now - 60_000)] {
+            sqlx::query(
+                "INSERT INTO cloud_media (media_id, source_id, remote_id, remote_path, cache_state, last_seen_at) VALUES (?, 'source', ?, ?, 'none', ?)",
+            )
+            .bind(media_id)
+            .bind(media_id)
+            .bind(format!("Movies/{media_id}.mkv"))
+            .bind(seen)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        let stale = stale_cloud_media(&pool, "source", now - 1_000)
+            .await
+            .unwrap();
+        assert_eq!(stale, vec!["stale".to_string()]);
+        delete_cloud_media(&pool, "stale").await.unwrap();
+        assert!(cloud_media(&pool, "stale").await.unwrap().is_none());
+        assert!(cloud_media(&pool, "fresh").await.unwrap().is_some());
+
+        let metrics = cloud_metrics(&pool).await.unwrap();
+        assert_eq!(metrics.sources, 1);
+        assert_eq!(metrics.media, 1);
+
+        pool.close().await;
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }
