@@ -718,6 +718,10 @@
           <div id="tokenList" style="margin-top:10px;"></div>
         </div>
         <div class="panel panel-pad" style="margin-top:14px;">
+          <div class="source-top"><div><h3>Recent activity</h3><div class="muted small">Sign-ins, tokens, source changes, backups, and other mutations. Kept for 90 days.</div></div><button class="btn small" id="auditRefreshBtn">Refresh</button></div>
+          <div id="auditList"></div>
+        </div>
+        <div class="panel panel-pad" style="margin-top:14px;">
           <div class="row" style="justify-content:space-between"><h3>Backups</h3><button class="btn small" id="backupBtn">Create backup</button></div>
           <p class="muted small">SQLite snapshots of the catalog, collections, channels, and settings. Restore takes effect on the next restart.</p>
           <div id="backupList"></div>
@@ -810,7 +814,7 @@
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
 <script>
 const $ = (id) => document.getElementById(id);
-const state = { config: null, sources: [], stats: null, media: [], channels: [], collections: [], blocks: [], classicItems: [], templates: [], overrides: [], graphics: null, stream: null, metrics: null, language: null, tvNumber: null, playerTarget: null, cloudSources: [], cloudMetrics: null, cloudBrowse: null, programChannel: null, programMode: 'blocks', selected: new Set(), kind: 'all', origin: 'all', search: '', activeChannel: null, hls: null, modalMode: null, autoPlayed: false, authed: false, tokens: [], cloudScanJob: null };
+const state = { config: null, sources: [], stats: null, media: [], channels: [], collections: [], blocks: [], classicItems: [], templates: [], overrides: [], graphics: null, stream: null, metrics: null, language: null, tvNumber: null, playerTarget: null, cloudSources: [], cloudMetrics: null, cloudBrowse: null, programChannel: null, programMode: 'blocks', selected: new Set(), kind: 'all', origin: 'all', search: '', activeChannel: null, hls: null, modalMode: null, autoPlayed: false, authed: false, tokens: [], audit: [], cloudScanJob: null };
 const KIND_LABEL = { movie: 'Movie', episode: 'Episode', music: 'Music', image: 'Image', other: 'Video' };
 
 function toast(text, error = false) {
@@ -885,10 +889,10 @@ async function renderBackups() {
 
 async function loadAll() {
   try {
-    const [config, sources, stats, media, channels, collections, templates, metrics, language, cloudSources, precache, tokens, cloudMetrics] = await Promise.all([
-      api('/api/v1/config'), api('/api/v1/sources'), api('/api/v1/stats'), api('/api/v1/media'), api('/api/v1/channels'), api('/api/v1/collections'), api('/api/v1/templates'), api('/api/v1/metrics'), api('/api/v1/settings/language'), api('/api/v1/cloud/sources'), api('/api/v1/precache'), api('/api/v1/tokens'), api('/api/v1/cloud/metrics')
+    const [config, sources, stats, media, channels, collections, templates, metrics, language, cloudSources, precache, tokens, cloudMetrics, audit] = await Promise.all([
+      api('/api/v1/config'), api('/api/v1/sources'), api('/api/v1/stats'), api('/api/v1/media'), api('/api/v1/channels'), api('/api/v1/collections'), api('/api/v1/templates'), api('/api/v1/metrics'), api('/api/v1/settings/language'), api('/api/v1/cloud/sources'), api('/api/v1/precache'), api('/api/v1/tokens'), api('/api/v1/cloud/metrics'), api('/api/v1/audit?limit=100')
     ]);
-    state.config = config; state.sources = sources; state.stats = stats; state.media = media; state.channels = channels; state.collections = collections; state.templates = templates; state.metrics = metrics; state.language = language; state.cloudSources = cloudSources; state.precache = precache; state.tokens = tokens; state.cloudMetrics = cloudMetrics;
+    state.config = config; state.sources = sources; state.stats = stats; state.media = media; state.channels = channels; state.collections = collections; state.templates = templates; state.metrics = metrics; state.language = language; state.cloudSources = cloudSources; state.precache = precache; state.tokens = tokens; state.cloudMetrics = cloudMetrics; state.audit = audit;
     preloadCast();
     const requested = new URLSearchParams(location.search).get('channel');
     if (requested) {
@@ -1499,6 +1503,24 @@ function renderSettings() {
   renderStreamHealth();
   renderBackups();
   renderTokens();
+  renderAudit();
+}
+
+function renderAudit() {
+  const list = $('auditList');
+  if (!list) return;
+  if (!state.audit.length) {
+    list.innerHTML = '<p class="muted small">No activity recorded yet.</p>';
+    return;
+  }
+  list.innerHTML = state.audit.map((event) => `
+    <div class="row" style="justify-content:space-between;gap:12px;padding:9px 0;border-bottom:1px solid var(--line-soft)">
+      <div style="min-width:0">
+        <b>${esc(event.action)}</b>
+        <div class="dim tiny">${esc(event.actor)} · ${esc(event.kind)}${event.target ? ` · ${esc(event.target)}` : ''}${event.detail ? ` · ${esc(event.detail)}` : ''}${event.client_ip ? ` · ${esc(event.client_ip)}` : ''}</div>
+      </div>
+      <div class="mono tiny dim" style="white-space:nowrap">${new Date(event.at_ms).toLocaleString()}</div>
+    </div>`).join('');
 }
 
 function renderTokens() {
@@ -1807,6 +1829,9 @@ $('createTokenBtn').addEventListener('click', async () => {
   } catch (error) { toast(String(error), true); }
 });
 $('originFilter').addEventListener('change', () => { state.origin = $('originFilter').value; renderLibrary(); });
+$('auditRefreshBtn').addEventListener('click', async () => {
+  try { state.audit = await api('/api/v1/audit?limit=100'); renderAudit(); } catch (error) { toast(String(error), true); }
+});
 $('metricsRefreshBtn').addEventListener('click', async () => {
   try { state.metrics = await api('/api/v1/metrics'); renderStreamHealth(); } catch (error) { toast(String(error), true); }
 });
