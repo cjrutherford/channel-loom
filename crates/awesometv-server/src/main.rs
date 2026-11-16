@@ -20,7 +20,7 @@ use anyhow::Context;
 use crate::api::{AppState, LoginThrottle};
 use crate::config::Config;
 use crate::engine::Engine;
-use crate::limits::{MediaRateLimiter, RateLimits, StreamLimiter, parse_cidrs};
+use crate::limits::{MediaRateLimiter, RateLimits, StreamLimiter, TokenRateLimiter, parse_cidrs};
 use crate::precache::Precache;
 
 #[tokio::main]
@@ -80,6 +80,9 @@ async fn main() -> anyhow::Result<()> {
         cloud: cloud.clone(),
         sessions: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
         login_throttle: Arc::new(tokio::sync::Mutex::new(LoginThrottle::default())),
+        token_limits: Arc::new(tokio::sync::Mutex::new(TokenRateLimiter::new(
+            config.token_rate_per_min,
+        ))),
         media_limits: Arc::new(tokio::sync::Mutex::new(MediaRateLimiter::new(RateLimits {
             enabled: config.rate_limit_enabled,
             api_per_min: config.rate_limit_api_per_min,

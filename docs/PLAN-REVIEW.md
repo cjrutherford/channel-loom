@@ -149,7 +149,7 @@ proxied locally before airing.
 | Single admin, backups/restore | **Done** |
 | Public viewer/admin split | **Done** |
 | Login throttling, secure cookies, signed Cast/cloud URLs, encrypted secrets | **Done** |
-| API tokens | **Done** — revocable Bearer tokens, hashed at rest, managed in Studio |
+| API tokens | **Done** — revocable Bearer tokens, hashed at rest, scoped (`read`/`control`/`admin`), expiring, per-token rate limits |
 | OIDC, roles, audit log | **Audit log done**; OIDC and roles remain |
 | PostgreSQL optional | **Not started** |
 | OpenAPI, diagnostics bundle, capacity calculator, update check | **Not started** |

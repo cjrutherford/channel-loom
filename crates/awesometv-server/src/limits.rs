@@ -216,6 +216,44 @@ struct Bucket {
 /// bounded and old windows are pruned so a large number of short-lived clients
 /// cannot grow it without limit.
 #[derive(Default)]
+pub struct TokenRateLimiter {
+    limit: u32,
+    buckets: HashMap<String, Bucket>,
+}
+
+impl TokenRateLimiter {
+    pub fn new(limit: u32) -> Self {
+        Self {
+            limit,
+            buckets: HashMap::new(),
+        }
+    }
+
+    pub fn check(&mut self, key: &str, now_ms: i64) -> Option<u64> {
+        if self.limit == 0 {
+            return None;
+        }
+        if self.buckets.len() > 4_096 {
+            self.buckets
+                .retain(|_, bucket| now_ms.saturating_sub(bucket.window_start_ms) < RATE_WINDOW_MS);
+        }
+        let bucket = self.buckets.entry(key.to_string()).or_default();
+        if bucket.window_start_ms == 0
+            || now_ms.saturating_sub(bucket.window_start_ms) >= RATE_WINDOW_MS
+        {
+            bucket.window_start_ms = now_ms;
+            bucket.count = 0;
+        }
+        if bucket.count >= self.limit {
+            let remaining = RATE_WINDOW_MS - now_ms.saturating_sub(bucket.window_start_ms);
+            return Some((remaining.max(1_000) / 1_000) as u64);
+        }
+        bucket.count += 1;
+        None
+    }
+}
+
+#[derive(Default)]
 pub struct MediaRateLimiter {
     limits: RateLimits,
     buckets: HashMap<(String, MediaClass), Bucket>,
@@ -434,6 +472,16 @@ mod tests {
             client_key(&headers, Some(peer("10.0.0.2:1234"))),
             "203.0.113.9"
         );
+    }
+
+    #[test]
+    fn token_rate_limiter_is_per_token() {
+        let mut limiter = TokenRateLimiter::new(2);
+        assert_eq!(limiter.check("one", 1_000), None);
+        assert_eq!(limiter.check("one", 1_000), None);
+        assert!(limiter.check("one", 1_000).is_some());
+        assert_eq!(limiter.check("two", 1_000), None);
+        assert_eq!(limiter.check("one", 1_000 + RATE_WINDOW_MS), None);
     }
 
     #[test]

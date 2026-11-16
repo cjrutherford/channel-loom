@@ -312,13 +312,25 @@ pub async fn init(data_dir: &Path) -> Result<SqlitePool> {
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
             token_hash TEXT NOT NULL,
+            scopes TEXT NOT NULL DEFAULT 'admin',
+            expires_at INTEGER,
             created_at INTEGER NOT NULL,
-            last_used_at INTEGER
+            last_used_at INTEGER,
+            last_used_ip TEXT
         );
         "#,
     )
     .execute(&pool)
     .await?;
+    ensure_column(
+        &pool,
+        "api_tokens",
+        "scopes",
+        "TEXT NOT NULL DEFAULT 'admin'",
+    )
+    .await?;
+    ensure_column(&pool, "api_tokens", "expires_at", "INTEGER").await?;
+    ensure_column(&pool, "api_tokens", "last_used_ip", "TEXT").await?;
 
     sqlx::query(
         r#"
@@ -3020,6 +3032,28 @@ pub async fn channel_by_id(pool: &SqlitePool, id: &str) -> Result<Option<Channel
     }))
 }
 
+async fn ensure_column(
+    pool: &SqlitePool,
+    table: &str,
+    column: &str,
+    definition: &str,
+) -> Result<()> {
+    let rows = sqlx::query(&format!("PRAGMA table_info({table})"))
+        .fetch_all(pool)
+        .await?;
+    if !rows
+        .iter()
+        .any(|row| row.get::<String, _>("name") == column)
+    {
+        sqlx::query(&format!(
+            "ALTER TABLE {table} ADD COLUMN {column} {definition}"
+        ))
+        .execute(pool)
+        .await?;
+    }
+    Ok(())
+}
+
 pub fn now_ms() -> i64 {
     time::OffsetDateTime::now_utc().unix_timestamp() * 1000
 }
@@ -3028,8 +3062,30 @@ pub fn now_ms() -> i64 {
 pub struct ApiToken {
     pub id: String,
     pub name: String,
+    pub scopes: Vec<String>,
+    pub expires_at: Option<i64>,
     pub created_at: i64,
     pub last_used_at: Option<i64>,
+    pub last_used_ip: Option<String>,
+}
+
+pub struct ApiTokenAuth {
+    pub token_hash: String,
+    pub scopes: Vec<String>,
+    pub expires_at: Option<i64>,
+}
+
+fn parse_scopes(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|scope| !scope.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+fn join_scopes(scopes: &[String]) -> String {
+    scopes.join(",")
 }
 
 pub async fn create_api_token(
@@ -3037,26 +3093,35 @@ pub async fn create_api_token(
     id: &str,
     name: &str,
     token_hash: &str,
+    scopes: &[String],
+    expires_at: Option<i64>,
 ) -> Result<ApiToken> {
     let created_at = now_ms();
-    sqlx::query("INSERT INTO api_tokens (id, name, token_hash, created_at) VALUES (?, ?, ?, ?)")
-        .bind(id)
-        .bind(name)
-        .bind(token_hash)
-        .bind(created_at)
-        .execute(pool)
-        .await?;
+    sqlx::query(
+        "INSERT INTO api_tokens (id, name, token_hash, scopes, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+    )
+    .bind(id)
+    .bind(name)
+    .bind(token_hash)
+    .bind(join_scopes(scopes))
+    .bind(expires_at)
+    .bind(created_at)
+    .execute(pool)
+    .await?;
     Ok(ApiToken {
         id: id.to_string(),
         name: name.to_string(),
+        scopes: scopes.to_vec(),
+        expires_at,
         created_at,
         last_used_at: None,
+        last_used_ip: None,
     })
 }
 
 pub async fn list_api_tokens(pool: &SqlitePool) -> Result<Vec<ApiToken>> {
     let rows = sqlx::query(
-        "SELECT id, name, created_at, last_used_at FROM api_tokens ORDER BY created_at DESC",
+        "SELECT id, name, scopes, expires_at, created_at, last_used_at, last_used_ip FROM api_tokens ORDER BY created_at DESC",
     )
     .fetch_all(pool)
     .await?;
@@ -3065,8 +3130,11 @@ pub async fn list_api_tokens(pool: &SqlitePool) -> Result<Vec<ApiToken>> {
         .map(|row| ApiToken {
             id: row.get("id"),
             name: row.get("name"),
+            scopes: parse_scopes(&row.get::<String, _>("scopes")),
+            expires_at: row.get("expires_at"),
             created_at: row.get("created_at"),
             last_used_at: row.get("last_used_at"),
+            last_used_ip: row.get("last_used_ip"),
         })
         .collect())
 }
@@ -3079,19 +3147,30 @@ pub async fn delete_api_token(pool: &SqlitePool, id: &str) -> Result<bool> {
     Ok(result.rows_affected() > 0)
 }
 
-pub async fn api_token_hash(pool: &SqlitePool, id: &str) -> Result<Option<String>> {
-    let row = sqlx::query("SELECT token_hash FROM api_tokens WHERE id = ? LIMIT 1")
-        .bind(id)
-        .fetch_optional(pool)
-        .await?;
-    Ok(row.map(|row| row.get("token_hash")))
+pub async fn api_token_auth(pool: &SqlitePool, id: &str) -> Result<Option<ApiTokenAuth>> {
+    let row =
+        sqlx::query("SELECT token_hash, scopes, expires_at FROM api_tokens WHERE id = ? LIMIT 1")
+            .bind(id)
+            .fetch_optional(pool)
+            .await?;
+    Ok(row.map(|row| ApiTokenAuth {
+        token_hash: row.get("token_hash"),
+        scopes: parse_scopes(&row.get::<String, _>("scopes")),
+        expires_at: row.get("expires_at"),
+    }))
 }
 
-pub async fn touch_api_token(pool: &SqlitePool, id: &str, now: i64) -> Result<()> {
+pub async fn touch_api_token(
+    pool: &SqlitePool,
+    id: &str,
+    now: i64,
+    client_ip: Option<&str>,
+) -> Result<()> {
     sqlx::query(
-        "UPDATE api_tokens SET last_used_at = ? WHERE id = ? AND (last_used_at IS NULL OR last_used_at < ?)",
+        "UPDATE api_tokens SET last_used_at = ?, last_used_ip = ? WHERE id = ? AND (last_used_at IS NULL OR last_used_at < ?)",
     )
     .bind(now)
+    .bind(client_ip)
     .bind(id)
     .bind(now - 60_000)
     .execute(pool)

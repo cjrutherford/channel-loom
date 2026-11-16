@@ -77,9 +77,15 @@ native clients, and automation.
 - Tokens look like `cl_<id>_<secret>` and are shown once at creation.
 - Only a SHA-256 hash of the secret is stored in SQLite.
 - Send `Authorization: Bearer <token>` to any `/api/v1/*` admin route.
-- A token grants full Studio API access. There are no scopes yet.
+- Scopes:
+  - `read` — GET admin APIs.
+  - `control` — writes for channels, schedules, scans, and media.
+  - `admin` — everything, including tokens, audit, backups, restore, and settings.
+- New tokens default to `control` and 90-day expiry. Expiry can be 30/90/365 days or never.
+- Token requests are limited per token (`AWESOMETV_TOKEN_RATE_PER_MIN`, default 600/minute).
+- Tokens requiring `admin` scope are rejected with `403` when used outside that scope.
 - Revoking a token takes effect on the next request.
-- `last_used_at` is updated at most once per minute.
+- `last_used_at` and `last_used_ip` are updated at most once per minute.
 
 Basic auth and the browser session cookie remain supported.
 
@@ -179,5 +185,5 @@ depend on the secret key.
 - Provider webhook signature verification and webhook rate limits. No webhook
   receiver is implemented yet.
 - Propagating the Studio CIDR allowlist to the nginx deployment used in production.
-- API token scopes, optional expiry, and per-token rate limits.
+- API token scopes, expiry, and per-token rate limits are implemented; remaining: a dedicated token audit view and rotation reminders.
 - A repeat of the SSRF review before adding peer URLs or new providers.

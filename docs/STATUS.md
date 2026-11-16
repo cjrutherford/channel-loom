@@ -23,7 +23,7 @@ area, is in [`PLAN-REVIEW.md`](PLAN-REVIEW.md).
 | Playback | HLS + MPEG-TS/HDHomeRun; trimmed in/out playback; catch-up restart; rolling DVR buffer; music/image items; subtitles, overlays, HDR tonemap, VAAPI; slate fallback |
 | Auth | **Watch** at `/`; **Studio** at `/admin` (login-gated shell, session cookies marked `Secure` behind TLS, per-IP login throttling, Basic auth for API clients) |
 | Abuse controls | Per-client public budgets for API, HLS playlists, media segments, Cast, and MPEG-TS; global and per-client MPEG-TS stream leases; `429`/`503` with retry guidance |
-| API tokens | Revocable Bearer tokens in Studio Settings; SHA-256 hashes at rest; full admin API access |
+| API tokens | Revocable Bearer tokens in Studio Settings; SHA-256 hashes at rest; read/control/admin scopes, expiry, and per-token limits |
 | Audit | Durable `audit_events` for login, token, source, backup, and mutation activity; Settings activity view |
 | Exposure | Optional `AWESOMETV_ADMIN_ALLOW_CIDRS` guard for Studio/admin APIs; security headers on every response |
 | Backups | Create/list/download, staged restore on restart |

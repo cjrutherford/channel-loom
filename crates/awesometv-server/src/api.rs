@@ -25,7 +25,9 @@ use crate::db::{self, Channel, ChannelItem, Media};
 use crate::engine::Engine;
 use crate::external;
 use crate::jellyfin;
-use crate::limits::{IpNet, MediaClass, MediaRateLimiter, StreamLimiter, client_key, ip_allowed};
+use crate::limits::{
+    IpNet, MediaClass, MediaRateLimiter, StreamLimiter, TokenRateLimiter, client_key, ip_allowed,
+};
 use crate::programming;
 use crate::scan;
 use crate::scripted;
@@ -41,6 +43,7 @@ pub struct Session {
 pub struct AuthActor {
     pub label: String,
     pub kind: String,
+    pub scopes: Vec<String>,
 }
 
 const LOGIN_WINDOW_MS: i64 = 15 * 60 * 1000;
@@ -142,6 +145,53 @@ mod throttle_tests {
 }
 
 #[cfg(test)]
+mod token_scope_tests {
+    use super::*;
+
+    fn actor(scopes: &[&str]) -> AuthActor {
+        AuthActor {
+            label: "token:test".into(),
+            kind: "token".into(),
+            scopes: scopes.iter().map(|scope| scope.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn read_tokens_cannot_write() {
+        assert!(actor_allows(&actor(&["read"]), "read"));
+        assert!(!actor_allows(&actor(&["read"]), "control"));
+        assert!(!actor_allows(&actor(&["read"]), "admin"));
+    }
+
+    #[test]
+    fn control_tokens_can_read_and_write_but_not_administer() {
+        assert!(actor_allows(&actor(&["control"]), "read"));
+        assert!(actor_allows(&actor(&["control"]), "control"));
+        assert!(!actor_allows(&actor(&["control"]), "admin"));
+    }
+
+    #[test]
+    fn admin_tokens_allow_everything() {
+        assert!(actor_allows(&actor(&["admin"]), "read"));
+        assert!(actor_allows(&actor(&["admin"]), "control"));
+        assert!(actor_allows(&actor(&["admin"]), "admin"));
+    }
+
+    #[test]
+    fn classifies_admin_only_paths() {
+        assert_eq!(required_scope(&Method::GET, "/api/v1/tokens"), "admin");
+        assert_eq!(required_scope(&Method::GET, "/api/v1/audit"), "admin");
+        assert_eq!(required_scope(&Method::GET, "/api/v1/media"), "read");
+        assert_eq!(required_scope(&Method::POST, "/api/v1/scan"), "control");
+        assert_eq!(required_scope(&Method::POST, "/api/v1/restore"), "admin");
+        assert_eq!(
+            required_scope(&Method::PUT, "/api/v1/settings/language"),
+            "admin"
+        );
+    }
+}
+
+#[cfg(test)]
 mod rate_limit_tests {
     use super::*;
 
@@ -194,6 +244,7 @@ pub struct AppState {
     pub sessions: Arc<Mutex<HashMap<String, Session>>>,
     pub login_throttle: Arc<Mutex<LoginThrottle>>,
     pub media_limits: Arc<Mutex<MediaRateLimiter>>,
+    pub token_limits: Arc<Mutex<TokenRateLimiter>>,
     pub streams: Arc<StreamLimiter>,
     pub precache: Arc<crate::precache::Precache>,
 }
@@ -679,7 +730,10 @@ async fn admin_index(
     if !ip_allowed(&state.admin_nets, request.headers(), Some(peer)) {
         return StatusCode::NOT_FOUND.into_response();
     }
-    let authorized = authorize(&state, request.headers()).await.is_some();
+    let key = client_key(request.headers(), Some(peer));
+    let authorized = authorize(&state, request.headers(), Some(&key))
+        .await
+        .is_some();
     let mut response = if authorized {
         Html(include_str!("../web/index.html")).into_response()
     } else {
@@ -2673,6 +2727,10 @@ async fn audit_events(
 #[derive(Deserialize)]
 struct CreateTokenRequest {
     name: String,
+    #[serde(default)]
+    scopes: Vec<String>,
+    #[serde(default)]
+    expires_days: Option<i64>,
 }
 
 #[derive(Serialize)]
@@ -2680,6 +2738,8 @@ struct CreatedToken {
     id: String,
     name: String,
     token: String,
+    scopes: Vec<String>,
+    expires_at: Option<i64>,
     created_at: i64,
 }
 
@@ -2700,16 +2760,44 @@ async fn create_token(
     if name.len() > 80 {
         return Err(ApiError::bad_request("token name is too long"));
     }
+    let mut scopes = if request.scopes.is_empty() {
+        vec!["control".to_string()]
+    } else {
+        request.scopes
+    };
+    scopes.sort();
+    scopes.dedup();
+    for scope in &scopes {
+        if !matches!(scope.as_str(), "read" | "control" | "admin") {
+            return Err(ApiError::bad_request(
+                "token scope must be read, control, or admin",
+            ));
+        }
+    }
+    let expires_at = match request.expires_days.unwrap_or(90) {
+        0 => None,
+        days if (1..=3_650).contains(&days) => Some(db::now_ms() + days * 86_400_000),
+        _ => return Err(ApiError::bad_request("token expiry must be 0-3650 days")),
+    };
     let generated =
         tokens::generate().map_err(|error| ApiError::internal(format!("create token: {error}")))?;
-    let created = db::create_api_token(&state.pool, &generated.id, name, &generated.hash)
-        .await
-        .map_err(|error| ApiError::internal(format!("store token: {error}")))?;
-    tracing::info!(token = %generated.id, name, "API token created");
+    let created = db::create_api_token(
+        &state.pool,
+        &generated.id,
+        name,
+        &generated.hash,
+        &scopes,
+        expires_at,
+    )
+    .await
+    .map_err(|error| ApiError::internal(format!("store token: {error}")))?;
+    tracing::info!(token = %generated.id, name, scopes = ?scopes, "API token created");
     Ok(Json(CreatedToken {
         id: created.id,
         name: created.name,
         token: generated.token,
+        scopes: created.scopes,
+        expires_at: created.expires_at,
         created_at: created.created_at,
     }))
 }
@@ -2741,25 +2829,39 @@ fn bearer_token(headers: &HeaderMap) -> Option<&str> {
         .filter(|value| !value.is_empty())
 }
 
-async fn verify_api_token(state: &AppState, token: &str) -> Option<String> {
+async fn verify_api_token(
+    state: &AppState,
+    token: &str,
+    client_ip: Option<&str>,
+) -> Option<(String, Vec<String>)> {
     let (id, secret) = tokens::parse(token)?;
-    let stored = match db::api_token_hash(&state.pool, id).await {
+    let stored = match db::api_token_auth(&state.pool, id).await {
         Ok(value) => value,
         Err(error) => {
             tracing::warn!(%error, "API token lookup failed");
             return None;
         }
     }?;
-    if !tokens::verify_secret(secret, &stored) {
+    if stored
+        .expires_at
+        .is_some_and(|expires| expires < db::now_ms())
+    {
         return None;
     }
-    if let Err(error) = db::touch_api_token(&state.pool, id, db::now_ms()).await {
+    if !tokens::verify_secret(secret, &stored.token_hash) {
+        return None;
+    }
+    if let Err(error) = db::touch_api_token(&state.pool, id, db::now_ms(), client_ip).await {
         tracing::warn!(%error, "could not update API token last-used time");
     }
-    Some(id.to_string())
+    Some((id.to_string(), stored.scopes))
 }
 
-async fn authorize(state: &AppState, headers: &HeaderMap) -> Option<AuthActor> {
+async fn authorize(
+    state: &AppState,
+    headers: &HeaderMap,
+    client_ip: Option<&str>,
+) -> Option<AuthActor> {
     let basic_ok = headers
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
@@ -2784,14 +2886,16 @@ async fn authorize(state: &AppState, headers: &HeaderMap) -> Option<AuthActor> {
         return Some(AuthActor {
             label: state.config.admin_user.clone(),
             kind: "basic".into(),
+            scopes: vec!["admin".into()],
         });
     }
     if let Some(token) = bearer_token(headers)
-        && let Some(id) = verify_api_token(state, token).await
+        && let Some((id, scopes)) = verify_api_token(state, token, client_ip).await
     {
         return Some(AuthActor {
             label: format!("token:{id}"),
             kind: "token".into(),
+            scopes,
         });
     }
     if let Some(token) = session_token(headers) {
@@ -2801,6 +2905,7 @@ async fn authorize(state: &AppState, headers: &HeaderMap) -> Option<AuthActor> {
                 return Some(AuthActor {
                     label: session.username.clone(),
                     kind: "session".into(),
+                    scopes: vec!["admin".into()],
                 });
             }
             sessions.remove(&token);
@@ -2833,8 +2938,33 @@ async fn basic_auth(
     }
     let method = request.method().clone();
     let path = request.uri().path().to_string();
-    let actor = authorize(&state, request.headers()).await;
+    let actor = authorize(&state, request.headers(), Some(&key)).await;
     if let Some(actor) = actor {
+        let required = required_scope(&method, &path);
+        if !actor_allows(&actor, required) {
+            let _ = db::record_audit(
+                &state.pool,
+                &actor.label,
+                &actor.kind,
+                "auth.forbidden",
+                Some(&path),
+                Some(required),
+                Some(&key),
+            )
+            .await;
+            return (StatusCode::FORBIDDEN, "Insufficient token scope\n").into_response();
+        }
+        if actor.kind == "token" {
+            let token_id = actor.label.strip_prefix("token:").unwrap_or(&actor.label);
+            if let Some(seconds) = state.token_limits.lock().await.check(token_id, now) {
+                let mut response =
+                    (StatusCode::TOO_MANY_REQUESTS, "Token rate limit exceeded\n").into_response();
+                if let Ok(value) = HeaderValue::from_str(&seconds.to_string()) {
+                    response.headers_mut().insert(header::RETRY_AFTER, value);
+                }
+                return response;
+            }
+        }
         request.extensions_mut().insert(actor.clone());
         let response = next.run(request).await;
         if !matches!(method, Method::GET | Method::HEAD | Method::OPTIONS) {
@@ -2864,6 +2994,38 @@ async fn basic_auth(
         )
         .await;
         (StatusCode::UNAUTHORIZED, "Authentication required\n").into_response()
+    }
+}
+
+fn required_scope(method: &Method, path: &str) -> &'static str {
+    if path.starts_with("/api/v1/tokens")
+        || path.starts_with("/api/v1/audit")
+        || path.starts_with("/api/v1/backups")
+        || path == "/api/v1/restore"
+        || path.starts_with("/api/v1/settings")
+    {
+        return "admin";
+    }
+    if matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS) {
+        return "read";
+    }
+    "control"
+}
+
+fn actor_allows(actor: &AuthActor, required: &str) -> bool {
+    if actor.kind != "token" {
+        return true;
+    }
+    if actor.scopes.iter().any(|scope| scope == "admin") {
+        return true;
+    }
+    match required {
+        "read" => actor
+            .scopes
+            .iter()
+            .any(|scope| matches!(scope.as_str(), "read" | "control")),
+        "control" => actor.scopes.iter().any(|scope| scope == "control"),
+        _ => false,
     }
 }
 
