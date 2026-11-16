@@ -1,6 +1,6 @@
 # nginx reverse proxy for atv.christopherrutherford.net
 
-Exposes the Awesome TV app at:
+Exposes the ChannelLoom app at:
 
 ```text
 https://atv.christopherrutherford.net
@@ -65,7 +65,7 @@ atv.christopherrutherford.net
 
 - **`ERR_CONNECTION_REFUSED` / `ERR_NETWORK_CHANGED` from one network but not
   others.** First rule out SWAG's fail2ban. The stock `nginx-unauthorized` jail
-  bans an IP after five 401 responses, and a logged-out Awesome TV tab used to
+  bans an IP after five 401 responses, and a logged-out ChannelLoom tab used to
   poll a protected API every ten seconds, so a real viewer could ban
   themselves. Check and clear it:
 
@@ -119,7 +119,7 @@ Prerequisites:
   address.
 - Router forwards TCP 80 and 443 to this host.
 - nginx and certbot installed.
-- Awesome TV listening on `0.0.0.0:8409`.
+- ChannelLoom listening on `0.0.0.0:8409`.
 
 ### 1. Bootstrap HTTP and obtain a certificate
 
@@ -164,7 +164,7 @@ curl -I https://atv.christopherrutherford.net/healthz
 curl -I https://atv.christopherrutherford.net/
 ```
 
-### 3. Update Awesome TV
+### 3. Update ChannelLoom
 
 ```sh
 AWESOMETV_PUBLIC_URL=https://atv.christopherrutherford.net

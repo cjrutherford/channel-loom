@@ -9,7 +9,7 @@ ErsatzTV Legacy is frozen, ErsatzTV Next is an engine-only project, and Tunarr i
 
 ## Decision
 
-Build **Awesome TV** as an **all-in-one** product:
+Build **ChannelLoom** as an **all-in-one** product:
 
 - sources, catalog, library, scheduler, playout, streaming engine, API, UI, and operations;
 - our **own streaming engine**, with no dependency on ErsatzTV Next;

@@ -5,7 +5,7 @@ defines what remains before the cloud provider feature is complete.
 
 ## Scope boundary
 
-Cloud providers answer: **what media files may Awesome TV index and play?**
+Cloud providers answer: **what media files may ChannelLoom index and play?**
 
 They do not provide channels, schedules, or guides. Peer-to-peer channel
 sourcing is a separate feature.

@@ -21,14 +21,21 @@ area, is in [`PLAN-REVIEW.md`](PLAN-REVIEW.md).
 | Streams | Resolution, preset, CRF, audio bitrate, global/per-channel languages, subtitles, HDR tonemap, software/VAAPI, segment size, prebuffer, cache depth, and startup prewarm |
 | Precache | 24 h look-ahead, 100 GB LRU, raw copy or 720p proxy for slow sources; status and removal in the admin Sources view |
 | Playback | HLS + MPEG-TS/HDHomeRun; trimmed in/out playback; catch-up restart; rolling DVR buffer; music/image items; subtitles, overlays, HDR tonemap, VAAPI; slate fallback |
-| Auth | Public viewer at `/`; admin console at `/admin` (login-gated shell, session cookies marked `Secure` behind TLS, per-IP login throttling, Basic auth for API clients) |
+| Auth | **Watch** at `/`; **Studio** at `/admin` (login-gated shell, session cookies marked `Secure` behind TLS, per-IP login throttling, Basic auth for API clients) |
 | Backups | Create/list/download, staged restore on restart |
 | Sources | Jellyfin import configured; Emby import implemented (no live instance configured) |
-| UI | Redesigned watch page and control room: cinematic player, channel rail, guide timeline, cast mode, skeletons, responsive layouts, and a 10-foot TV mode |
-| Apps | Installable PWA over Tailscale Serve HTTPS; Android TV wrapper APK; Tauri desktop wrapper scaffold |
-| Cast | Cast button in the public viewer and admin, cast-mode overlay with remote play/pause/mute/volume/stop, channel switching while casting, branded metadata, configurable Styled/Custom receiver, signed Cast HLS and CORS |
+| UI | ChannelLoom Watch and Studio: cinematic player, channel rail, guide timeline, cast mode, skeletons, responsive layouts, and a 10-foot TV mode |
+| Apps | ChannelLoom PWA over Tailscale Serve HTTPS; Android TV wrapper APK; Tauri desktop wrapper |
+| Cast | Cast button in Watch and Studio, cast-mode overlay with remote play/pause/mute/volume/stop, channel switching while casting, branded metadata, configurable Styled/Custom receiver, signed Cast HLS and CORS |
 | CI | Rust, Docker, Android TV APK, Tauri desktop bundle, PWA asset validation |
 | Runtime | Docker on Ubuntu 26.04 with FFmpeg 8.0.1 and VAAPI device passthrough |
+
+## Brand
+
+The product is **ChannelLoom** (one word), with the tagline “Your favorites are always on.”
+Watch is `/` and Studio is `/admin`. Internal `awesometv` identifiers, package IDs,
+environment variables, routes, and the database name are unchanged. See
+[`BRAND.md`](BRAND.md).
 
 ## Completed
 

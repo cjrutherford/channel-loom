@@ -6,7 +6,7 @@ Scope: implementation in this repository plus the live deployment at
 
 ## Verdict
 
-Awesome TV is a **working self-hosted live-TV product**, not a prototype:
+ChannelLoom is a **working self-hosted live-TV product**, not a prototype:
 
 - 12 scheduled channels on a 10,254-episode / 76-movie / 301-track library
 - public live/guide viewer and a separate login-gated admin console

@@ -1,15 +1,15 @@
 {
-  "name": "Awesome TV",
-  "short_name": "Awesome TV",
-  "description": "Live channels and guide from Awesome TV.",
+  "name": "ChannelLoom",
+  "short_name": "ChannelLoom",
+  "description": "Your favorites are always on. Live channels and guide from your personal library.",
   "id": "/",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "display_override": ["window-controls-overlay", "standalone"],
   "orientation": "any",
-  "background_color": "#050607",
-  "theme_color": "#0b0f12",
+  "background_color": "#10162B",
+  "theme_color": "#10162B",
   "categories": ["entertainment", "video"],
   "icons": [
     {
@@ -31,8 +31,8 @@
   ],
   "shortcuts": [
     {
-      "name": "Live TV",
-      "short_name": "Live",
+      "name": "Watch",
+      "short_name": "Watch",
       "url": "/",
       "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
     },
@@ -40,6 +40,12 @@
       "name": "Guide",
       "short_name": "Guide",
       "url": "/#guide",
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Studio",
+      "short_name": "Studio",
+      "url": "/admin",
       "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
     }
   ]

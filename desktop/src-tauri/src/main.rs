@@ -14,12 +14,12 @@ fn main() {
                 )
             })?;
             WebviewWindowBuilder::new(app, "main", WebviewUrl::External(parsed))
-                .title("Awesome TV")
+                .title("ChannelLoom")
                 .inner_size(1440.0, 900.0)
                 .min_inner_size(960.0, 600.0)
                 .build()?;
             Ok(())
         })
         .run(tauri::generate_context!())
-        .expect("error while running Awesome TV");
+        .expect("error while running ChannelLoom");
 }

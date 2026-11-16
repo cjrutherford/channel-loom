@@ -19,7 +19,7 @@ The mount is CIFS: `//192.168.1.100/media` → `/mnt/valhalla/media`.
 - `download/complete`, `download/completed`, `download/incomplete`: download staging, not the organized library.
 - `live-tv/`: captured `.ts` recordings exist, but they are not part of the selected canonical video library. Add them later as a separate source if desired.
 - `videoad/`, `configs/`: empty and unrelated.
-- `transcode_cache/`: empty; Awesome TV uses its own cache under its data directory.
+- `transcode_cache/`: empty; ChannelLoom uses its own cache under its data directory.
 - `tanuki-assets/`: unrelated project assets.
 - `#recycle/`: recycle bin.
 - Any directory or file component ending in `.1` (duplicate music folders).

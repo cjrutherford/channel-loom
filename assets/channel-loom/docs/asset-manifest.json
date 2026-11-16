@@ -1,0 +1,290 @@
+{
+  "brand": "ChannelLoom",
+  "assets": [
+    {
+      "file": "01-brand-primary/channelloom-app-icon.png",
+      "bytes": 940880,
+      "sha256": "fb6d6a29cce1425a66eca6a2b35ca80fc1a8d4d81005492406adadb57f3d06b7",
+      "image": {
+        "width": 1254,
+        "height": 1254,
+        "mode": "RGB"
+      }
+    },
+    {
+      "file": "01-brand-primary/channelloom-wordmark-transparent.png",
+      "bytes": 617968,
+      "sha256": "173ac6a6fad77d566fd6447c98a6f932553f8f96bad33879c86375f01e18247d",
+      "image": {
+        "width": 2172,
+        "height": 724,
+        "mode": "RGBA"
+      }
+    },
+    {
+      "file": "02-original-approved-references/original-selected-app-icon.png",
+      "bytes": 1068284,
+      "sha256": "27c1dd4fd6a13e2998f56f1ce8a0db59053a2746d982546acd2e29f0b522a053",
+      "image": {
+        "width": 1254,
+        "height": 1254,
+        "mode": "RGB"
+      }
+    },
+    {
+      "file": "02-original-approved-references/original-selected-cast-background.png",
+      "bytes": 1027838,
+      "sha256": "ae37b7e991039ec6598b91435b9580fd902251bdc5a9dcd933bab486db0c9b0f",
+      "image": {
+        "width": 1672,
+        "height": 941,
+        "mode": "RGB"
+      }
+    },
+    {
+      "file": "02-original-approved-references/original-selected-marketing-art.png",
+      "bytes": 1504532,
+      "sha256": "3e0dea4e58a42914ea66859218671a50871a37493190822e576ea750c303cbca",
+      "image": {
+        "width": 1122,
+        "height": 1402,
+        "mode": "RGB"
+      }
+    },
+    {
+      "file": "03-platform-icons/channelloom.ico",
+      "bytes": 136566,
+      "sha256": "9cf0f5920cc1724736a97299d7e6f8f746f8c5900a542f1d2813fe00e7a05800",
+      "image": {
+        "width": 256,
+        "height": 256,
+        "mode": "RGBA"
+      }
+    },
+    {
+      "file": "03-platform-icons/icon-1024.png",
+      "bytes": 1029847,
+      "sha256": "712765ac0549f3658a24a1f0308e09b6c0854e660f383c3819a360838ea8a842",
+      "image": {
+        "width": 1024,
+        "height": 1024,
+        "mode": "RGBA"
+      }
+    },
+    {
+      "file": "03-platform-icons/icon-128.png",
+      "bytes": 27966,
+      "sha256": "3c9b6c050f0058063bdb6205f8d8ff3935543d92425eaf024d9958afdd1aa659",
+      "image": {
+        "width": 128,
+        "height": 128,
+        "mode": "RGBA"
+      }
+    },
+    {
+      "file": "03-platform-icons/icon-144.png",
+      "bytes": 33772,
+      "sha256": "dc265ea80ab846bcd35c7441ca930d17f7c51f4a44c2032af32ec9a73426e44a",
+      "image": {
+        "width": 144,
+        "height": 144,
+        "mode": "RGBA"
+      }
+    },
+    {
+      "file": "03-platform-icons/icon-152.png",
+      "bytes": 36668,
+      "sha256": "81f17181c520d3d98f496648029db5b629902ebe953bdb4cf26ef13761d0bff3",
+      "image": {
+        "width": 152,
+        "height": 152,
+        "mode": "RGBA"
+      }
+    },
+    {
+      "file": "03-platform-icons/icon-16.png",
+      "bytes": 910,
+      "sha256": "39ff7038c58cca21b484512011f527e158946c4fe05458c9cedb2facc2118946",
+      "image": {
+        "width": 16,
+        "height": 16,
+        "mode": "RGBA"
+      }
+    },
+    {
+      "file": "03-platform-icons/icon-180.png",
+      "bytes": 48287,
+      "sha256": "8a335fce90da8c5d2f3e8677e0d6ddd5441aaa9ec00b18854e7788299f7642df",
+      "image": {
+        "width": 180,
+        "height": 180,
+        "mode": "RGBA"
+      }
+    },
+    {
+      "file": "03-platform-icons/icon-192.png",
+      "bytes": 53565,
+      "sha256": "0d7bdb5f832502ca484ecaa6eb58566191f05c4e274e94b50844b040d5346e38",
+      "image": {
+        "width": 192,
+        "height": 192,
+        "mode": "RGBA"
+      }
+    },
+    {
+      "file": "03-platform-icons/icon-256.png",
+      "bytes": 86700,
+      "sha256": "dadfab55be8a035cc9890e1250f23b0385f2c3181304a32dc91a723c9bc44ff2",
+      "image": {
+        "width": 256,
+        "height": 256,
+        "mode": "RGBA"
+      }
+    },
+    {
+      "file": "03-platform-icons/icon-32.png",
+      "bytes": 2902,
+      "sha256": "ce06b0da04717801281983d34eacfe69dab9d0f1c34e88b6cc1f2795382f89dc",
+      "image": {
+        "width": 32,
+        "height": 32,
+        "mode": "RGBA"
+      }
+    },
+    {
+      "file": "03-platform-icons/icon-384.png",
+      "bytes": 178216,
+      "sha256": "1069bf17b9133cce04c981be52d53b16215a898fee9ff04626ac751fc5a58817",
+      "image": {
+        "width": 384,
+        "height": 384,
+        "mode": "RGBA"
+      }
+    },
+    {
+      "file": "03-platform-icons/icon-48.png",
+      "bytes": 5661,
+      "sha256": "bda7c2f751726ba6493754c626b51e46ef2a5f3b9f4d947c627131b304e1674b",
+      "image": {
+        "width": 48,
+        "height": 48,
+        "mode": "RGBA"
+      }
+    },
+    {
+      "file": "03-platform-icons/icon-512.png",
+      "bytes": 293739,
+      "sha256": "8f6e50ead4b1341e36b7424d1d2f011e938ae8328f373339e475d519007ca873",
+      "image": {
+        "width": 512,
+        "height": 512,
+        "mode": "RGBA"
+      }
+    },
+    {
+      "file": "03-platform-icons/icon-64.png",
+      "bytes": 9124,
+      "sha256": "90e7aa6fdff3063ff30447e08f6a46a53a259cad66e10df334395b6a99548c3a",
+      "image": {
+        "width": 64,
+        "height": 64,
+        "mode": "RGBA"
+      }
+    },
+    {
+      "file": "03-platform-icons/icon-72.png",
+      "bytes": 11112,
+      "sha256": "8fc0b28dbca7c0e17947fa4980cc9bad2d91ac50f0d9d95f43dab2816e35650f",
+      "image": {
+        "width": 72,
+        "height": 72,
+        "mode": "RGBA"
+      }
+    },
+    {
+      "file": "03-platform-icons/icon-96.png",
+      "bytes": 17717,
+      "sha256": "f8e4608feadac1b958507d007944d228e26a8f3fc5f5bb6f82b90c3d26deb157",
+      "image": {
+        "width": 96,
+        "height": 96,
+        "mode": "RGBA"
+      }
+    },
+    {
+      "file": "04-backgrounds/cast-1280x720.png",
+      "bytes": 812030,
+      "sha256": "ae43a0bdd2263d20a12f2c300d868c659eff756691c34fa21b8cc4c2aec55040",
+      "image": {
+        "width": 1280,
+        "height": 720,
+        "mode": "RGB"
+      }
+    },
+    {
+      "file": "04-backgrounds/cast-1920x1080.png",
+      "bytes": 1550452,
+      "sha256": "87e6941bfbdb4fb1a3db3ed093b277f8a6cd7a7681c3a6d239b6ea18d768f6d0",
+      "image": {
+        "width": 1920,
+        "height": 1080,
+        "mode": "RGB"
+      }
+    },
+    {
+      "file": "04-backgrounds/cast-unbranded-1920x1080.png",
+      "bytes": 1599987,
+      "sha256": "3a09203ce1b49729941924c73b07c3153b7d16409bb44a407235e57d873ed508",
+      "image": {
+        "width": 1920,
+        "height": 1080,
+        "mode": "RGB"
+      }
+    },
+    {
+      "file": "04-backgrounds/channelloom-cast-background-branded.png",
+      "bytes": 997224,
+      "sha256": "8353f50dd0f875b49323e213f8c862cfc5dc4116e120d1e99e1baf17b93f69cb",
+      "image": {
+        "width": 1672,
+        "height": 941,
+        "mode": "RGB"
+      }
+    },
+    {
+      "file": "04-backgrounds/channelloom-mobile-splash-branded.png",
+      "bytes": 1138648,
+      "sha256": "aa4ed6045fc4eed3ad5dc8a74071e403b8d32542f825e82b7b73d90c67c9ad79",
+      "image": {
+        "width": 941,
+        "height": 1672,
+        "mode": "RGB"
+      }
+    },
+    {
+      "file": "04-backgrounds/splash-1080x1920.png",
+      "bytes": 1781850,
+      "sha256": "a0635756c259c0e6c9b27c48e0477c53c6531f7c28c19b889dd2500bc4c4a85c",
+      "image": {
+        "width": 1080,
+        "height": 1920,
+        "mode": "RGB"
+      }
+    },
+    {
+      "file": "05-marketing/channelloom-poster-branded.png",
+      "bytes": 1526196,
+      "sha256": "4c800f0567fadb12d968c98efe8bb5dfcb4ed88ffab7ff121247c53ab64cbd90",
+      "image": {
+        "width": 1122,
+        "height": 1402,
+        "mode": "RGB"
+      }
+    },
+    {
+      "file": "README.md",
+      "bytes": 5542,
+      "sha256": "15158182c4b296e98630918ac91b2656fba4c8bba30f15c1518a9689cd8ac72c"
+    }
+  ]
+}

@@ -3,42 +3,45 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Awesome TV — Broadcast Control</title>
-<meta name="theme-color" content="#0b0f12">
+<title>ChannelLoom — Studio</title>
+<meta name="theme-color" content="#10162B">
 <meta name="robots" content="noindex">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="Awesome TV">
+<meta name="apple-mobile-web-app-title" content="ChannelLoom">
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<link rel="apple-touch-startup-image" href="/icons/channelloom-splash.png">
+<link rel="icon" href="/icons/channelloom.ico" sizes="any">
 <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&family=Nunito+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
   :root {
-    --ink: #08090a;
-    --panel: #0e1012;
-    --panel-2: #131619;
-    --line: #262b30;
-    --line-soft: #1a1f23;
-    --paper: #f3efe6;
-    --muted: #9aa4ad;
-    --dim: #6f7b84;
-    --signal: #7ee7c7;
-    --amber: #f5c26b;
-    --red: #ff5a5f;
-    --blue: #7fb4ff;
-    --display: "Barlow Condensed", "Arial Narrow", sans-serif;
-    --body: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+    --ink: #10162b;
+    --panel: #151d36;
+    --panel-2: #1b2444;
+    --line: #2b3557;
+    --line-soft: #202a49;
+    --paper: #f5f7ff;
+    --muted: #a8b3d4;
+    --dim: #7581a5;
+    --signal: #22d3cf;
+    --amber: #ff9972;
+    --red: #ff6b7a;
+    --blue: #368bee;
+    --violet: #9252df;
+    --display: "Baloo 2", ui-rounded, "Trebuchet MS", sans-serif;
+    --body: "Nunito Sans", ui-sans-serif, system-ui, sans-serif;
     --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; min-height: 100%; background: var(--ink); color: var(--paper); font-family: var(--body); }
   body {
     background:
-      radial-gradient(1100px 600px at 12% -10%, rgba(126,231,199,.08), transparent 60%),
-      radial-gradient(900px 500px at 95% 10%, rgba(245,194,107,.06), transparent 60%),
+      radial-gradient(1100px 600px at 12% -10%, rgba(34,211,207,.11), transparent 60%),
+      radial-gradient(900px 500px at 95% 10%, rgba(146,82,223,.10), transparent 60%),
       var(--ink);
   }
   body::before {
@@ -51,16 +54,18 @@
   .shell { display: grid; grid-template-columns: 236px minmax(0, 1fr); min-height: 100vh; }
   .sidebar {
     position: sticky; top: 0; height: 100vh; padding: 22px 16px 18px;
-    border-right: 1px solid var(--line-soft); background: rgba(8,9,10,.72); backdrop-filter: blur(12px);
+    border-right: 1px solid var(--line-soft); background: rgba(16,22,43,.78); backdrop-filter: blur(12px);
     display: flex; flex-direction: column; gap: 22px;
   }
-  .brand { display: flex; align-items: center; gap: 11px; padding: 0 8px; }
+  .brand { display: grid; justify-items: start; gap: 4px; padding: 0 8px; }
+  .brand-wordmark { height: 40px; width: auto; display: block; filter: drop-shadow(0 8px 22px rgba(0,0,0,.45)); }
   .brand-mark {
-    width: 34px; height: 34px; border-radius: 9px; background: var(--paper); color: var(--ink);
-    display: grid; place-items: center; font-family: var(--display); font-size: 22px; font-weight: 700; letter-spacing: -.03em;
-    box-shadow: 0 0 0 1px rgba(255,255,255,.15), 0 8px 24px rgba(0,0,0,.4);
+    width: 34px; height: 34px; border-radius: 9px; overflow: hidden;
+    background: #0b1120 url("/icons/icon-192.png") center/cover no-repeat;
+    box-shadow: 0 0 0 1px rgba(34,211,207,.35), 0 8px 24px rgba(0,0,0,.4);
+    flex: 0 0 auto;
   }
-  .brand-name { font-family: var(--display); font-size: 24px; font-weight: 700; letter-spacing: .02em; line-height: .9; }
+  .brand-name { font-family: var(--display); font-size: 23px; font-weight: 700; letter-spacing: -.01em; line-height: 1; }
   .brand-sub { font-family: var(--mono); font-size: 9px; letter-spacing: .18em; color: var(--dim); margin-top: 4px; text-transform: uppercase; }
   nav { display: grid; gap: 4px; }
   .nav-item {
@@ -69,17 +74,17 @@
   }
   .nav-item .key { font-family: var(--mono); font-size: 10px; color: var(--dim); margin-left: auto; }
   .nav-item:hover { color: var(--paper); background: rgba(255,255,255,.035); }
-  .nav-item.active { color: var(--ink); background: var(--paper); }
-  .nav-item.active .key { color: rgba(0,0,0,.45); }
+  .nav-item.active { color: #06202b; background: var(--signal); border-color: var(--signal); box-shadow: 0 6px 18px rgba(34,211,207,.18); }
+  .nav-item.active .key { color: rgba(6,32,43,.55); }
   .nav-icon { width: 17px; text-align: center; font-size: 13px; }
   .side-foot { margin-top: auto; display: grid; gap: 10px; }
   .health { display: flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 10px; color: var(--muted); padding: 10px; border: 1px solid var(--line-soft); border-radius: 8px; }
-  .pulse { width: 7px; height: 7px; border-radius: 99px; background: var(--signal); box-shadow: 0 0 0 0 rgba(126,231,199,.5); animation: pulse 2.4s infinite; }
-  @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(126,231,199,.45); } 70% { box-shadow: 0 0 0 7px rgba(126,231,199,0); } 100% { box-shadow: 0 0 0 0 rgba(126,231,199,0); } }
+  .pulse { width: 7px; height: 7px; border-radius: 99px; background: var(--signal); box-shadow: 0 0 0 0 rgba(34,211,207,.5); animation: pulse 2.4s infinite; }
+  @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(34,211,207,.45); } 70% { box-shadow: 0 0 0 7px rgba(34,211,207,0); } 100% { box-shadow: 0 0 0 0 rgba(34,211,207,0); } }
   .main { min-width: 0; }
   .topbar {
     position: sticky; top: 0; z-index: 20; display: flex; align-items: center; gap: 16px;
-    padding: 16px 28px; border-bottom: 1px solid var(--line-soft); background: rgba(8,9,10,.82); backdrop-filter: blur(12px);
+    padding: 16px 28px; border-bottom: 1px solid var(--line-soft); background: rgba(16,22,43,.86); backdrop-filter: blur(12px);
   }
   .crumb { font-family: var(--mono); font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: .12em; }
   .crumb b { color: var(--paper); font-weight: 500; }
@@ -88,9 +93,9 @@
     border: 1px solid var(--line); background: var(--panel-2); color: var(--paper); border-radius: 7px;
     padding: 8px 12px; font-size: 12px; font-weight: 600; display: inline-flex; gap: 7px; align-items: center;
   }
-  .btn:hover { border-color: #3b444c; background: #181c20; }
-  .btn.primary { background: var(--paper); color: var(--ink); border-color: var(--paper); }
-  .btn.primary:hover { background: #fff; }
+  .btn:hover { border-color: #3c4a78; background: #1d2749; }
+  .btn.primary { background: var(--signal); color: #06202b; border-color: var(--signal); }
+  .btn.primary:hover { background: #5ce6e1; }
   .btn.ghost { background: transparent; }
   .btn.small { padding: 5px 9px; font-size: 11px; }
   .btn:disabled { opacity: .45; cursor: default; }
@@ -100,8 +105,8 @@
   @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
   .view-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
   .eyebrow { font-family: var(--mono); font-size: 10px; letter-spacing: .16em; text-transform: uppercase; color: var(--signal); margin-bottom: 6px; }
-  h1 { font-family: var(--display); font-size: clamp(34px, 4vw, 54px); line-height: .92; letter-spacing: .01em; margin: 0; font-weight: 600; text-transform: uppercase; }
-  h2 { font-family: var(--display); font-size: 24px; text-transform: uppercase; letter-spacing: .03em; margin: 0 0 12px; font-weight: 600; }
+  h1 { font-family: var(--display); font-size: clamp(34px, 4vw, 54px); line-height: .95; letter-spacing: -.015em; margin: 0; font-weight: 700; }
+  h2 { font-family: var(--display); font-size: 24px; letter-spacing: -.01em; margin: 0 0 12px; font-weight: 700; }
   h3 { font-size: 13px; margin: 0 0 5px; font-weight: 600; }
   p { margin: 0 0 10px; }
   .muted { color: var(--muted); }
@@ -121,10 +126,10 @@
   .screen video { width: 100%; height: 100%; object-fit: contain; background: #000; }
   .screen-off {
     position: absolute; inset: 0; display: grid; place-items: center; text-align: center; padding: 24px;
-    background: radial-gradient(circle at 50% 45%, #182026 0, #08090a 65%);
+    background: radial-gradient(circle at 50% 45%, #18224a 0, #0a0f1f 65%);
   }
-  .screen-off .big { font-family: var(--display); font-size: clamp(38px, 6vw, 82px); line-height: .85; letter-spacing: .02em; color: #2c353c; text-transform: uppercase; }
-  .screen-off .sub { font-family: var(--mono); font-size: 10px; letter-spacing: .18em; color: #54616a; margin-top: 10px; }
+  .screen-off .big { font-family: var(--display); font-size: clamp(38px, 6vw, 82px); line-height: .9; letter-spacing: -.01em; color: #2b3557; }
+  .screen-off .sub { font-family: var(--mono); font-size: 10px; letter-spacing: .18em; color: #7581a5; margin-top: 10px; }
   .onair-top { position: absolute; top: 14px; left: 14px; right: 14px; display: flex; justify-content: space-between; gap: 10px; z-index: 3; }
   .chip {
     display: inline-flex; align-items: center; gap: 6px; padding: 5px 8px; border-radius: 999px;
@@ -137,22 +142,22 @@
     position: absolute; left: 0; right: 0; bottom: 0; z-index: 3; padding: 42px 16px 14px;
     background: linear-gradient(transparent, rgba(0,0,0,.88));
   }
-  .screen-title { font-family: var(--display); font-size: clamp(24px, 3.4vw, 42px); line-height: .95; text-transform: uppercase; letter-spacing: .02em; }
-  .screen-sub { font-family: var(--mono); font-size: 10px; color: #c8d0d6; margin-top: 5px; letter-spacing: .04em; }
+  .screen-title { font-family: var(--display); font-size: clamp(24px, 3.4vw, 42px); line-height: 1; letter-spacing: -.015em; }
+  .screen-sub { font-family: var(--mono); font-size: 10px; color: #c3ccec; margin-top: 5px; letter-spacing: .04em; }
   .onair-body { display: flex; gap: 16px; align-items: center; padding: 14px 18px; flex-wrap: wrap; }
   .channel-no { font-family: var(--display); font-size: 42px; line-height: .8; color: var(--amber); }
   .onair-copy { min-width: 0; flex: 1; }
   .onair-copy .name { font-weight: 600; font-size: 14px; }
   .onair-copy .next { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .progress { height: 4px; background: #22282d; border-radius: 99px; overflow: hidden; margin-top: 8px; }
+  .progress { height: 4px; background: #2a3557; border-radius: 99px; overflow: hidden; margin-top: 8px; }
   .progress > span { display: block; height: 100%; background: linear-gradient(90deg, var(--signal), var(--amber)); width: 0; }
   .rail { display: grid; gap: 8px; align-content: start; }
   .rail-card {
     display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; gap: 10px; align-items: center;
     padding: 10px; border: 1px solid var(--line-soft); border-radius: 9px; background: rgba(255,255,255,.018); cursor: pointer;
   }
-  .rail-card:hover { border-color: #3a444c; background: rgba(255,255,255,.035); }
-  .rail-card.active { border-color: var(--signal); box-shadow: inset 0 0 0 1px rgba(126,231,199,.25); }
+  .rail-card:hover { border-color: #3c4a78; background: rgba(255,255,255,.035); }
+  .rail-card.active { border-color: var(--signal); box-shadow: inset 0 0 0 1px rgba(34,211,207,.25); }
   .rail-no { font-family: var(--display); font-size: 25px; color: var(--amber); }
   .rail-name { font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .rail-now { font-size: 10px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -163,7 +168,7 @@
   .stat .l { font-family: var(--mono); font-size: 9px; color: var(--dim); text-transform: uppercase; letter-spacing: .1em; margin-top: 3px; }
   .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); gap: 12px; }
   .channel-card { padding: 14px; border: 1px solid var(--line); border-radius: 11px; background: var(--panel); cursor: pointer; }
-  .channel-card:hover { border-color: #3b464e; transform: translateY(-1px); }
+  .channel-card:hover { border-color: #3c4a78; transform: translateY(-1px); }
   .channel-card.active { border-color: var(--signal); }
   .cc-top { display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; }
   .cc-no { font-family: var(--display); font-size: 26px; color: var(--amber); line-height: .9; }
@@ -173,7 +178,7 @@
   .cc-actions { display: flex; gap: 6px; margin-top: 10px; }
   .toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
   .search { flex: 1; min-width: 150px; background: var(--panel); border: 1px solid var(--line); color: var(--paper); border-radius: 7px; padding: 8px 11px; }
-  .search::placeholder { color: #63707a; }
+  .search::placeholder { color: #7581a5; }
   .tabs { display: flex; gap: 4px; background: var(--panel); border: 1px solid var(--line); padding: 3px; border-radius: 8px; }
   .tab { background: transparent; border: 0; color: var(--muted); padding: 6px 9px; border-radius: 5px; font-size: 11px; font-weight: 600; }
   .tab.active { background: var(--paper); color: var(--ink); }
@@ -186,7 +191,7 @@
   .tr input { accent-color: var(--signal); }
   .badge { display: inline-block; font-family: var(--mono); font-size: 9px; padding: 2px 5px; border: 1px solid var(--line); border-radius: 4px; color: var(--muted); }
   .empty { padding: 32px 20px; text-align: center; color: var(--dim); border: 1px dashed var(--line); border-radius: 10px; }
-  .empty b { display: block; color: var(--paper); font-family: var(--display); font-size: 22px; text-transform: uppercase; margin-bottom: 4px; }
+  .empty b { display: block; color: var(--paper); font-family: var(--display); font-size: 22px; margin-bottom: 4px; }
   .source-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
   .source-card { padding: 15px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
   .source-top { display: flex; justify-content: space-between; gap: 10px; align-items: center; }
@@ -213,7 +218,7 @@
   .modal h2 { margin-bottom: 4px; }
   .field { display: grid; gap: 5px; margin: 12px 0; }
   .field label { font-family: var(--mono); font-size: 9px; letter-spacing: .1em; text-transform: uppercase; color: var(--dim); }
-  .field input, .field select { background: #08090a; border: 1px solid var(--line); color: var(--paper); border-radius: 7px; padding: 9px 10px; }
+  .field input, .field select { background: #0b1120; border: 1px solid var(--line); color: var(--paper); border-radius: 7px; padding: 9px 10px; }
   .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
   .toast-wrap { position: fixed; right: 18px; bottom: 18px; z-index: 120; display: grid; gap: 8px; }
   .toast { background: var(--paper); color: var(--ink); border-radius: 8px; padding: 10px 13px; font-size: 12px; font-weight: 600; box-shadow: 0 10px 30px rgba(0,0,0,.4); animation: toast .3s ease both; max-width: 360px; }
@@ -237,7 +242,7 @@
   .tv-clock { font-family: var(--mono); font-size: 22px; color: var(--paper); }
   .tv-grid { display: flex; gap: 12px; margin-top: 16px; overflow-x: auto; padding-bottom: 6px; scrollbar-width: thin; }
   .tv-tile { flex: 0 0 250px; border: 1px solid var(--line); border-radius: 12px; padding: 16px; background: var(--panel); cursor: pointer; min-height: 112px; }
-  .tv-tile.active { border-color: var(--mint); box-shadow: 0 0 0 2px rgba(126,231,199,.22); }
+  .tv-tile.active { border-color: var(--mint); box-shadow: 0 0 0 2px rgba(34,211,207,.22); }
   .tv-tile .num { font-family: var(--mono); color: var(--mint); font-size: 22px; }
   .tv-tile .name { font-size: 20px; font-weight: 700; margin-top: 2px; }
   .tv-tile .now { font-size: 14px; color: var(--muted); margin-top: 8px; }
@@ -276,18 +281,18 @@
   :root { --shadow-panel: 0 24px 70px rgba(0,0,0,.42); }
   body {
     background:
-      radial-gradient(1100px 620px at 8% -10%, rgba(126,231,199,.075), transparent 60%),
-      radial-gradient(900px 520px at 100% 4%, rgba(245,194,107,.05), transparent 60%),
+      radial-gradient(1100px 620px at 8% -10%, rgba(34,211,207,.075), transparent 60%),
+      radial-gradient(900px 520px at 100% 4%, rgba(146,82,223,.05), transparent 60%),
       var(--ink);
   }
-  .sidebar { width: 252px; padding: 20px 14px 16px; background: linear-gradient(180deg, rgba(12,15,17,.94), rgba(7,9,10,.9)); }
+  .sidebar { width: 252px; padding: 20px 14px 16px; background: linear-gradient(180deg, rgba(21,29,54,.94), rgba(11,17,32,.92)); }
   .brand { padding: 0 6px; }
   .brand-mark { box-shadow: 0 0 0 1px rgba(255,255,255,.17), 0 10px 30px rgba(0,0,0,.55); }
-  .brand-name { font-size: 26px; letter-spacing: .04em; }
+  .brand-name { font-size: 25px; letter-spacing: -.01em; }
   .brand-sub { letter-spacing: .2em; }
   .nav-item { padding: 10px 12px; border-radius: 9px; }
-  .nav-item.active { background: linear-gradient(90deg, var(--paper), #ece6da); box-shadow: 0 8px 22px rgba(0,0,0,.35); }
-  .side-foot .health { background: rgba(126,231,199,.045); border-color: rgba(126,231,199,.16); border-radius: 9px; }
+  .nav-item.active { background: var(--signal); box-shadow: 0 8px 22px rgba(34,211,207,.2); }
+  .side-foot .health { background: rgba(34,211,207,.045); border-color: rgba(34,211,207,.16); border-radius: 9px; }
   .topbar { height: 62px; padding: 0 26px; }
   .content { padding: 24px 26px 60px; }
   .view-head h1 { font-size: clamp(40px, 4.2vw, 58px); }
@@ -302,22 +307,22 @@
   .onair-copy .name { font-family: var(--mono); font-size: 10px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .rail { max-height: calc(100vh - 215px); overflow-y: auto; padding-right: 4px; scrollbar-width: thin; }
   .rail-card { border-radius: 10px; }
-  .rail-card.active { box-shadow: inset 0 0 0 1px rgba(126,231,199,.2), 0 10px 26px rgba(0,0,0,.3); }
+  .rail-card.active { box-shadow: inset 0 0 0 1px rgba(34,211,207,.2), 0 10px 26px rgba(0,0,0,.3); }
   .stat { position: relative; overflow: hidden; border-radius: 12px; padding: 14px 16px; }
   .stat::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: linear-gradient(90deg, var(--signal), transparent); opacity: .45; }
   .stat .n { font-size: 34px; }
   .btn { border-radius: 8px; transition: border-color .2s, background .2s, transform .2s; }
   .btn:hover { transform: translateY(-1px); }
-  .btn.primary { box-shadow: 0 8px 24px rgba(255,255,255,.08); }
+  .btn.primary { box-shadow: 0 8px 24px rgba(34,211,207,.16); }
   .onair.casting .screen video { opacity: .16; }
   .onair.casting .onair-top { opacity: 0; }
-  .admin-cast { position: absolute; inset: 0; z-index: 6; display: grid; place-items: center; padding: 22px; text-align: center; background: radial-gradient(circle at 50% 34%, rgba(126,231,199,.13), transparent 46%), radial-gradient(circle at 50% 34%, #13211e 0, #060708 70%); }
+  .admin-cast { position: absolute; inset: 0; z-index: 6; display: grid; place-items: center; padding: 22px; text-align: center; background: radial-gradient(circle at 50% 34%, rgba(34,211,207,.13), transparent 46%), radial-gradient(circle at 50% 34%, #17224a 0, #0a0f1f 70%); }
   .admin-cast[hidden] { display: none; }
   .ac-inner { display: grid; justify-items: center; gap: 3px; }
   .ac-brand { display: flex; align-items: center; gap: 9px; margin-bottom: 10px; font-family: var(--display); font-size: 20px; letter-spacing: .08em; text-transform: uppercase; }
-  .ac-brand .brand-mark { width: 32px; height: 32px; font-size: 18px; border-radius: 8px; }
+  .ac-brand .brand-wordmark { height: 46px; }
   .ac-kicker { font-family: var(--mono); font-size: 9px; letter-spacing: .22em; text-transform: uppercase; color: var(--signal); }
-  .ac-device { font-family: var(--display); font-size: clamp(24px, 3.4vw, 40px); line-height: .95; text-transform: uppercase; }
+  .ac-device { font-family: var(--display); font-size: clamp(24px, 3.4vw, 40px); line-height: 1; letter-spacing: -.01em; }
   .ac-now { font-family: var(--mono); font-size: 10px; color: var(--muted); max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .ac-controls { display: flex; gap: 7px; margin-top: 14px; flex-wrap: wrap; justify-content: center; }
   .up-next { border-top: 1px solid var(--line-soft); padding: 12px 20px 16px; }
@@ -326,8 +331,8 @@
   .up-row:last-child { border-bottom: 0; }
   .up-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .up-time, .up-dur { font-family: var(--mono); font-size: 9px; color: var(--dim); }
-  .guide-block { background: linear-gradient(180deg, #8ceccd, #6fd9b9); }
-  .guide-block.filler { background: linear-gradient(180deg, #f8cf82, #eab65c); }
+  .guide-block { background: linear-gradient(180deg, #4ee4dd, #22d3cf); }
+  .guide-block.filler { background: linear-gradient(180deg, #ffb38f, #ff9972); }
   .login-card { border-radius: 16px; }
   .toast { border-radius: 10px; }
   :focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; border-radius: 4px; }
@@ -354,11 +359,8 @@
 <div class="shell">
   <aside class="sidebar">
     <div class="brand">
-      <div class="brand-mark">AT</div>
-      <div>
-        <div class="brand-name">Awesome TV</div>
-        <div class="brand-sub">Broadcast control</div>
-      </div>
+      <img class="brand-wordmark" src="/icons/channelloom-wordmark.png" alt="ChannelLoom">
+      <div class="brand-sub">Studio</div>
     </div>
     <nav>
       <a class="nav-item active" href="#on-air" data-view="on-air"><span class="nav-icon">◉</span> On Air <span class="key">1</span></a>
@@ -374,14 +376,14 @@
     <div class="side-foot">
       <div class="health"><span class="pulse"></span><span id="healthText">SYSTEM ONLINE</span></div>
       <div class="mono tiny dim" id="sideUrl"></div>
-      <a class="btn ghost small" href="/" target="_blank" rel="noopener">View live site</a>
+      <a class="btn ghost small" href="/" target="_blank" rel="noopener">Open Watch</a>
       <button class="btn ghost small" id="logoutBtn">Sign out</button>
     </div>
   </aside>
 
   <main class="main">
     <header class="topbar">
-      <div class="crumb">Awesome TV / <b id="crumbView">On Air</b></div>
+      <div class="crumb">ChannelLoom / <b id="crumbView">On Air</b></div>
       <div class="top-actions">
         <button class="btn ghost" id="castBtn">Cast</button>
         <button class="btn ghost" id="installAppBtn" style="display:none">Install app</button>
@@ -412,7 +414,7 @@
               </div>
               <div class="admin-cast" id="adminCast" hidden>
                 <div class="ac-inner">
-                  <div class="ac-brand"><span class="brand-mark">AT</span><span>Awesome TV</span></div>
+                  <div class="ac-brand"><img class="brand-wordmark" src="/icons/channelloom-wordmark.png" alt="ChannelLoom"></div>
                   <div class="ac-kicker">Casting to</div>
                   <div class="ac-device" id="adminCastDevice">Chromecast</div>
                   <div class="ac-now" id="adminCastNow">—</div>
@@ -565,7 +567,7 @@
             <div><h3>Scripted schedule</h3><div class="muted small">Paste YAML to replace this channel's schedule. Load current exports the active schedule.</div></div>
             <div class="row"><button class="btn small ghost" id="loadYamlBtn">Load current</button><button class="btn primary" id="applyYamlBtn">Apply YAML</button></div>
           </div>
-          <div class="field" style="margin-top:12px;"><label for="scriptYaml">Schedule YAML</label><textarea id="scriptYaml" rows="18" spellcheck="false" style="width:100%;font-family:var(--mono);font-size:11px;line-height:1.6;background:#0a0d0f;border:1px solid var(--line);border-radius:8px;color:var(--text);padding:12px;"></textarea></div>
+          <div class="field" style="margin-top:12px;"><label for="scriptYaml">Schedule YAML</label><textarea id="scriptYaml" rows="18" spellcheck="false" style="width:100%;font-family:var(--mono);font-size:11px;line-height:1.6;background:#0b1120;border:1px solid var(--line);border-radius:8px;color:var(--paper);padding:12px;"></textarea></div>
         </div>
         <div class="panel panel-pad" id="overridePanel" style="display:none;margin-top:14px;">
           <div class="source-top">
@@ -587,7 +589,7 @@
             <div><h3>External playout JSON</h3><div class="muted small">Import an explicit timeline from an external system, or export the active materialized timeline.</div></div>
             <div class="row"><button class="btn small ghost" id="loadJsonBtn">Load current</button><button class="btn primary" id="applyJsonBtn">Apply JSON</button></div>
           </div>
-          <div class="field" style="margin-top:12px;"><label for="externalJson">Playout JSON</label><textarea id="externalJson" rows="18" spellcheck="false" style="width:100%;font-family:var(--mono);font-size:11px;line-height:1.6;background:#0a0d0f;border:1px solid var(--line);border-radius:8px;color:var(--text);padding:12px;"></textarea></div>
+          <div class="field" style="margin-top:12px;"><label for="externalJson">Playout JSON</label><textarea id="externalJson" rows="18" spellcheck="false" style="width:100%;font-family:var(--mono);font-size:11px;line-height:1.6;background:#0b1120;border:1px solid var(--line);border-radius:8px;color:var(--paper);padding:12px;"></textarea></div>
         </div>
         <div class="panel panel-pad" id="graphicsPanel" style="margin-top:14px;">
           <div class="source-top">
@@ -674,7 +676,7 @@
             <div class="field"><label for="cloudName">Name</label><input id="cloudName" placeholder="Google Drive"></div>
             <div class="field"><label for="cloudAuth">Auth</label><select id="cloudAuth"><option value="service_account">Service account JSON</option><option value="access_token">Access token (dev)</option></select></div>
           </div>
-          <div class="field"><label for="cloudSecret">Secret</label><textarea id="cloudSecret" rows="4" style="width:100%;font-family:var(--mono);font-size:11px;background:#0a0d0f;border:1px solid var(--line);border-radius:8px;color:var(--text);padding:10px;" placeholder="Paste service-account JSON or access token"></textarea></div>
+          <div class="field"><label for="cloudSecret">Secret</label><textarea id="cloudSecret" rows="4" style="width:100%;font-family:var(--mono);font-size:11px;background:#0b1120;border:1px solid var(--line);border-radius:8px;color:var(--paper);padding:10px;" placeholder="Paste service-account JSON or access token"></textarea></div>
           <div class="form-row">
             <div class="field"><label for="cloudPolicy">Policy</label><select id="cloudPolicy"><option value="auto">Auto</option><option value="cache_all">Cache all</option><option value="stream_all">Stream all</option></select></div>
             <div class="field"><label for="cloudRootId">Initial folder ID (optional)</label><input id="cloudRootId" placeholder="Google Drive folder ID"></div>
@@ -723,7 +725,7 @@
         </div>
         <div class="panel panel-pad" style="margin-top:14px;">
           <div class="row" style="justify-content:space-between"><h3>Native apps</h3><button class="btn small" id="settingsInstallBtn">Install app</button></div>
-          <p class="muted small">Install Awesome TV as a standalone app on desktop, mobile, or a TV browser. Installation requires HTTPS or localhost.</p>
+          <p class="muted small">Install ChannelLoom as a standalone app on desktop, mobile, or a TV browser. Installation requires HTTPS or localhost.</p>
           <div class="source-path" id="setManifest"></div>
           <div class="muted small">Native players can use the HDHomeRun, M3U, and XMLTV endpoints above.</div>
         </div>
@@ -741,10 +743,10 @@
 
 <div class="login-back open" id="loginBack">
   <form class="login-card" id="loginForm">
-    <div class="brand-mark">AT</div>
-    <div class="eyebrow" style="margin-top:12px">Broadcast control</div>
+    <img class="brand-wordmark" src="/icons/channelloom-wordmark.png" alt="ChannelLoom" style="height:44px">
+    <div class="eyebrow" style="margin-top:12px">ChannelLoom Studio</div>
     <h2>Sign in</h2>
-    <p class="muted small">Manage channels, collections, and sources.</p>
+    <p class="muted small">Build channels, arrange what plays, and manage your library.</p>
     <div class="field"><label for="loginUser">User</label><input id="loginUser" value="admin" autocomplete="username"></div>
     <div class="field"><label for="loginPass">Password</label><input id="loginPass" type="password" autocomplete="current-password"></div>
     <button class="btn primary" type="submit" style="width:100%; justify-content:center">Enter</button>
@@ -781,7 +783,7 @@
     </div>
     <div class="field" id="channelNameField">
       <label for="channelName">Channel name</label>
-      <input id="channelName" value="Awesome Channel">
+      <input id="channelName" value="My Channel">
     </div>
     <div class="modal-actions">
       <button class="btn ghost" id="modalCancel">Cancel</button>
@@ -2037,8 +2039,8 @@ async function loadMediaOnSession(session, info, channel) {
   mediaInfo.metadata = new chrome.cast.media.GenericMediaMetadata();
   mediaInfo.metadata.title = info.title;
   mediaInfo.metadata.subtitle = `${channel.name} · Channel ${channel.number}`;
-  mediaInfo.metadata.seriesTitle = 'Awesome TV';
-  mediaInfo.metadata.studio = 'Awesome TV';
+  mediaInfo.metadata.seriesTitle = 'ChannelLoom';
+  mediaInfo.metadata.studio = 'ChannelLoom';
   mediaInfo.metadata.images = [{ url: `${base}/icons/icon-512.png` }];
   const request = new chrome.cast.media.LoadRequest(mediaInfo);
   request.autoplay = true;
@@ -2126,7 +2128,7 @@ window.addEventListener('beforeinstallprompt', (event) => {
 window.addEventListener('appinstalled', () => {
   installPrompt = null;
   $('installAppBtn').style.display = 'none';
-  toast('Awesome TV installed.');
+  toast('ChannelLoom installed.');
 });
 $('installAppBtn').addEventListener('click', installApp);
 $('settingsInstallBtn').addEventListener('click', installApp);

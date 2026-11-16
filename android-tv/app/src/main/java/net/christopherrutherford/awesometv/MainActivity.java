@@ -60,7 +60,7 @@ public class MainActivity extends Activity {
             @Override
             public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
                 if (request.isForMainFrame()) {
-                    showError("Cannot reach Awesome TV.\n" + request.getUrl(), BuildConfig.APP_URL);
+                    showError("Cannot reach ChannelLoom.\n" + request.getUrl(), BuildConfig.APP_URL);
                 }
             }
         });

@@ -1,9 +1,9 @@
 # ErsatzTV and the personal broadcast ecosystem — research notes
 
 Status: research complete, November 2026
-Purpose: establish a factual baseline before designing **Awesome TV** (working name), a clean-room, modern replacement for ErsatzTV.
+Purpose: establish a factual baseline before designing **ChannelLoom** (working name), a clean-room, modern replacement for ErsatzTV.
 
-> **Clean-room note.** This document is based on public documentation, release notes, public project metadata, user-facing behaviour, and public issue trackers. No ErsatzTV, ErsatzTV Next, or Tunarr source code is to be copied into Awesome TV. See `docs/CLEAN-ROOM.md`.
+> **Clean-room note.** This document is based on public documentation, release notes, public project metadata, user-facing behaviour, and public issue trackers. No ErsatzTV, ErsatzTV Next, or Tunarr source code is to be copied into ChannelLoom. See `docs/CLEAN-ROOM.md`.
 
 ---
 
@@ -20,7 +20,7 @@ The project's history matters for product strategy:
 
 This leaves a real gap: **no actively developed product combines ErsatzTV's scheduling depth and content breadth with a modern, reliable, understandable experience.** Tunarr is simpler and more polished but deliberately does less; ErsatzTV Legacy is deeper but frozen and operationally heavy; ErsatzTV Next is an engine, not a product.
 
-Awesome TV should therefore be:
+ChannelLoom should therefore be:
 
 > A reliable, understandable personal broadcaster: deep enough to program a real station, simple enough to get one on air in an afternoon, and observable enough to trust it unattended.
 
@@ -212,7 +212,7 @@ Weaknesses: large surface area, heavy configuration model, static playout buildi
 
 ## 4. Where ErsatzTV hurts
 
-These are the recurring themes in documentation, release notes, issue trackers, and community discussion. They are design requirements for Awesome TV, not reasons to copy ErsatzTV.
+These are the recurring themes in documentation, release notes, issue trackers, and community discussion. They are design requirements for ChannelLoom, not reasons to copy ErsatzTV.
 
 ### 4.1 Product and UX
 

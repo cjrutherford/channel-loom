@@ -2,7 +2,7 @@
 
 ## Installable web app (PWA)
 
-Awesome TV ships an installable app shell:
+ChannelLoom ships an installable app shell:
 
 - manifest: `GET /manifest.webmanifest`
 - service worker: `GET /sw.js`
@@ -35,12 +35,12 @@ tailscale serve --https=8447 off
 ### Install steps
 
 - Desktop Chrome/Edge: open the HTTPS URL, use the install icon in the address
-  bar or menu → **Install Awesome TV**.
+  bar or menu → **Install ChannelLoom**.
 - Android Chrome: menu → **Add to Home screen**.
 - iOS Safari: Share → **Add to Home Screen**.
 - TV browsers: open the HTTPS URL and use TV Mode.
 
-The app starts in standalone mode with the Awesome TV icon. The service worker
+The app starts in standalone mode with the ChannelLoom icon. The service worker
 caches the app shell and icons, public channel/guide API responses, and a bounded
 cache of HLS segments. Cast, catch-up, DVR, and cloud routes are not cached.
 

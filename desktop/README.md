@@ -1,6 +1,6 @@
-# Awesome TV desktop wrapper
+# ChannelLoom desktop wrapper
 
-A Tauri v2 desktop shell that opens the Awesome TV web app in a native window.
+A Tauri v2 desktop shell that opens the ChannelLoom web app in a native window.
 
 ## Requirements
 

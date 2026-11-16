@@ -23,34 +23,34 @@ hostname.
 2. Choose **Add new application**.
 3. Select **Styled Media Receiver**.
 4. Fill in:
-   - **Name**: `Awesome TV`
-   - **Description**: `Live channels from Awesome TV`
+   - **Name**: `ChannelLoom`
+   - **Description**: `Live channels from ChannelLoom`
    - **Theme**: dark / black
-   - **Title**: `Awesome TV`
+   - **Title**: `ChannelLoom`
    - **Subtitle**: `Live channels`
 5. Upload the prepared artwork from this repository:
-   - Logo: `deploy/cast/awesome-tv-cast-logo.png`
-   - Background: `deploy/cast/awesome-tv-cast-background.png`
+   - Logo: `deploy/cast/channelloom-cast-logo.png`
+   - Background: `deploy/cast/channelloom-cast-background.png`
 6. Save the application.
 7. Copy the **App ID** shown in the application list. It is a short alphanumeric
    string such as `4F8B2C1D`.
 
 ## Option B — Custom Receiver (full control)
 
-This uses the branded receiver page already served by Awesome TV:
+This uses the branded receiver page already served by ChannelLoom:
 
 ```text
 https://atv.christopherrutherford.net/cast-receiver
 ```
 
-The page uses the Cast Application Framework (CAF) and shows the Awesome TV
+The page uses the Cast Application Framework (CAF) and shows the ChannelLoom
 brand, live badge, and now-playing title.
 
 1. Sign in at <https://cast.google.com/publish>.
 2. Choose **Add new application**.
 3. Select **Custom Receiver**.
 4. Fill in:
-   - **Name**: `Awesome TV`
+   - **Name**: `ChannelLoom`
    - **Receiver URL**:
      `https://atv.christopherrutherford.net/cast-receiver`
 5. Save the application.
@@ -73,7 +73,7 @@ In the Cast developer console:
 
 Skip this only if you publish the receiver for public use.
 
-## Give the App ID to Awesome TV
+## Give the App ID to ChannelLoom
 
 Set the App ID in the app environment:
 
@@ -110,7 +110,7 @@ The sender passes the App ID to the Cast SDK; no rebuild is required.
 | Custom receiver shows a blank/error page | `https://atv.christopherrutherford.net/cast-receiver` must return 200 from the public internet |
 | Cast starts then stalls | The Chromecast must reach `AWESOMETV_CAST_BASE_URL` (usually the LAN IP and port 8409) |
 | Still sees the old corner title | The app is still using `CC1AD845`; verify `AWESOMETV_CAST_RECEIVER_ID` and recreate the container |
-| Styled receiver has no artwork | Re-upload `deploy/cast/awesome-tv-cast-logo.png` and `awesome-tv-cast-background.png` and save |
+| Styled receiver has no artwork | Re-upload `deploy/cast/channelloom-cast-logo.png` and `channelloom-cast-background.png` and save |
 
 ## Notes
 

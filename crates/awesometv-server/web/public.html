@@ -3,35 +3,39 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Awesome TV — Live</title>
-<meta name="theme-color" content="#070809">
+<title>ChannelLoom — Watch</title>
+<meta name="theme-color" content="#10162B">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="Awesome TV">
-<meta name="description" content="Live channels and guide from Awesome TV.">
+<meta name="apple-mobile-web-app-title" content="ChannelLoom">
+<meta name="description" content="Your favorites are always on. Live channels and a guide from your own movie, TV, and music library.">
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<link rel="apple-touch-startup-image" href="/icons/channelloom-splash.png">
+<link rel="icon" href="/icons/channelloom.ico" sizes="any">
 <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&family=Nunito+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
   :root {
-    --ink: #070809;
-    --ink-2: #0a0c0e;
-    --panel: #0e1113;
-    --panel-2: #14181b;
-    --line: #252c31;
-    --line-soft: #181e22;
-    --paper: #f4f0e7;
-    --muted: #9aa5ad;
-    --dim: #69757e;
-    --signal: #7fe9c8;
-    --signal-deep: #103d33;
-    --amber: #f6c46a;
-    --red: #ff5f64;
-    --display: "Barlow Condensed", "Arial Narrow", sans-serif;
-    --body: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+    --ink: #10162b;
+    --ink-2: #0b1120;
+    --panel: #151d36;
+    --panel-2: #1b2444;
+    --line: #2b3557;
+    --line-soft: #202a49;
+    --paper: #f5f7ff;
+    --muted: #a8b3d4;
+    --dim: #7581a5;
+    --signal: #22d3cf;
+    --signal-deep: #0b3b3a;
+    --amber: #ff9972;
+    --blue: #368bee;
+    --violet: #9252df;
+    --red: #ff6b7a;
+    --display: "Baloo 2", ui-rounded, "Trebuchet MS", sans-serif;
+    --body: "Nunito Sans", ui-sans-serif, system-ui, sans-serif;
     --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
     --ease: cubic-bezier(.2,.7,.2,1);
   }
@@ -40,8 +44,8 @@
   html, body { margin: 0; min-height: 100%; background: var(--ink); color: var(--paper); font-family: var(--body); }
   body {
     background:
-      radial-gradient(1200px 700px at 8% -12%, rgba(127,233,200,.10), transparent 62%),
-      radial-gradient(900px 520px at 102% 4%, rgba(246,196,106,.06), transparent 60%),
+      radial-gradient(1200px 700px at 8% -12%, rgba(34,211,207,.12), transparent 62%),
+      radial-gradient(900px 520px at 102% 4%, rgba(146,82,223,.10), transparent 60%),
       var(--ink);
     -webkit-font-smoothing: antialiased;
   }
@@ -67,22 +71,23 @@
   .top {
     position: sticky; top: 0; z-index: 30; display: flex; align-items: center; gap: 18px;
     padding: 0 26px; height: 68px; border-bottom: 1px solid var(--line-soft);
-    background: rgba(7,8,9,.78); backdrop-filter: blur(16px) saturate(1.2);
+    background: rgba(16,22,43,.82); backdrop-filter: blur(16px) saturate(1.2);
   }
-  .brand { display: flex; align-items: center; gap: 12px; text-decoration: none; color: inherit; min-width: 0; }
+  .brand { display: grid; justify-items: start; gap: 3px; text-decoration: none; color: inherit; min-width: 0; }
+  .brand-wordmark { height: 40px; width: auto; display: block; filter: drop-shadow(0 8px 22px rgba(0,0,0,.5)); }
   .brand-mark {
-    position: relative; width: 38px; height: 38px; border-radius: 11px; background: var(--paper); color: var(--ink);
-    display: grid; place-items: center; font-family: var(--display); font-size: 23px; font-weight: 700;
-    letter-spacing: -.04em; box-shadow: 0 0 0 1px rgba(255,255,255,.18), 0 10px 30px rgba(0,0,0,.55);
+    position: relative; width: 38px; height: 38px; border-radius: 11px; overflow: hidden;
+    display: block; background: #0b1120 url("/icons/icon-192.png") center/cover no-repeat;
+    box-shadow: 0 0 0 1px rgba(34,211,207,.35), 0 10px 30px rgba(0,0,0,.55);
     flex: 0 0 auto;
   }
   .brand-mark::after {
-    content: ""; position: absolute; inset: -5px; border-radius: 15px; border: 1px solid rgba(127,233,200,.22);
+    content: ""; position: absolute; inset: -5px; border-radius: 15px; border: 1px solid rgba(34,211,207,.24);
     pointer-events: none;
   }
   .brand-copy { display: grid; gap: 2px; min-width: 0; }
-  .brand-name { font-family: var(--display); font-size: 25px; font-weight: 700; letter-spacing: .045em; line-height: .9; text-transform: uppercase; white-space: nowrap; }
-  .brand-sub { display: flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 9px; letter-spacing: .2em; color: var(--dim); text-transform: uppercase; white-space: nowrap; }
+  .brand-name { font-family: var(--display); font-size: 25px; font-weight: 700; letter-spacing: .01em; line-height: 1; white-space: nowrap; }
+  .brand-sub { display: flex; align-items: center; gap: 6px; font-family: var(--body); font-size: 11px; font-weight: 600; letter-spacing: .01em; color: var(--muted); white-space: nowrap; }
   .brand-sub .dot { width: 5px; height: 5px; border-radius: 99px; background: var(--red); animation: pulse 2s infinite; }
   .top-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
   .clock { font-family: var(--mono); font-size: 12px; color: var(--muted); letter-spacing: .06em; margin-right: 8px; font-variant-numeric: tabular-nums; }
@@ -92,8 +97,8 @@
     font-size: 12px; font-weight: 600; text-decoration: none; transition: border-color .2s var(--ease), background .2s var(--ease), transform .2s var(--ease);
   }
   .icon-btn:hover { border-color: #3a454d; background: #181d21; transform: translateY(-1px); }
-  .icon-btn.solid { background: var(--paper); color: var(--ink); border-color: var(--paper); }
-  .icon-btn.solid:hover { background: #fff; }
+  .icon-btn.solid { background: var(--signal); color: #06202b; border-color: var(--signal); font-weight: 800; }
+  .icon-btn.solid:hover { background: #5ce6e1; border-color: #5ce6e1; }
   .icon-btn svg { width: 15px; height: 15px; flex: 0 0 auto; }
   .icon-btn .label { white-space: nowrap; }
   .icon-btn[hidden] { display: none; }
@@ -116,28 +121,28 @@
     font-family: var(--mono); font-size: 9px; letter-spacing: .14em; text-transform: uppercase;
     background: rgba(7,8,9,.76); border: 1px solid rgba(255,255,255,.15); backdrop-filter: blur(10px); color: var(--paper);
   }
-  .chip.live { color: var(--red); border-color: rgba(255,95,100,.35); }
+  .chip.live { color: var(--red); border-color: rgba(255,107,122,.35); }
   .chip.live .dot { width: 6px; height: 6px; border-radius: 99px; background: var(--red); animation: pulse 1.8s infinite; }
-  @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(255,95,100,.5); } 70% { box-shadow: 0 0 0 7px rgba(255,95,100,0); } 100% { box-shadow: 0 0 0 0 rgba(255,95,100,0); } }
+  @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(255,107,122,.5); } 70% { box-shadow: 0 0 0 7px rgba(255,107,122,0); } 100% { box-shadow: 0 0 0 0 rgba(255,107,122,0); } }
   button.chip { cursor: pointer; }
   button.chip:hover { border-color: rgba(255,255,255,.42); }
   .tuning {
     position: absolute; inset: 0; z-index: 3; display: grid; place-items: center; text-align: center; padding: 24px;
-    background: radial-gradient(circle at 50% 45%, #152027 0, #060708 68%);
+    background: radial-gradient(circle at 50% 45%, #18224a 0, #0a0f1f 68%);
     transition: opacity .5s var(--ease), visibility .5s;
   }
   .tuning[hidden] { display: none; }
-  .tuning-mark { width: 46px; height: 46px; margin: 0 auto 16px; border-radius: 50%; border: 1px solid rgba(127,233,200,.28); display: grid; place-items: center; }
+  .tuning-mark { width: 46px; height: 46px; margin: 0 auto 16px; border-radius: 50%; border: 1px solid rgba(34,211,207,.28); display: grid; place-items: center; }
   .tuning-mark::before { content: ""; width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--signal); border-top-color: transparent; animation: spin 1s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
-  .tuning-title { font-family: var(--display); font-size: clamp(30px, 4vw, 54px); line-height: .9; text-transform: uppercase; letter-spacing: .02em; color: var(--paper); }
+  .tuning-title { font-family: var(--display); font-size: clamp(30px, 4vw, 54px); line-height: .95; letter-spacing: -.015em; color: var(--paper); }
   .tuning-sub { font-family: var(--mono); font-size: 10px; letter-spacing: .18em; color: var(--dim); text-transform: uppercase; margin-top: 9px; }
   .hero-meta { padding: 17px 20px 18px; border-top: 1px solid var(--line); background: linear-gradient(180deg, rgba(255,255,255,.02), transparent 70%); }
   .hero-top { display: flex; gap: 15px; align-items: flex-start; }
   .channel-no { font-family: var(--display); font-size: 56px; line-height: .78; color: var(--amber); font-variant-numeric: tabular-nums; min-width: 54px; }
   .hero-copy { min-width: 0; flex: 1; }
   .kicker { font-family: var(--mono); font-size: 9px; letter-spacing: .2em; text-transform: uppercase; color: var(--signal); }
-  .hero-title { font-family: var(--display); font-size: clamp(28px, 3.1vw, 44px); line-height: .92; text-transform: uppercase; letter-spacing: .015em; margin: 3px 0 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .hero-title { font-family: var(--display); font-size: clamp(28px, 3.1vw, 44px); line-height: .98; letter-spacing: -.015em; margin: 3px 0 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .hero-next { font-size: 12px; color: var(--muted); margin-top: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .hero-next b { color: var(--paper); font-weight: 500; }
   .hero-actions { display: flex; gap: 7px; flex: 0 0 auto; }
@@ -145,22 +150,22 @@
   .timeline { display: flex; align-items: center; gap: 9px; margin-top: 13px; }
   .timeline .t { font-family: var(--mono); font-size: 9px; color: var(--dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
   .bar { flex: 1; height: 3px; border-radius: 99px; background: #22292e; overflow: hidden; }
-  .bar > span { display: block; height: 100%; width: 0; border-radius: 99px; background: linear-gradient(90deg, var(--signal), var(--amber)); transition: width 1s linear; box-shadow: 0 0 12px rgba(127,233,200,.35); }
+  .bar > span { display: block; height: 100%; width: 0; border-radius: 99px; background: linear-gradient(90deg, var(--signal), var(--amber)); transition: width 1s linear; box-shadow: 0 0 12px rgba(34,211,207,.35); }
 
   .player.casting .screen video { opacity: .16; }
   .player.casting .badges { display: none; }
   .cast-mode {
     position: absolute; inset: 0; z-index: 6; display: grid; place-items: center; padding: 28px; text-align: center;
     background:
-      radial-gradient(circle at 50% 34%, rgba(127,233,200,.14), transparent 46%),
-      radial-gradient(circle at 50% 34%, #13211e 0, #060708 70%);
+      radial-gradient(circle at 50% 34%, rgba(34,211,207,.14), transparent 46%),
+      radial-gradient(circle at 50% 34%, #17224a 0, #0a0f1f 70%);
   }
   .cast-mode[hidden] { display: none; }
   .cast-inner { display: grid; justify-items: center; gap: 3px; max-width: 560px; }
   .cast-brand { display: flex; align-items: center; gap: 10px; font-family: var(--display); font-size: 22px; letter-spacing: .09em; text-transform: uppercase; }
-  .cast-brand .brand-mark { width: 34px; height: 34px; font-size: 19px; border-radius: 9px; }
+  .cast-brand .brand-wordmark { height: 48px; }
   .cast-kicker { margin-top: 16px; font-family: var(--mono); font-size: 9px; letter-spacing: .24em; text-transform: uppercase; color: var(--signal); }
-  .cast-device { font-family: var(--display); font-size: clamp(28px, 4.2vw, 48px); line-height: .95; text-transform: uppercase; letter-spacing: .02em; }
+  .cast-device { font-family: var(--display); font-size: clamp(28px, 4.2vw, 48px); line-height: .98; letter-spacing: -.015em; }
   .cast-now { margin-top: 3px; font-family: var(--mono); font-size: 10px; letter-spacing: .08em; color: var(--muted); max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .cast-controls { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px; margin-top: 20px; }
   .cast-controls .icon-btn { height: 34px; padding: 0 12px; font-size: 11px; }
@@ -174,7 +179,7 @@
   /* ---------- channel rail ---------- */
   .rail { display: grid; gap: 8px; }
   .rail-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 10px; padding: 2px 2px 4px; }
-  .rail-title { font-family: var(--display); font-size: 23px; text-transform: uppercase; letter-spacing: .06em; line-height: .9; margin: 0; }
+  .rail-title { font-family: var(--display); font-size: 24px; letter-spacing: -.01em; line-height: 1; margin: 0; }
   .rail-count { font-family: var(--mono); font-size: 9px; letter-spacing: .14em; color: var(--dim); text-transform: uppercase; }
   .rail-list { display: grid; gap: 7px; max-height: min(calc(100vh - 230px), 760px); overflow-y: auto; padding-right: 4px; scrollbar-width: thin; scrollbar-color: #2a333a transparent; }
   .rail-list::-webkit-scrollbar { width: 6px; }
@@ -187,8 +192,8 @@
   }
   .rail-card::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 2px; background: transparent; transition: background .2s; }
   .rail-card:hover { border-color: #3a454d; background: rgba(255,255,255,.04); transform: translateX(2px); }
-  .rail-card.active { border-color: rgba(127,233,200,.55); background: linear-gradient(90deg, rgba(127,233,200,.09), rgba(127,233,200,.015)); box-shadow: 0 0 0 1px rgba(127,233,200,.12) inset, 0 8px 24px rgba(0,0,0,.25); }
-  .rail-card.active::before { background: var(--signal); box-shadow: 0 0 12px rgba(127,233,200,.5); }
+  .rail-card.active { border-color: rgba(34,211,207,.55); background: linear-gradient(90deg, rgba(34,211,207,.09), rgba(34,211,207,.015)); box-shadow: 0 0 0 1px rgba(34,211,207,.12) inset, 0 8px 24px rgba(0,0,0,.25); }
+  .rail-card.active::before { background: var(--signal); box-shadow: 0 0 12px rgba(34,211,207,.5); }
   .rail-no { font-family: var(--display); font-size: 27px; line-height: .8; color: var(--amber); font-variant-numeric: tabular-nums; }
   .rail-copy { min-width: 0; display: grid; gap: 2px; }
   .rail-name { font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; letter-spacing: .01em; }
@@ -204,7 +209,7 @@
   .guide-section { margin-top: 30px; }
   .section-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 14px; margin-bottom: 12px; }
   .eyebrow { font-family: var(--mono); font-size: 9px; letter-spacing: .2em; text-transform: uppercase; color: var(--signal); margin-bottom: 5px; }
-  h2 { font-family: var(--display); font-size: 30px; text-transform: uppercase; letter-spacing: .04em; margin: 0; font-weight: 600; }
+  h2 { font-family: var(--display); font-size: 30px; letter-spacing: -.015em; margin: 0; font-weight: 700; }
   .guide-shell { border: 1px solid var(--line); border-radius: 13px; overflow: hidden; background: var(--panel); }
   .guide-scroll { overflow-x: auto; scrollbar-width: thin; scrollbar-color: #2a333a transparent; }
   .guide-inner { min-width: 980px; }
@@ -222,14 +227,14 @@
   .guide-track { position: relative; min-height: 48px; background-image: linear-gradient(90deg, transparent calc(100% - 1px), rgba(255,255,255,.035) 0); background-size: calc(100% / 6) 100%; }
   .guide-block {
     position: absolute; top: 6px; bottom: 6px; border-radius: 5px; padding: 5px 8px; overflow: hidden;
-    font-size: 10px; line-height: 1.15; color: #06110d; background: linear-gradient(180deg, #8ceccd, #6fd9b9);
+    font-size: 10px; line-height: 1.15; color: #06202b; background: linear-gradient(180deg, #4ee4dd, #22d3cf);
     border: 1px solid rgba(0,0,0,.18); transition: filter .2s, transform .2s;
   }
   .guide-block:hover { filter: brightness(1.08); transform: translateY(-1px); z-index: 2; }
-  .guide-block.filler { background: linear-gradient(180deg, #f8cf82, #eab65c); }
+  .guide-block.filler { background: linear-gradient(180deg, #ffb38f, #ff9972); }
   .guide-block span { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
   .guide-block .when { font-family: var(--mono); font-size: 8px; opacity: .62; margin-top: 1px; }
-  .guide-now { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--red); z-index: 3; box-shadow: 0 0 8px rgba(255,95,100,.65); }
+  .guide-now { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--red); z-index: 3; box-shadow: 0 0 8px rgba(255,107,122,.65); }
   .guide-now::before { content: ""; position: absolute; top: 0; left: -2.5px; width: 6px; height: 6px; border-radius: 99px; background: var(--red); }
   .guide-empty { padding: 30px 18px; text-align: center; color: var(--dim); }
   .guide-skeleton { height: 48px; border-bottom: 1px solid var(--line-soft); background: linear-gradient(100deg, #0f1316 30%, #171d21 50%, #0f1316 70%); background-size: 200% 100%; animation: shimmer 1.5s infinite; }
@@ -256,8 +261,7 @@
   }
   @media (max-width: 620px) {
     .top { height: 60px; padding: 0 14px; gap: 10px; }
-    .brand-mark { width: 34px; height: 34px; font-size: 20px; }
-    .brand-name { font-size: 21px; }
+    .brand-wordmark { height: 32px; }
     .brand-sub, .clock { display: none; }
     .icon-btn { width: 34px; padding: 0; }
     .icon-btn .label { display: none; }
@@ -280,12 +284,9 @@
 </head>
 <body>
 <header class="top">
-  <a class="brand" href="/" aria-label="Awesome TV home">
-    <span class="brand-mark">AT</span>
-    <span class="brand-copy">
-      <span class="brand-name">Awesome TV</span>
-      <span class="brand-sub"><span class="dot"></span> Live signal</span>
-    </span>
+  <a class="brand" href="/" aria-label="ChannelLoom Watch home">
+    <img class="brand-wordmark" src="/icons/channelloom-wordmark.png" alt="ChannelLoom">
+    <span class="brand-sub"><span class="dot"></span> Your favorites are always on</span>
   </a>
   <div class="top-right">
     <span class="clock" id="clock"></span>
@@ -297,9 +298,9 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M11 5 6 9H3v6h3l5 4V5Z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18 6a8.5 8.5 0 0 1 0 12"/></svg>
       <span class="label">Sound</span>
     </button>
-    <a class="icon-btn solid" href="/admin" aria-label="Open admin console">
+    <a class="icon-btn solid" href="/admin" aria-label="Open ChannelLoom Studio">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="8" r="3.2"/><path d="M5 20c.8-3.4 3.4-5.2 7-5.2s6.2 1.8 7 5.2"/></svg>
-      <span class="label">Admin</span>
+      <span class="label">Studio</span>
     </a>
   </div>
 </header>
@@ -313,11 +314,11 @@
           <div>
             <div class="tuning-mark" aria-hidden="true"></div>
             <div class="tuning-title" id="tuningTitle">Tuning in</div>
-            <div class="tuning-sub" id="tuningSub">Starting the broadcast</div>
+            <div class="tuning-sub" id="tuningSub">Tuning in…</div>
           </div>
         </div>
         <div class="badges">
-          <span class="chip live"><span class="dot"></span> On air</span>
+          <span class="chip live"><span class="dot"></span> Live</span>
           <span class="badges-right">
             <button class="chip" id="goLiveBtn" hidden>Go live</button>
             <span class="chip" id="bufferChip" hidden>Buffering</span>
@@ -326,10 +327,10 @@
         </div>
         <div class="cast-mode" id="castMode" hidden>
           <div class="cast-inner">
-            <div class="cast-brand"><span class="brand-mark">AT</span><span>Awesome TV</span></div>
+            <div class="cast-brand"><img class="brand-wordmark" src="/icons/channelloom-wordmark.png" alt="ChannelLoom"></div>
             <div class="cast-kicker">Casting to</div>
             <div class="cast-device" id="castDevice">Chromecast</div>
-            <div class="cast-now" id="castNow">Preparing the broadcast…</div>
+            <div class="cast-now" id="castNow">Getting things ready…</div>
             <div class="cast-controls">
               <button class="icon-btn" id="castPlay">Pause</button>
               <button class="icon-btn" id="castMute">Mute</button>
@@ -381,7 +382,7 @@
     <div class="section-head">
       <div>
         <div class="eyebrow">What's on</div>
-        <h2>Programme guide</h2>
+        <h2>What's on</h2>
       </div>
       <div class="mono tiny dim" id="guideRange"></div>
     </div>
@@ -397,10 +398,10 @@
 </main>
 
 <footer>
-  <span>Awesome TV · Self-hosted</span>
+  <span>ChannelLoom · Self-hosted</span>
   <span class="right">
     <span id="statusLine">Connecting</span>
-    <a href="/admin">Admin</a>
+    <a href="/admin">Studio</a>
   </span>
 </footer>
 <div class="toast-wrap" id="toasts" aria-live="polite"></div>
@@ -490,9 +491,9 @@ function renderNow() {
   $('startTime').textContent = channel.now ? fmtClock(channel.now.start_ms) : '--:--';
   $('endTime').textContent = channel.now ? fmtClock(channel.now.end_ms) : '--:--';
   $('progress').style.width = `${channel.now ? progress(channel.now) : 0}%`;
-  document.title = `${channel.name} — Awesome TV`;
+  document.title = `${channel.name} — ChannelLoom`;
   $('tuningTitle').textContent = channel.name;
-  $('tuningSub').textContent = channel.now?.title || 'Starting the broadcast';
+  $('tuningSub').textContent = channel.now?.title || 'Tuning in…';
 }
 
 let hlsLoader = null;
@@ -597,7 +598,7 @@ async function refreshChannels() {
     state.fromCache = false;
     writeCache('atv:channels', channels);
     if (!channels.length) {
-      $('nowTitle').textContent = 'No channels configured';
+      $('nowTitle').textContent = 'No channels yet';
       renderRail();
       return;
     }
@@ -618,7 +619,7 @@ async function refreshChannels() {
   } catch {
     if (!state.channels.length) {
       $('statusLine').textContent = 'Offline';
-      toast('Could not load channels', true);
+      toast('We could not load your channels.', true);
     }
   }
 }
@@ -812,8 +813,8 @@ async function loadOnCast(channel) {
   mediaInfo.metadata = new chrome.cast.media.GenericMediaMetadata();
   mediaInfo.metadata.title = info.title;
   mediaInfo.metadata.subtitle = `${channel.name} · Channel ${channel.number}`;
-  mediaInfo.metadata.seriesTitle = 'Awesome TV';
-  mediaInfo.metadata.studio = 'Awesome TV';
+  mediaInfo.metadata.seriesTitle = 'ChannelLoom';
+  mediaInfo.metadata.studio = 'ChannelLoom';
   mediaInfo.metadata.images = [{ url: `${String(state.castBase).replace(/\/$/, '')}/icons/icon-512.png` }];
   const request = new chrome.cast.media.LoadRequest(mediaInfo);
   request.autoplay = true;

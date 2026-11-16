@@ -1,6 +1,6 @@
-<img src="assets/icon.svg" width="64" height="64" alt="">
+<img src="assets/icon.png" width="64" height="64" alt="ChannelLoom">
 
-# Awesome TV
+# ChannelLoom
 
 A clean-room, modern replacement for [ErsatzTV](https://ersatztv.org/): turn a personal media library into live TV channels and stream them to Plex, Jellyfin, Emby, and any IPTV client.
 
@@ -25,12 +25,13 @@ A clean-room, modern replacement for [ErsatzTV](https://ersatztv.org/): turn a p
 - [Canonical media sources](docs/SOURCES.md)
 - [Parity checklist](docs/PARITY.md)
 - [ADRs](docs/adr/)
+- [Brand guide](docs/BRAND.md)
 - [Clean-room policy](docs/CLEAN-ROOM.md)
 
 ## Serving
 
-- `/` — public live viewer: channel rail, HLS player, and guide.
-- `/admin` — login-gated broadcast console.
+- `/` — **Watch**: the public live viewer with channel rail, player, and guide.
+- `/admin` — **Studio**: the login-gated place to build channels and arrange what plays.
 - `/api/v1/public/*` — read-only viewer APIs; all other `/api/v1/*` routes require auth.
 - `/iptv/channels.m3u`, `/iptv/xmltv.xml`, `/discover.json` — IPTV and HDHomeRun endpoints.
 

@@ -17,7 +17,7 @@ Follow `docs/CLEAN-ROOM.md`:
 - Import user data only through documented APIs or user exports; do not reverse-engineer internal databases.
 - Implement compatibility contracts independently from their public specifications.
 - Choose MIT or Apache-2.0 for our code; review FFmpeg and dependency licenses before distribution.
-- Run a trademark search before public launch; "Awesome TV" is a working name.
+- Run a trademark search before public launch; "ChannelLoom" is a working name.
 
 ## Consequences
 

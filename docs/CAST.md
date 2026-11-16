@@ -1,6 +1,6 @@
 # Google Cast
 
-Awesome TV casts live channels to Chromecast and Google TV devices through the
+ChannelLoom casts live channels to Chromecast and Google TV devices through the
 Cast sender SDK. The public watch page and the admin console both expose a Cast
 button and switch into a casting view when a session starts.
 
@@ -39,16 +39,16 @@ and where to copy the App ID, see
 ### Default Media Receiver
 
 With no configuration the app uses the Default Media Receiver (`CC1AD845`) and
-sends branded metadata: programme title, channel name, `Awesome TV` as the
+sends branded metadata: programme title, channel name, `ChannelLoom` as the
 series, and the app icon as artwork.
 
 ### Styled Media Receiver (recommended, no code)
 
 1. Open the [Google Cast SDK Developer Console](https://cast.google.com/publish).
 2. Add a **Styled Media Receiver**.
-3. Set the title to `Awesome TV`, upload the logo and background from
-   `deploy/cast/` (`awesome-tv-cast-logo.png`,
-   `awesome-tv-cast-background.png`), and choose a dark theme.
+3. Set the title to `ChannelLoom`, upload the logo and background from
+   `deploy/cast/` (`channelloom-cast-logo.png`,
+   `channelloom-cast-background.png`), and choose a dark theme.
 4. Copy the generated **App ID**.
 5. Set it and restart the app:
 
@@ -57,7 +57,7 @@ series, and the app icon as artwork.
    docker compose up -d --force-recreate
    ```
 
-This gives the TV a branded splash/background with the Awesome TV logo while
+This gives the TV a branded splash/background with the ChannelLoom logo while
 keeping Google's media playback UI. Unpublished receivers only run on devices
 registered in the console; add the Chromecast serial under **Cast Receiver
 Devices**.

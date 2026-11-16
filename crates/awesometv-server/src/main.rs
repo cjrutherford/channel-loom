@@ -96,12 +96,12 @@ async fn main() -> anyhow::Result<()> {
         .with_context(|| format!("bind {}:{}", config.bind, config.port))?;
 
     println!();
-    println!("Awesome TV");
+    println!("ChannelLoom");
     println!("  UI:       {}", config.public_url);
     println!("  M3U:      {}/iptv/channels.m3u", config.public_url);
     println!("  XMLTV:    {}/iptv/xmltv.xml", config.public_url);
     println!("  Jellyfin: {}", config.jellyfin_url);
-    println!("  Admin:    {}", config.admin_user);
+    println!("  Studio:   {}", config.admin_user);
     if config.generated_password {
         println!(
             "  Password: {}  (generated; set AWESOMETV_ADMIN_PASSWORD to override)",

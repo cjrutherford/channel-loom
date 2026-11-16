@@ -1,6 +1,6 @@
 # Clean-room policy
 
-Purpose: build Awesome TV as an independent implementation of the same user-facing problem, without copying source code or protected expression from ErsatzTV, ErsatzTV Next, Tunarr, dizqueTV, or their forks.
+Purpose: build ChannelLoom as an independent implementation of the same user-facing problem, without copying source code or protected expression from ErsatzTV, ErsatzTV Next, Tunarr, dizqueTV, or their forks.
 
 This is an engineering policy, not legal advice. Have counsel review it before a public release.
 
@@ -81,7 +81,7 @@ Compatibility is a feature, not a dependency. The core must run without ErsatzTV
 
 ## 8. Naming and branding
 
-- "Awesome TV" is a working name; run a trademark search before launch.
+- "ChannelLoom" is a working name; run a trademark search before launch.
 - Do not use "ErsatzTV", "Tunarr", "dizqueTV", or their logos in the product name, icon, or marketing in a way that suggests affiliation.
 - Factual compatibility statements are fine: "Works with Plex, Jellyfin, and Emby."
 

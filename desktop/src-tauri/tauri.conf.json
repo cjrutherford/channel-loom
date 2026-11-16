@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Awesome TV",
+  "productName": "ChannelLoom",
   "version": "0.1.0",
   "identifier": "net.christopherrutherford.awesometv.desktop",
   "build": {

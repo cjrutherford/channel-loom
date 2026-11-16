@@ -439,16 +439,41 @@ async fn service_worker() -> impl IntoResponse {
 }
 
 async fn icon(Path(file): Path<String>) -> Result<Response, ApiError> {
-    let bytes: &'static [u8] = match file.as_str() {
-        "icon-192.png" => include_bytes!("../web/icons/icon-192.png"),
-        "icon-512.png" => include_bytes!("../web/icons/icon-512.png"),
-        "icon-maskable-512.png" => include_bytes!("../web/icons/icon-maskable-512.png"),
-        "apple-touch-icon.png" => include_bytes!("../web/icons/apple-touch-icon.png"),
+    let (bytes, content_type): (&'static [u8], &'static str) = match file.as_str() {
+        "icon-16.png" => (include_bytes!("../web/icons/icon-16.png"), "image/png"),
+        "icon-32.png" => (include_bytes!("../web/icons/icon-32.png"), "image/png"),
+        "icon-192.png" => (include_bytes!("../web/icons/icon-192.png"), "image/png"),
+        "icon-512.png" => (include_bytes!("../web/icons/icon-512.png"), "image/png"),
+        "icon-maskable-512.png" => (
+            include_bytes!("../web/icons/icon-maskable-512.png"),
+            "image/png",
+        ),
+        "apple-touch-icon.png" => (
+            include_bytes!("../web/icons/apple-touch-icon.png"),
+            "image/png",
+        ),
+        "channelloom.ico" => (include_bytes!("../web/icons/channelloom.ico"), "image/x-icon"),
+        "channelloom-app-icon.png" => (
+            include_bytes!("../web/icons/channelloom-app-icon.png"),
+            "image/png",
+        ),
+        "channelloom-wordmark.png" => (
+            include_bytes!("../web/icons/channelloom-wordmark.png"),
+            "image/png",
+        ),
+        "channelloom-cast-background.png" => (
+            include_bytes!("../web/icons/channelloom-cast-background.png"),
+            "image/png",
+        ),
+        "channelloom-splash.png" => (
+            include_bytes!("../web/icons/channelloom-splash.png"),
+            "image/png",
+        ),
         _ => return Err(ApiError::not_found("icon not found")),
     };
     Ok((
         [
-            (header::CONTENT_TYPE, "image/png"),
+            (header::CONTENT_TYPE, content_type),
             (header::CACHE_CONTROL, "public, max-age=86400"),
         ],
         Body::from(bytes),
@@ -2219,7 +2244,7 @@ async fn hls_segment(
 async fn discover(State(state): State<AppState>) -> Response {
     let base = state.config.public_url.trim_end_matches('/');
     Json(serde_json::json!({
-        "FriendlyName": "Awesome TV",
+        "FriendlyName": "ChannelLoom",
         "ModelNumber": "HDHR-AWESOME",
         "FirmwareName": "awesometv",
         "FirmwareVersion": "0.2.0",
@@ -2267,7 +2292,7 @@ async fn device_xml(State(state): State<AppState>) -> Response {
   <URLBase>{base}</URLBase>
   <device>
     <deviceType>urn:schemas-upnp-org:device:MediaServer:1</deviceType>
-    <friendlyName>Awesome TV</friendlyName>
+    <friendlyName>ChannelLoom</friendlyName>
     <manufacturer>Silicondust</manufacturer>
     <modelName>HDHR-AWESOME</modelName>
     <modelNumber>HDHR-AWESOME</modelNumber>

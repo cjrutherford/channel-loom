@@ -1,4 +1,4 @@
-//! A pure, deterministic timeline builder for Awesome TV.
+//! A pure, deterministic timeline builder for ChannelLoom.
 //!
 //! Phase 0 scope: weekly dayparts, ordered/shuffled sources, one/count/duration
 //! fill modes, tail filler, explicit cursor state, and invariant tests.

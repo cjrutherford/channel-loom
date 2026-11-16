@@ -1,4 +1,4 @@
-const CACHE = "awesometv-shell-v3";
+const CACHE = "channelloom-shell-v1";
 const RUNTIME = "awesometv-runtime-v1";
 const MEDIA = "awesometv-media-v1";
 const MEDIA_MAX_ENTRIES = 60;

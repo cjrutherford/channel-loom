@@ -1878,7 +1878,7 @@ mod filter_tests {
     fn graphics_text_adds_a_positioned_overlay() {
         let filter = video_filter(
             &channel(GraphicsSettings {
-                text: "Awesome TV".into(),
+                text: "ChannelLoom".into(),
                 position: "top-left".into(),
                 opacity: 50,
                 size: 32,

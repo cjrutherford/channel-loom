@@ -95,7 +95,7 @@ fn handle(mut stream: TcpStream, state: &State) -> Result<()> {
         "/discover.json" => json(
             &mut stream,
             &serde_json::json!({
-                "FriendlyName": "Awesome TV Spike",
+                "FriendlyName": "ChannelLoom Spike",
                 "ModelNumber": "HDHR-AWESOME",
                 "FirmwareName": "awesometv_spike",
                 "FirmwareVersion": "0.1.0",
@@ -111,7 +111,7 @@ fn handle(mut stream: TcpStream, state: &State) -> Result<()> {
             let body = serde_json::json!([
                 {
                     "GuideNumber": "1",
-                    "GuideName": "Awesome TV Spike",
+                    "GuideName": "ChannelLoom Spike",
                     "URL": stream_url
                 }
             ]);
@@ -134,7 +134,7 @@ fn handle(mut stream: TcpStream, state: &State) -> Result<()> {
   <URLBase>{base}</URLBase>
   <device>
     <deviceType>urn:schemas-upnp-org:device:MediaServer:1</deviceType>
-    <friendlyName>Awesome TV Spike</friendlyName>
+    <friendlyName>ChannelLoom Spike</friendlyName>
     <manufacturer>Silicondust</manufacturer>
     <modelName>HDHR-AWESOME</modelName>
     <modelNumber>HDHR-AWESOME</modelNumber>

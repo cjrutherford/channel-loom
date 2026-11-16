@@ -1,6 +1,6 @@
-# Awesome TV Android TV wrapper
+# ChannelLoom Android TV wrapper
 
-A small native Android TV shell that loads the Awesome TV web app in a full-screen
+A small native Android TV shell that loads the ChannelLoom web app in a full-screen
 WebView with a Leanback launcher entry, banner, and D-pad/keyboard forwarding.
 
 ## Build
@@ -28,7 +28,7 @@ app/build/outputs/apk/debug/app-debug.apk
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
-Or sideload it on the TV. The app requires network access to the Awesome TV
+Or sideload it on the TV. The app requires network access to the ChannelLoom
 server.
 
 ## Server URL

@@ -1,4 +1,4 @@
-# Awesome TV — product and technical plan
+# ChannelLoom — product and technical plan
 
 > **Status:** original planning document. Current implementation coverage is
 > tracked in [`PLAN-REVIEW.md`](PLAN-REVIEW.md). Some choices here (for example
@@ -6,7 +6,7 @@
 > implementation.
 
 Status: decisions confirmed; Phase 0 spikes complete on x86_64 (ARM cross-check passed)
-Working name: **Awesome TV**
+Working name: **ChannelLoom**
 Related: `docs/RESEARCH.md`, `docs/CLEAN-ROOM.md`, `docs/PHASE-0.md`
 
 **Confirmed direction:** all-in-one product; deep ErsatzTV parity in public v1; Rust backend + React UI; our own streaming engine; local + Jellyfin + Plex + remote HTTP/RTSP/script sources; Plex, Jellyfin, Emby, Channels DVR, Kodi/TiviMate/generic IPTV clients; multi-arch x86 GPU and low-power/ARM; single admin in MVP, OIDC/roles in v1; MIT or Apache-2.0.
@@ -15,7 +15,7 @@ Related: `docs/RESEARCH.md`, `docs/CLEAN-ROOM.md`, `docs/PHASE-0.md`
 
 ## 1. Product definition
 
-**Awesome TV is a self-hosted personal broadcaster.** It turns a media library into scheduled, always-on TV channels and delivers them to the devices people already use: Plex, Jellyfin, Emby, Channels DVR, Kodi, TiviMate, VLC, and any IPTV client.
+**ChannelLoom is a self-hosted personal broadcaster.** It turns a media library into scheduled, always-on TV channels and delivers them to the devices people already use: Plex, Jellyfin, Emby, Channels DVR, Kodi, TiviMate, VLC, and any IPTV client.
 
 It is not a media server, downloader, metadata agent, or DVR. It consumes libraries and broadcasts them.
 
@@ -153,7 +153,7 @@ The user chose **deep parity**, not a deliberately reduced Tunarr-like scope. Pu
 ### 5.1 System context
 
 ```
- Media sources                Awesome TV                         Clients
+ Media sources                ChannelLoom                         Clients
 ┌──────────────┐      ┌──────────────────────────────┐      ┌──────────────┐
 │ Local files  │─────▶│ Catalog / metadata           │      │ Plex         │
 │ Plex         │      │ Collections / search         │      │ Jellyfin     │
@@ -656,7 +656,7 @@ Locked in November 2026:
 | Deployment | **Multi-arch: x86 with GPU and low-power/ARM** |
 | Auth | **Single admin in MVP; OIDC + roles in public v1** |
 | License | **MIT or Apache-2.0** (choose before first public release) |
-| Name | **Awesome TV** (working name; trademark search before launch) |
+| Name | **ChannelLoom** (working name; trademark search before launch) |
 
 ## 14. Still open
 
@@ -667,7 +667,7 @@ These do not block Phase 0, but should be decided before Phase 2:
 3. **Migration**: which ErsatzTV/Tunarr artifacts must import cleanly (channels, collections, schedules, playouts, settings, history)?
 4. **Low-power target**: which ARM devices/chips are representative (Raspberry Pi 4/5, RK3588, ARM NAS)?
 5. **License choice**: MIT vs Apache-2.0 (Apache adds patent grant; MIT is simpler).
-6. **Name**: keep "Awesome TV" or choose a launch name.
+6. **Name**: keep "ChannelLoom" or choose a launch name.
 
 ---
 
@@ -685,7 +685,7 @@ These do not block Phase 0, but should be decided before Phase 2:
 
 ## Appendix A — Feature parity matrix (planning view)
 
-| Capability | ErsatzTV Legacy | Tunarr | ErsatzTV Next | Awesome MVP | Awesome v1 |
+| Capability | ErsatzTV Legacy | Tunarr | ErsatzTV Next | ChannelLoom MVP | ChannelLoom v1 |
 |---|---|---|---|---|---|
 | Local media | Yes (all kinds) | Yes (movies/shows/other/music) | No | Movies/shows/other | All kinds |
 | Plex | Yes | Yes | No | Yes | Yes |

@@ -4,7 +4,7 @@ Status: design proposal.
 
 ## Scope boundary
 
-P2P channel sourcing answers: **can another Awesome TV host share its live
+P2P channel sourcing answers: **can another ChannelLoom host share its live
 channels and guide with this host?**
 
 Cloud providers feed local media into the local library and scheduler. P2P does
@@ -14,7 +14,7 @@ source.
 
 ## Goals
 
-- Another Awesome TV host can expose selected channels.
+- Another ChannelLoom host can expose selected channels.
 - A subscriber can add a peer, pair, browse shared channels, and subscribe.
 - Subscribed channels appear in the local channel list, guide, M3U, and XMLTV.
 - Live HLS plays through a local proxy.
@@ -37,7 +37,7 @@ source.
 
 | Term | Meaning |
 |---|---|
-| Peer | Another Awesome TV instance |
+| Peer | Another ChannelLoom instance |
 | Shared channel | A local channel a host exposes to peers |
 | Grant | A scoped permission issued to a peer |
 | Subscription | A local read-only channel sourced from a peer |
@@ -226,7 +226,7 @@ Exit: multiple peers stable; revocation and failure cases verified.
 
 ## Acceptance criteria
 
-- Two Awesome TV instances on a tailnet can pair.
+- Two ChannelLoom instances on a tailnet can pair.
 - Publisher shares one channel; subscriber sees it in guide and M3U/XMLTV.
 - Live playback works through the subscriber’s proxy.
 - Revoking the grant stops the subscriber within the token expiry window.
