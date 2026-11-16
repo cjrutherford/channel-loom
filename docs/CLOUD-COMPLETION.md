@@ -25,6 +25,7 @@ Implemented:
 - background caching and LRU eviction
 - engine, catch-up, and DVR resolution
 - Sources UI for add/browse/scan/delete
+- public viewer/admin split (C2 dependency)
 
 Not complete:
 
@@ -37,7 +38,6 @@ Not complete:
 - source badges/filters in Library
 - active-playback/DVR cache pinning
 - Dropbox, OneDrive, S3, WebDAV adapters
-- public/admin route split
 - operational metrics for cloud sync/cache
 
 ## Phases
@@ -91,7 +91,7 @@ Exit criteria:
 
 Goal: finish interactive auth and near-realtime updates.
 
-Dependencies: public HTTPS hostname, admin/public route split.
+Dependencies: public HTTPS hostname. The admin/public route split is already in place.
 
 Deliverables:
 

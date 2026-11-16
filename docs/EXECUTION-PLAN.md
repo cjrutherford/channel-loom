@@ -1,21 +1,25 @@
 # Execution plan
 
-Status: active plan after the Phase 4 core baseline.
+Status: active plan. Implementation coverage is reviewed in
+[`PLAN-REVIEW.md`](PLAN-REVIEW.md) (2026-11-16).
 
-## Commit boundary
+## Current baseline
 
-The current repository state is the **Phase 4 + cloud core baseline**. It
-includes:
+The repository includes:
 
 - Rust server, scheduler, engine, DVR, catch-up, prewarm, metrics
 - 12 live channels and the expanded media library
-- PWA app shell over Tailscale HTTPS
-- Android TV APK and Tauri desktop scaffold
+- public viewer/admin split and the nginx/SWAG deployment
+- PWA, Android TV APK, Tauri desktop bundle, and native CI
+- Google Cast, including the cast-mode overlay, branded receiver support, and
+  continuous programme handoff
 - cloud source core and Google Drive reference adapter
+- schedule-driven precache for the slow NAS
 - design/planning documents for cloud completion and P2P channels
 
-Work after this boundary belongs to the next milestone commits: CI, native
-builds, Google Cast, cloud completion, and P2P.
+Completed workstreams since the original baseline: CI, native builds, Google
+Cast, public viewer/admin split, and precache. Remaining workstreams are cloud
+completion, deep parity, P2P, and security/operations.
 
 ## Workstreams
 
@@ -23,13 +27,13 @@ builds, Google Cast, cloud completion, and P2P.
 
 Detailed plan: [`CLOUD-COMPLETION.md`](CLOUD-COMPLETION.md)
 
-| Phase | Focus | Gate |
+| Phase | Focus | Status |
 |---|---|---|
-| C0 | Real Google service account, test folder, provider test assets | list/download works against Google |
-| C1 | Core hardening: background scans, delta reconciliation, source edit, cache pins, source badges | production-grade Google path |
-| C2 | Interactive OAuth, webhooks, public/admin split | browser auth and signed webhooks work |
-| C3 | Dropbox, OneDrive, S3-compatible, WebDAV | shared provider conformance suite |
-| C4 | Real-provider tests, security review, performance, docs | cloud feature complete |
+| C0 | Real Google service account, test folder, provider test assets | not done |
+| C1 | Background scans, delta reconciliation, source edit, cache pins, source badges | partial |
+| C2 | Interactive OAuth, webhooks, public/admin split | split done; OAuth/webhooks not started |
+| C3 | Dropbox, OneDrive, S3-compatible, WebDAV | not started |
+| C4 | Real-provider tests, security review, performance, docs | not started |
 
 ### B. Peer-to-peer channel sourcing
 
@@ -37,10 +41,10 @@ Detailed plan: [`P2P-CHANNELS.md`](P2P-CHANNELS.md)
 
 | Phase | Focus | Gate |
 |---|---|---|
-| P0 | Peer identity, well-known endpoint, manual peer add | two hosts identify each other |
-| P1 | Pairing, scoped grants, shared channel selection | subscribe/revoke works |
-| P2 | Remote guide, M3U/XMLTV, live HLS proxy | remote channel plays and guides correctly |
-| P3 | Multi-peer hardening, optional catch-up/DVR/discovery | stable multi-peer behavior |
+| P0 | Peer identity, well-known endpoint, manual peer add | not started |
+| P1 | Pairing, scoped grants, shared channel selection | not started |
+| P2 | Remote guide, M3U/XMLTV, live HLS proxy | not started |
+| P3 | Multi-peer hardening, optional catch-up/DVR/discovery | not started |
 
 Recommended MVP: Tailscale/LAN direct HTTP, manual peer URL + invite code,
 read-only remote channels, live/guide only, no re-sharing.
@@ -68,30 +72,32 @@ read-only remote channels, live/guide only, no re-sharing.
 - Already installable over HTTPS.
 - CI validates manifest, service worker, and icons through the server build.
 
-### D. Google Cast (first-class) — implemented baseline
+### D. Google Cast (first-class) — implemented
 
 Cast is a first-class playback target, not an afterthought.
 
 #### Backend
 
-- `POST /api/v1/channels/{id}/cast` returns a Cast-friendly media URL and title.
+- `POST /api/v1/channels/{id}/cast` and
+  `POST /api/v1/public/channels/{number}/cast` return a Cast-friendly media URL
+  and title, warming the producer first.
 - Public `/cast/{channel}.m3u8` and `/cast/{channel}/{segment}.ts` routes use a
-  short-lived HMAC token.
-- The playlist is rewritten with absolute segment URLs and works with the
-  Chromecast Default Media Receiver.
+  short-lived HMAC token and CORS headers.
+- The playlist is rewritten with absolute segment URLs and hands off
+  continuously across programme boundaries.
 - `AWESOMETV_CAST_BASE_URL` selects the address a Cast device can reach (LAN or
-  public). If unset, the configured public URL is used. The current deployment
-  uses `http://192.168.1.153:8409` for LAN Cast.
+  public). The current deployment uses `http://192.168.1.153:8409`.
+- `AWESOMETV_CAST_RECEIVER_ID` selects the Default, Styled, or Custom receiver.
+  The custom receiver page is served at `/cast-receiver`.
 
 #### Frontend
 
-- Cast button in the console.
-- Cast SDK loaded lazily only when used.
-- Uses `cast.framework.CastContext` and the Default Media Receiver.
-- Casts the currently selected channel.
-- Supports stop/end session.
+- Cast buttons in the public viewer and admin.
+- Cast SDK preloaded after configuration so the device picker keeps the click's
+  user gesture.
+- Cast-mode overlay: local video pauses, page controls drive the receiver.
+- Play/pause, mute, volume, stop, and channel switching while casting.
 - Graceful failure if the SDK is unavailable or the origin is not secure.
-- Cast status shown in the UI.
 
 #### Operational requirements
 
@@ -105,19 +111,22 @@ Cast is a first-class playback target, not an afterthought.
 
 - signed Cast HLS playlist and segment routes
 - absolute segment URLs and token expiry
-- Cast button and lazy Cast SDK loading
-- Default Media Receiver casting of the selected channel
-- stop/end session handling
-- Cast base URL in public config and Settings
+- Cast button in the public viewer and admin
+- cast-mode overlay with remote play/pause/mute/volume/stop
+- channel switching while casting and resume-local on stop
+- configurable Default/Styled/Custom receiver App ID
+- continuous playlist handoff across programme boundaries
+- cast base URL in public config and Settings
 
 ### E. Security and public exposure
 
-- Admin/public route split when public viewing is enabled.
-- Rate limits for public HLS, Cast, catch-up, DVR, and webhooks.
-- Secrets encrypted at rest; key rotation documented.
-- SSRF protections for cloud and peer URLs.
-- Provider/webhook signature verification.
-- No admin or library data on public/peer surfaces.
+- Admin/public route split: **done**.
+- Public login throttling and secure cookies: **done**.
+- Rate limits for public HLS, Cast, catch-up, DVR, and webhooks: **not done**.
+- Secrets encrypted at rest; key rotation documented: **partial**.
+- SSRF protections for cloud and peer URLs: **not reviewed**.
+- Provider/webhook signature verification: **not started**.
+- No admin or library data on public/peer surfaces: **public API projections are clean; peer surfaces do not exist yet**.
 
 ## Sequencing
 
@@ -160,12 +169,15 @@ Recommended order:
 
 ## Decisions pending
 
-- Public hostname and OAuth redirect URI.
-- Real Google service account/test folder.
+- UI stack: keep the current vanilla JS UI or migrate to React/TypeScript.
+- Real Google service account/test folder and OAuth redirect URI.
 - Dropbox/OneDrive app registration timing.
 - S3/WebDAV test endpoints.
 - Cache budget and secret-key recovery policy.
 - P2P discovery, pairing, share scope, numbering, re-sharing policy.
-- Cast base URL (LAN vs public) for the deployment.
-- Public reverse proxy setup: `deploy/nginx/` points
-  `atv.christopherrutherford.net` at the app.
+- OIDC/roles/audit scope and whether `/admin` stays LAN/Tailscale-only until then.
+- Public media rate limits and capacity policy.
+- ARM target and hardware profiles.
+
+Decided: public hostname and reverse proxy (`atv.christopherrutherford.net`),
+LAN Cast base (`http://192.168.1.153:8409`), and the public viewer/admin split.

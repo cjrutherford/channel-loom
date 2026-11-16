@@ -6,6 +6,10 @@ Date: 2026-11-14
 Legend: **B** = usable beta, **V1** = public deep-parity release, **L** = later.
 Every V1 item is a release gate unless explicitly moved to L by a later decision.
 
+This file is the **scope definition**, not a live status board. Current
+done/partial/not-started coverage is tracked in
+[`PLAN-REVIEW.md`](PLAN-REVIEW.md).
+
 ## Sources and metadata
 
 - [ ] **B** Local libraries: movies, shows, other videos.

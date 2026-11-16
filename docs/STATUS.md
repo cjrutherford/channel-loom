@@ -1,7 +1,13 @@
 # Status and remaining work
 
-Date: 2026-11-15
+Date: 2026-11-16
 Running: `https://atv.christopherrutherford.net` (public), `http://192.168.1.153:8409` (LAN), `http://100.120.253.100:8409` (Tailscale), `https://nirvana.tail5a4a0.ts.net:8447` (Tailscale HTTPS). Public TLS terminates in SWAG on the VPS; config lives in `deploy/nginx/swag/`.
+
+## Plan coverage
+
+The scope definition is [`PLAN.md`](PLAN.md) and [`PARITY.md`](PARITY.md).
+Current implementation coverage, including done/partial/not-started status by
+area, is in [`PLAN-REVIEW.md`](PLAN-REVIEW.md).
 
 ## Current state
 
@@ -121,8 +127,8 @@ media in `/data/precache`:
 The shared cloud-source core and Google Drive reference adapter are implemented:
 service-account/access-token auth, encrypted secrets, folder browsing, scan-time
 ffprobe, signed byte proxy, hybrid stream/cache, and Library integration.
-Interactive OAuth, provider webhooks, and the Dropbox/OneDrive/S3/WebDAV
-adapters are deferred.
+The public viewer/admin split is complete. Interactive OAuth, provider
+webhooks, and the Dropbox/OneDrive/S3/WebDAV adapters remain deferred.
 
 See [`docs/CLOUD-SOURCES.md`](CLOUD-SOURCES.md) for the architecture,
 [`docs/CLOUD-COMPLETION.md`](CLOUD-COMPLETION.md) for the remaining work, and

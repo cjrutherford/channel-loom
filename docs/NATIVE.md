@@ -41,8 +41,8 @@ tailscale serve --https=8447 off
 - TV browsers: open the HTTPS URL and use TV Mode.
 
 The app starts in standalone mode with the Awesome TV icon. The service worker
-caches only the app shell and icons; API, HLS, catch-up, and DVR requests are
-never cached.
+caches the app shell and icons, public channel/guide API responses, and a bounded
+cache of HLS segments. Cast, catch-up, DVR, and cloud routes are not cached.
 
 ## TV mode
 
@@ -120,16 +120,23 @@ system packages and build steps.
 
 Cast is first-class on the web/PWA surface.
 
-- The header has a **Cast** button.
-- The browser loads the Cast sender SDK lazily on first use.
+- Cast buttons in the public viewer and admin console.
+- The sender preloads the Cast SDK after configuration so the device picker
+  retains the click's user gesture.
 - The backend creates a short-lived signed Cast HLS playlist at
-  `/api/v1/channels/{id}/cast`.
+  `/api/v1/channels/{id}/cast` and
+  `/api/v1/public/channels/{number}/cast`.
 - Public playlist/segment routes:
   - `/cast/{channel}.m3u8`
   - `/cast/{channel}/{segment}.ts`
-- The playlist contains absolute signed segment URLs.
-- Uses the Chromecast **Default Media Receiver** (`CC1AD845`).
-- Stop casts from the same button.
+- The playlist contains absolute signed segment URLs, CORS headers, and a
+  continuous handoff across programme boundaries.
+- The page enters a cast-mode overlay (local playback pauses) with play/pause,
+  mute, volume, stop, and channel switching.
+- Receiver is configurable with `AWESOMETV_CAST_RECEIVER_ID`; the default is the
+  Default Media Receiver (`CC1AD845`). A custom receiver page is served at
+  `/cast-receiver`.
+- See [`CAST.md`](CAST.md) and [`CAST-APP-ID.md`](CAST-APP-ID.md) for branding.
 
 The Cast device must be able to reach the media base URL. Set:
 

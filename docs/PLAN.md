@@ -1,5 +1,10 @@
 # Awesome TV — product and technical plan
 
+> **Status:** original planning document. Current implementation coverage is
+> tracked in [`PLAN-REVIEW.md`](PLAN-REVIEW.md). Some choices here (for example
+> React/TypeScript and the five-provider cloud scope) were deferred in the
+> implementation.
+
 Status: decisions confirmed; Phase 0 spikes complete on x86_64 (ARM cross-check passed)
 Working name: **Awesome TV**
 Related: `docs/RESEARCH.md`, `docs/CLEAN-ROOM.md`, `docs/PHASE-0.md`
