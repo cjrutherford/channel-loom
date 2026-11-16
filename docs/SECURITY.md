@@ -122,7 +122,9 @@ review. Repeat this review before adding webhooks or P2P peer URLs.
 Cloud secrets and signed URLs use `AWESOMETV_SECRET_KEY`. To rotate:
 
 1. Back up `data/` (including `data/secrets/cloud.key` if you use the file key).
-2. Generate a new 32-byte base64 key.
+2. Generate a new 32-byte base64 key. If the current key lives in
+   `data/secrets/cloud.key`, base64-encode those 32 bytes for the previous-key
+   value.
 3. Set the new value as `AWESOMETV_SECRET_KEY` and put the old value in
    `AWESOMETV_SECRET_KEY_PREVIOUS`. Comma-separate multiple old keys.
 4. Restart once. Startup decrypts cloud-source secrets with the old key and
