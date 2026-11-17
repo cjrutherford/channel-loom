@@ -18,8 +18,8 @@ area, is in [`PLAN-REVIEW.md`](PLAN-REVIEW.md).
 | Collections | 70+ show, movie, music, and filler collections; Movie Night now holds all 76 movies and Adventure Time all 278 episodes |
 | Programming | Weekly blocks, block templates, classic sequences, chapter-aware/manual mid-rolls, scripted YAML, external playout JSON, and date-range alternate schedules |
 | Graphics | Per-channel text bug, static or animated image/video watermark, and lower third; captured in block templates |
-| Streams | Resolution, preset, CRF, audio bitrate, global/per-channel languages, subtitles, HDR tonemap, software/VAAPI, segment size, prebuffer, cache depth, and startup prewarm |
-| Precache | 24 h look-ahead, 100 GB LRU, raw copy or 720p proxy for slow sources; status and removal in the admin Sources view |
+| Streams | Resolution, preset, CRF, audio bitrate, global/per-channel languages, subtitles, HDR tonemap, software/VAAPI, segment size, prebuffer, cache depth, and startup prewarm; all live channels currently use VAAPI on `/dev/dri/renderD128` |
+| Precache | 24 h look-ahead, 100 GB LRU, raw copy or 720p proxy for slow sources; background copy continues during live playback at a bounded rate |
 | Playback | HLS + MPEG-TS/HDHomeRun; trimmed in/out playback; catch-up restart; rolling DVR buffer; music/image items; subtitles, overlays, HDR tonemap, VAAPI; slate fallback |
 | Auth | **Watch** at `/`; **Studio** at `/admin` (login, optional OIDC SSO, admin/operator/viewer roles, secure session cookies, login throttling, Basic auth and scoped API tokens) |
 | Abuse controls | Per-client public budgets for API, HLS playlists, media segments, Cast, and MPEG-TS; global and per-client MPEG-TS stream leases; `429`/`503` with retry guidance |
@@ -29,10 +29,10 @@ area, is in [`PLAN-REVIEW.md`](PLAN-REVIEW.md).
 | Exposure | Optional `AWESOMETV_ADMIN_ALLOW_CIDRS` guard for Studio/admin APIs; security headers on every response |
 | Backups | Create/list/download, staged restore on restart |
 | Sources | Jellyfin import configured; Emby import implemented; cloud provider registry, full lifecycle conformance harness, HEAD/Range proxy hardening, source/root editing, enabled-root scans, shared-drive browsing, background scans, full-rescan reconciliation, Library badges/filter, and per-source/Prometheus metrics |
-| UI | ChannelLoom Watch and Studio: cinematic player, channel rail, guide timeline, cast mode, skeletons, responsive layouts, and a 10-foot TV mode |
+| UI | ChannelLoom Watch and Studio: cinematic player, channel rail, guide timeline, buffering meter, auto-channel builder, cast mode, skeletons, responsive layouts, and a 10-foot TV mode |
 | Apps | ChannelLoom PWA over Tailscale Serve HTTPS; Android TV wrapper APK; Tauri desktop wrapper |
 | Cast | Cast button in Watch and Studio, cast-mode overlay with remote play/pause/mute/volume/stop, channel switching while casting, branded metadata, configurable Styled/Custom receiver, signed Cast HLS and CORS |
-| CI | Rust, Docker, Android TV APK, Tauri desktop bundle, PWA asset validation; tag-driven release workflow |
+| CI | Rust, Docker, Android TV APK, Tauri desktop bundle, PWA asset validation; tag-driven release workflow; Playwright E2E suite documented for live/manual runs |
 | Runtime | Docker on Ubuntu 26.04 with FFmpeg 8.0.1 and VAAPI device passthrough |
 
 ## Brand

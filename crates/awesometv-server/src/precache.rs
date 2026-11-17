@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use sqlx::SqlitePool;
@@ -283,11 +283,13 @@ impl Precache {
             if self.shutdown.load(Ordering::Relaxed) {
                 return Ok(());
             }
-            if self.direct_reader_active() {
-                tokio::time::sleep(Duration::from_secs(20)).await;
-                continue;
-            }
-            let Some(entry) = db::next_queued_precache(&self.pool, db::now_ms()).await? else {
+            let live = self.direct_reader_active();
+            let Some(entry) = db::next_queued_precache(&self.pool, db::now_ms(), !live).await?
+            else {
+                if live {
+                    tokio::time::sleep(Duration::from_secs(20)).await;
+                    continue;
+                }
                 return Ok(());
             };
             db::set_precache_status(&self.pool, &entry.media_id, "running", entry.bytes, None)
@@ -349,6 +351,7 @@ impl Precache {
         let mut buffer = vec![0u8; 4 * 1024 * 1024];
         let mut total = 0i64;
         let mut next_report = 64i64 * 1024 * 1024;
+        let started = Instant::now();
         loop {
             while self.paused.load(Ordering::Relaxed) && !self.shutdown.load(Ordering::Relaxed) {
                 tokio::time::sleep(Duration::from_millis(100)).await;
@@ -360,10 +363,18 @@ impl Precache {
             }
             output.write_all(&buffer[..read]).await?;
             total += read as i64;
-            if live {
-                // Share the slow mount with the live producer instead of
-                // stopping the cache completely.
-                tokio::time::sleep(Duration::from_secs(3)).await;
+            // Live playback gets priority. Keep a small background copy going
+            // so the cache can drain instead of waiting for an idle moment that
+            // may never arrive on a busy channel.
+            let target = if live {
+                (self.copy_bytes_per_sec / 8).max(256_000)
+            } else {
+                self.copy_bytes_per_sec
+            };
+            let expected = total as f64 / target as f64;
+            let elapsed = started.elapsed().as_secs_f64();
+            if expected > elapsed {
+                tokio::time::sleep(Duration::from_secs_f64(expected - elapsed)).await;
             }
             if total >= next_report {
                 db::set_precache_progress(&self.pool, &entry.media_id, total).await?;

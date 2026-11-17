@@ -130,6 +130,21 @@
   }
   .screen-off .big { font-family: var(--display); font-size: clamp(38px, 6vw, 82px); line-height: .9; letter-spacing: -.01em; color: #2b3557; }
   .screen-off .sub { font-family: var(--mono); font-size: 10px; letter-spacing: .18em; color: #7581a5; margin-top: 10px; }
+  .buffer-overlay {
+    position: absolute; inset: 0; z-index: 7; display: grid; place-items: center; padding: 20px;
+    background: rgba(7, 12, 26, .58); backdrop-filter: blur(7px);
+  }
+  .buffer-overlay[hidden] { display: none; }
+  .buffer-card {
+    width: min(400px, 90%); padding: 18px 20px; border: 1px solid rgba(34,211,207,.32);
+    border-radius: 14px; background: rgba(11,17,32,.94); box-shadow: 0 20px 60px rgba(0,0,0,.5);
+  }
+  .buffer-eyebrow { font-family: var(--mono); font-size: 9px; letter-spacing: .2em; text-transform: uppercase; color: var(--signal); }
+  .buffer-title { font-family: var(--display); font-size: 30px; line-height: 1; margin-top: 4px; }
+  .buffer-sub { margin-top: 3px; color: var(--muted); font-size: 12px; }
+  .buffer-track { height: 7px; margin-top: 14px; border-radius: 99px; background: #23305a; overflow: hidden; }
+  .buffer-track > span { display: block; height: 100%; width: 0; border-radius: 99px; background: linear-gradient(90deg, var(--signal), var(--blue)); transition: width .35s ease; }
+  .buffer-stats { display: flex; justify-content: space-between; gap: 10px; margin-top: 8px; font-family: var(--mono); font-size: 9px; color: var(--dim); text-transform: uppercase; letter-spacing: .1em; }
   .onair-top { position: absolute; top: 14px; left: 14px; right: 14px; display: flex; justify-content: space-between; gap: 10px; z-index: 3; }
   .chip {
     display: inline-flex; align-items: center; gap: 6px; padding: 5px 8px; border-radius: 999px;
@@ -410,6 +425,15 @@
                   <div class="sub">Select a channel to start the broadcast</div>
                 </div>
               </div>
+              <div class="buffer-overlay" id="studioBufferOverlay" hidden role="status" aria-live="polite">
+                <div class="buffer-card">
+                  <div class="buffer-eyebrow">Live signal</div>
+                  <div class="buffer-title">Buffering</div>
+                  <div class="buffer-sub">Filling the buffer…</div>
+                  <div class="buffer-track"><span id="studioBufferFill"></span></div>
+                  <div class="buffer-stats"><span id="studioBufferStats">0.0s ready</span><span>10s target</span></div>
+                </div>
+              </div>
               <div class="onair-top">
                 <div class="chip live"><span class="dot"></span> On air</div>
                 <div class="chip" id="qualityChip">HLS · 720p</div>
@@ -469,7 +493,20 @@
       </section>
 
       <section class="view" id="view-channels">
-        <div class="view-head"><div><div class="eyebrow">Lineup</div><h1>Channels</h1></div><button class="btn primary" id="newChannelBtn">＋ New channel</button></div>
+        <div class="view-head"><div><div class="eyebrow">Lineup</div><h1>Channels</h1></div><div class="row" style="gap:8px"><button class="btn ghost" id="autoChannelBtn">Auto-build</button><button class="btn primary" id="newChannelBtn">＋ New channel</button></div></div>
+        <div class="panel panel-pad" id="autoChannelPanel" style="display:none; margin-bottom:14px;">
+          <div class="source-top"><div><h3>Auto-build channels</h3><div class="muted small">Create one classic channel per eligible collection, using the largest collections first.</div></div></div>
+          <div class="form-row" style="margin-top:12px;">
+            <div class="field"><label for="autoChannelCount">Channels (1-20)</label><input id="autoChannelCount" type="number" min="1" max="20" value="3"></div>
+            <div class="field"><label for="autoChannelItems">Items per cycle</label><input id="autoChannelItems" type="number" min="1" max="50" value="4"></div>
+          </div>
+          <div class="form-row">
+            <div class="field"><label for="autoChannelOrder">Order</label><select id="autoChannelOrder"><option value="shuffle">Shuffle</option><option value="sequential">Sequential</option></select></div>
+            <div class="field" style="display:flex; align-items:end;"><button class="btn primary" id="autoPreviewBtn">Preview</button></div>
+          </div>
+          <div id="autoChannelPreview" style="margin-top:10px"></div>
+          <div style="margin-top:10px"><button class="btn primary" id="autoCreateBtn" disabled>Create channels</button></div>
+        </div>
         <div class="cards" id="channelCards"></div>
       </section>
 
@@ -722,6 +759,10 @@
           <div id="tokenList" style="margin-top:10px;"></div>
         </div>
         <div class="panel panel-pad" style="margin-top:14px;">
+          <div class="source-top"><div><h3>Hardware acceleration</h3><div class="muted small">VAAPI uses /dev/dri/renderD128 for encoding. Applying a profile restarts live producers.</div></div><span class="badge" id="encoderStatus">—</span></div>
+          <div class="row" style="margin-top:12px; gap:8px"><button class="btn small primary" id="applyVaapiBtn">Use VAAPI on all</button><button class="btn small ghost" id="applySoftwareBtn">Use software on all</button></div>
+        </div>
+        <div class="panel panel-pad" style="margin-top:14px;">
           <div class="source-top"><div><h3>Recent activity</h3><div class="muted small">Sign-ins, tokens, source changes, backups, and other mutations. Kept for 90 days.</div></div><button class="btn small" id="auditRefreshBtn">Refresh</button></div>
           <div id="auditList"></div>
         </div>
@@ -818,7 +859,7 @@
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
 <script>
 const $ = (id) => document.getElementById(id);
-const state = { config: null, sources: [], stats: null, media: [], channels: [], collections: [], blocks: [], classicItems: [], templates: [], overrides: [], graphics: null, stream: null, metrics: null, language: null, tvNumber: null, playerTarget: null, cloudSources: [], cloudMetrics: null, cloudBrowse: null, cloudRoots: [], cloudRootsSource: null, programChannel: null, programMode: 'blocks', selected: new Set(), kind: 'all', origin: 'all', search: '', activeChannel: null, hls: null, modalMode: null, autoPlayed: false, authed: false, tokens: [], audit: [], role: 'admin', cloudScanJob: null };
+const state = { config: null, sources: [], stats: null, media: [], channels: [], collections: [], blocks: [], classicItems: [], templates: [], overrides: [], graphics: null, stream: null, metrics: null, language: null, tvNumber: null, playerTarget: null, cloudSources: [], cloudMetrics: null, cloudBrowse: null, cloudRoots: [], cloudRootsSource: null, programChannel: null, programMode: 'blocks', selected: new Set(), kind: 'all', origin: 'all', search: '', activeChannel: null, hls: null, modalMode: null, autoPlayed: false, authed: false, tokens: [], audit: [], role: 'admin', autoPlan: null, cloudScanJob: null };
 const KIND_LABEL = { movie: 'Movie', episode: 'Episode', music: 'Music', image: 'Image', other: 'Video' };
 
 function toast(text, error = false) {
@@ -893,7 +934,7 @@ async function renderBackups() {
   } catch (error) { $('backupList').innerHTML = `<p class="muted small">${esc(String(error))}</p>`; }
 }
 
-async function loadAll() {
+async function loadAll(attempt = 1) {
   try {
     const adminOnly = state.role === 'admin';
     const [config, sources, stats, media, channels, collections, templates, metrics, language, cloudSources, precache, tokens, cloudMetrics, audit] = await Promise.all([
@@ -914,6 +955,10 @@ async function loadAll() {
     const autoplay = new URLSearchParams(location.search).get('autoplay') !== '0';
     if (autoplay && !state.autoPlayed && state.channels.length) { state.autoPlayed = true; playActive(); }
   } catch (error) {
+    if (attempt < 3) {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      return loadAll(attempt + 1);
+    }
     $('healthText').textContent = 'SYSTEM DEGRADED';
     toast(String(error), true);
   }
@@ -1009,8 +1054,38 @@ async function renderOnAirUpNext(channel) {
     : '<div class="muted small">Nothing scheduled next.</div>';
 }
 
+async function autoBuildChannels(dryRun) {
+  const count = Number($('autoChannelCount').value) || 3;
+  const items = Number($('autoChannelItems').value) || 4;
+  const order = $('autoChannelOrder').value;
+  try {
+    const result = await api('/api/v1/channels/auto', {
+      method: 'POST',
+      body: JSON.stringify({ count, items_per_cycle: items, order, dry_run: dryRun })
+    });
+    state.autoPlan = result.channels;
+    $('autoChannelPreview').innerHTML = result.channels.length ? result.channels.map((channel) => `
+      <div class="block-row wide-actions">
+        <div class="days">${esc(channel.number)}</div>
+        <div><b>${esc(channel.name)}</b><div class="dim tiny">${esc(channel.collection_name)}</div></div>
+        <div class="mono tiny dim">${channel.media_count} items</div>
+        <div></div>
+      </div>`).join('') : '<div class="source-path">No eligible collections found.</div>';
+    $('autoCreateBtn').disabled = !result.channels.length;
+    if (!dryRun) {
+      await loadAll();
+      toast(`Created ${result.created.length} auto channel${result.created.length === 1 ? '' : 's'}.`);
+      $('autoChannelPanel').style.display = 'none';
+      state.autoPlan = null;
+    }
+  } catch (error) { toast(String(error), true); }
+}
+
 function renderChannels() {
   const cards = $('channelCards');
+  const canWrite = state.role !== 'viewer';
+  $('autoChannelBtn').disabled = !canWrite;
+  $('newChannelBtn').disabled = !canWrite;
   if (!state.channels.length) {
     cards.innerHTML = `<div class="empty"><b>No channels yet</b>Scan the library, select media, and create your first channel.</div>`;
     return;
@@ -1592,6 +1667,8 @@ function renderSettings() {
   $('setSubtitleMode').value = state.language?.subtitle_mode || 'off';
   $('setSubtitleLanguage').value = state.language?.subtitle_language || '';
   $('saveLanguageBtn').disabled = state.role !== 'admin';
+  const vaapiChannels = state.channels.filter((channel) => channel.stream?.encoder === 'vaapi').length;
+  $('encoderStatus').textContent = `${vaapiChannels}/${state.channels.length} VAAPI`;
   renderStreamHealth();
   renderBackups();
   renderTokens();
@@ -1691,10 +1768,43 @@ async function renderGuide() {
   guide.innerHTML = `<div class="guide-ticks"><div class="spacer"></div><div class="ticks">${ticks}</div></div>${rows.join('')}`;
 }
 
+let studioBufferTimer = null;
+let studioBufferStarted = 0;
+function studioBufferedAhead() {
+  const video = $('player');
+  const current = video.currentTime;
+  for (let index = 0; index < video.buffered.length; index += 1) {
+    if (video.buffered.start(index) <= current && current <= video.buffered.end(index)) {
+      return Math.max(0, video.buffered.end(index) - current);
+    }
+  }
+  return 0;
+}
+function studioUpdateBuffer() {
+  const ahead = studioBufferedAhead();
+  const waited = studioBufferStarted ? (Date.now() - studioBufferStarted) / 1000 : 0;
+  $('studioBufferFill').style.width = `${Math.min(100, (ahead / 10) * 100)}%`;
+  $('studioBufferStats').textContent = `${ahead.toFixed(1)}s ready · ${waited.toFixed(0)}s waiting`;
+}
+function studioShowBuffer(show) {
+  const overlay = $('studioBufferOverlay');
+  if (!overlay) return;
+  overlay.hidden = !show;
+  if (show) {
+    if (!studioBufferStarted) studioBufferStarted = Date.now();
+    studioUpdateBuffer();
+    if (!studioBufferTimer) studioBufferTimer = setInterval(studioUpdateBuffer, 500);
+  } else {
+    studioBufferStarted = 0;
+    if (studioBufferTimer) { clearInterval(studioBufferTimer); studioBufferTimer = null; }
+  }
+}
+
 function playUrl(url, label = 'HLS · 720p', target = 'player') {
   const video = $(target);
   state.playerTarget = target;
   if (target === 'player') $('screenOff').style.display = 'none';
+  studioShowBuffer(false);
   if (state.hls) { state.hls.destroy(); state.hls = null; }
   if (window.Hls && Hls.isSupported()) {
     const fromStart = label.startsWith('DVR') || label.startsWith('CATCH-UP');
@@ -1739,6 +1849,7 @@ function playUrl(url, label = 'HLS · 720p', target = 'player') {
 }
 
 function stopPlayback() {
+  studioShowBuffer(false);
   if (state.hls) { state.hls.destroy(); state.hls = null; }
   for (const id of ['player', 'tvPlayer']) {
     const video = $(id);
@@ -1935,12 +2046,28 @@ $('createTokenBtn').addEventListener('click', async () => {
   } catch (error) { toast(String(error), true); }
 });
 $('originFilter').addEventListener('change', () => { state.origin = $('originFilter').value; renderLibrary(); });
+async function setAllEncoders(encoder) {
+  if (!confirm(`Switch all channels to ${encoder}? Live producers will restart.`)) return;
+  try {
+    const result = await api('/api/v1/channels/encoder', { method: 'POST', body: JSON.stringify({ encoder }) });
+    await loadAll();
+    toast(`${result.channels} channels switched to ${encoder}.`);
+  } catch (error) { toast(String(error), true); }
+}
+$('applyVaapiBtn').addEventListener('click', () => setAllEncoders('vaapi'));
+$('applySoftwareBtn').addEventListener('click', () => setAllEncoders('software'));
 $('auditRefreshBtn').addEventListener('click', async () => {
   try { state.audit = await api('/api/v1/audit?limit=100'); renderAudit(); } catch (error) { toast(String(error), true); }
 });
 $('metricsRefreshBtn').addEventListener('click', async () => {
   try { state.metrics = await api('/api/v1/metrics'); renderStreamHealth(); } catch (error) { toast(String(error), true); }
 });
+$('autoChannelBtn').addEventListener('click', () => {
+  const panel = $('autoChannelPanel');
+  panel.style.display = panel.style.display === 'none' ? '' : 'none';
+});
+$('autoPreviewBtn').addEventListener('click', () => autoBuildChannels(true));
+$('autoCreateBtn').addEventListener('click', () => autoBuildChannels(false));
 $('scanTopBtn').addEventListener('click', () => openModal('scan'));
 $('scanAllBtn').addEventListener('click', async () => { for (const s of state.sources) await scanSource(s.id); });
 $('jellyfinSyncBtn').addEventListener('click', async () => {
@@ -2255,6 +2382,7 @@ function updateAdminCastUI() {
   if (info?.metadata?.title) $('adminCastNow').textContent = info.metadata.title;
 }
 function enterAdminCast() {
+  studioShowBuffer(false);
   const session = castSession();
   if (!session) return;
   $('adminCast').hidden = false;
@@ -2418,6 +2546,18 @@ if ('serviceWorker' in navigator) {
     .then(() => { const el = $('swStatus'); if (el) el.textContent = 'READY'; })
     .catch(() => { const el = $('swStatus'); if (el) el.textContent = 'UNAVAILABLE'; });
 }
+
+const studioVideo = $('player');
+studioVideo.addEventListener('waiting', () => {
+  studioBufferStarted = Date.now();
+  setTimeout(() => {
+    if (studioVideo.readyState < 3) studioShowBuffer(true);
+  }, 500);
+});
+studioVideo.addEventListener('stalled', () => studioShowBuffer(true));
+studioVideo.addEventListener('playing', () => studioShowBuffer(false));
+studioVideo.addEventListener('progress', () => { if (!$('studioBufferOverlay').hidden) studioUpdateBuffer(); });
+studioVideo.addEventListener('timeupdate', () => { if (!$('studioBufferOverlay').hidden) studioUpdateBuffer(); });
 
 document.addEventListener('keydown', (event) => {
   if (!$('view-tv').classList.contains('active') || !state.channels.length) return;

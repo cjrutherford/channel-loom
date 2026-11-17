@@ -137,6 +137,21 @@
   @keyframes spin { to { transform: rotate(360deg); } }
   .tuning-title { font-family: var(--display); font-size: clamp(30px, 4vw, 54px); line-height: .95; letter-spacing: -.015em; color: var(--paper); }
   .tuning-sub { font-family: var(--mono); font-size: 10px; letter-spacing: .18em; color: var(--dim); text-transform: uppercase; margin-top: 9px; }
+  .buffer-overlay {
+    position: absolute; inset: 0; z-index: 5; display: grid; place-items: center; padding: 24px;
+    background: rgba(7, 12, 26, .58); backdrop-filter: blur(7px);
+  }
+  .buffer-overlay[hidden] { display: none; }
+  .buffer-card {
+    width: min(420px, 90%); padding: 20px 22px; border: 1px solid rgba(34,211,207,.32);
+    border-radius: 16px; background: rgba(11,17,32,.92); box-shadow: 0 20px 60px rgba(0,0,0,.5);
+  }
+  .buffer-eyebrow { font-family: var(--mono); font-size: 9px; letter-spacing: .2em; text-transform: uppercase; color: var(--signal); }
+  .buffer-title { font-family: var(--display); font-size: 32px; line-height: 1; margin-top: 5px; }
+  .buffer-sub { margin-top: 4px; color: var(--muted); font-size: 12px; }
+  .buffer-track { height: 7px; margin-top: 16px; border-radius: 99px; background: #23305a; overflow: hidden; }
+  .buffer-track > span { display: block; height: 100%; width: 0; border-radius: 99px; background: linear-gradient(90deg, var(--signal), var(--blue)); transition: width .35s ease; }
+  .buffer-stats { display: flex; justify-content: space-between; gap: 10px; margin-top: 8px; font-family: var(--mono); font-size: 9px; color: var(--dim); text-transform: uppercase; letter-spacing: .1em; }
   .hero-meta { padding: 17px 20px 18px; border-top: 1px solid var(--line); background: linear-gradient(180deg, rgba(255,255,255,.02), transparent 70%); }
   .hero-top { display: flex; gap: 15px; align-items: flex-start; }
   .channel-no { font-family: var(--display); font-size: 56px; line-height: .78; color: var(--amber); font-variant-numeric: tabular-nums; min-width: 54px; }
@@ -315,6 +330,15 @@
             <div class="tuning-mark" aria-hidden="true"></div>
             <div class="tuning-title" id="tuningTitle">Tuning in</div>
             <div class="tuning-sub" id="tuningSub">Tuning in…</div>
+          </div>
+        </div>
+        <div class="buffer-overlay" id="bufferOverlay" hidden role="status" aria-live="polite">
+          <div class="buffer-card">
+            <div class="buffer-eyebrow">Live signal</div>
+            <div class="buffer-title" id="bufferTitle">Buffering</div>
+            <div class="buffer-sub" id="bufferSub">Filling the buffer…</div>
+            <div class="buffer-track"><span id="bufferFill"></span></div>
+            <div class="buffer-stats"><span id="bufferStats">0.0s ready</span><span>10s target</span></div>
           </div>
         </div>
         <div class="badges">
@@ -513,6 +537,41 @@ function loadHls() {
 
 function showTuning(show) {
   $('tuning').hidden = !show;
+}
+
+let bufferTimer = null;
+let bufferStarted = 0;
+
+function bufferedAhead() {
+  const video = $('player');
+  const current = video.currentTime;
+  for (let index = 0; index < video.buffered.length; index += 1) {
+    if (video.buffered.start(index) <= current && current <= video.buffered.end(index)) {
+      return Math.max(0, video.buffered.end(index) - current);
+    }
+  }
+  return 0;
+}
+
+function updateBufferMeter() {
+  const ahead = bufferedAhead();
+  const waited = bufferStarted ? (Date.now() - bufferStarted) / 1000 : 0;
+  $('bufferFill').style.width = `${Math.min(100, (ahead / 10) * 100)}%`;
+  $('bufferStats').textContent = `${ahead.toFixed(1)}s ready · ${waited.toFixed(0)}s waiting`;
+}
+
+function showBufferOverlay(show) {
+  const overlay = $('bufferOverlay');
+  if (!overlay) return;
+  overlay.hidden = !show;
+  if (show) {
+    if (!bufferStarted) bufferStarted = Date.now();
+    updateBufferMeter();
+    if (!bufferTimer) bufferTimer = setInterval(updateBufferMeter, 500);
+  } else {
+    bufferStarted = 0;
+    if (bufferTimer) { clearInterval(bufferTimer); bufferTimer = null; }
+  }
 }
 
 async function play(channel) {
@@ -740,6 +799,7 @@ function updateCastUI() {
   if (title) $('castNow').textContent = subtitle ? `${title} · ${subtitle}` : title;
 }
 function enterCastMode() {
+  showBufferOverlay(false);
   const session = castSession();
   if (!session) return;
   state.castDevice = session.getCastDevice()?.friendlyName || 'Chromecast';
@@ -865,6 +925,28 @@ $('castBtn').addEventListener('click', () => {
 });
 
 const video = $('player');
+video.addEventListener('waiting', () => {
+  state.playing = false;
+  if (casting()) return;
+  bufferStarted = Date.now();
+  setTimeout(() => {
+    if (!state.playing && !casting()) showBufferOverlay(true);
+  }, 500);
+});
+video.addEventListener('stalled', () => {
+  state.playing = false;
+  if (!casting()) showBufferOverlay(true);
+});
+video.addEventListener('playing', () => {
+  state.playing = true;
+  showBufferOverlay(false);
+});
+video.addEventListener('progress', () => {
+  if (!$('bufferOverlay').hidden) updateBufferMeter();
+});
+video.addEventListener('timeupdate', () => {
+  if (!$('bufferOverlay').hidden) updateBufferMeter();
+});
 $('unmuteBtn').addEventListener('click', () => {
   if (casting()) {
     remoteController?.muteOrUnmute();
