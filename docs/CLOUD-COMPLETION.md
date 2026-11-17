@@ -26,9 +26,11 @@ Implemented:
 - engine, catch-up, and DVR resolution
 - Sources UI for add/browse/scan/delete
 - source edit: name, policy, enabled/disabled
+- background scan jobs with progress, polling, and cancellation
 - full-rescan reconciliation for missing cloud media
 - Library source badges and Local/Cloud filter
 - per-source and global cloud metrics (media, cached media, cached bytes, errors)
+- Prometheus gauges for cloud sources, media, cache, and source errors
 - public viewer/admin split (C2 dependency)
 
 Not complete:
@@ -71,14 +73,13 @@ Goal: make the Google path production-grade before multiplying adapters.
 Deliverables:
 
 - formal provider trait/registry instead of a Google-specific manager branch
-- background, resumable scan jobs with progress and cancellation
+- resumable scan persistence across restarts (current jobs are in-memory only)
 - incremental delta sync and rename reconciliation
 - shared-drive root browsing and Google shortcut handling
 - root editing and per-root enable/disable
 - cache pinning for active playback and DVR; cache usage UI
 - proxy hardening: HEAD, Range fallback when a provider ignores Range,
   redirects, content length, timeouts
-- provider trait/registry instead of the Google-specific manager branch
 
 Exit criteria:
 

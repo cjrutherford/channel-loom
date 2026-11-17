@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
@@ -43,6 +44,25 @@ pub struct CloudScanReport {
     pub complete: bool,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct CloudScanJob {
+    pub id: String,
+    pub source_id: String,
+    pub source_name: String,
+    pub status: String,
+    pub full: bool,
+    pub limit: usize,
+    pub scanned: usize,
+    pub probed: usize,
+    pub skipped: usize,
+    pub errors: usize,
+    pub removed: usize,
+    pub complete: bool,
+    pub started_at: i64,
+    pub finished_at: Option<i64>,
+    pub message: Option<String>,
+}
+
 pub struct CloudManager {
     pool: SqlitePool,
     data_dir: PathBuf,
@@ -50,6 +70,8 @@ pub struct CloudManager {
     google: GoogleClient,
     internal_base: String,
     tokens: Mutex<HashMap<String, CachedToken>>,
+    scan_jobs: Mutex<HashMap<String, CloudScanJob>>,
+    scan_cancels: Mutex<HashMap<String, Arc<AtomicBool>>>,
     cache_budget_bytes: i64,
     auto_cache_max_bytes: i64,
 }
@@ -81,6 +103,8 @@ impl CloudManager {
                 }
             ),
             tokens: Mutex::new(HashMap::new()),
+            scan_jobs: Mutex::new(HashMap::new()),
+            scan_cancels: Mutex::new(HashMap::new()),
             cache_budget_bytes: cache_budget_gb * 1024 * 1024 * 1024,
             auto_cache_max_bytes: auto_cache_mb * 1024 * 1024,
         })
@@ -166,11 +190,154 @@ impl CloudManager {
         db::add_cloud_root(&self.pool, source_id, root).await
     }
 
-    pub async fn scan_source(
+    pub async fn start_scan(
+        self: &Arc<Self>,
+        source_id: &str,
+        limit: usize,
+        full: bool,
+    ) -> Result<CloudScanJob> {
+        let source = db::cloud_source(&self.pool, source_id)
+            .await?
+            .context("cloud source not found")?;
+        if !source.enabled {
+            bail!("cloud source is disabled");
+        }
+        if db::list_cloud_roots(&self.pool, source_id)
+            .await?
+            .is_empty()
+        {
+            bail!("add at least one cloud folder root before scanning");
+        }
+        self.prune_scan_jobs().await;
+        let id = Uuid::new_v4().to_string();
+        let job = CloudScanJob {
+            id: id.clone(),
+            source_id: source_id.to_string(),
+            source_name: source.name,
+            status: "running".into(),
+            full,
+            limit,
+            scanned: 0,
+            probed: 0,
+            skipped: 0,
+            errors: 0,
+            removed: 0,
+            complete: false,
+            started_at: db::now_ms(),
+            finished_at: None,
+            message: None,
+        };
+        self.scan_jobs.lock().await.insert(id.clone(), job.clone());
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.scan_cancels
+            .lock()
+            .await
+            .insert(id.clone(), cancel.clone());
+        let manager = self.clone();
+        let source_id = source_id.to_string();
+        let job_id = id.clone();
+        tokio::spawn(async move {
+            let result = manager
+                .scan_source_controlled(
+                    &source_id,
+                    limit,
+                    full,
+                    Some(&job_id),
+                    Some(cancel.clone()),
+                )
+                .await;
+            if !cancel.load(Ordering::Relaxed)
+                && let Some(message) = result.as_ref().err().map(|error| format!("{error:#}"))
+            {
+                let _ = db::record_cloud_sync(&manager.pool, &source_id, Some(&message)).await;
+            }
+            let mut jobs = manager.scan_jobs.lock().await;
+            if let Some(job) = jobs.get_mut(&job_id) {
+                job.finished_at = Some(db::now_ms());
+                if cancel.load(Ordering::Relaxed) {
+                    job.status = "cancelled".into();
+                    job.complete = false;
+                    job.message = Some("scan cancelled".into());
+                } else {
+                    match result {
+                        Ok(report) => {
+                            job.scanned = report.scanned;
+                            job.probed = report.probed;
+                            job.skipped = report.skipped;
+                            job.errors = report.errors;
+                            job.removed = report.removed;
+                            job.complete = report.complete;
+                            job.status = "completed".into();
+                            if !report.complete {
+                                job.message =
+                                    Some("scan incomplete; stale media was not reconciled".into());
+                            }
+                        }
+                        Err(error) => {
+                            let message = format!("{error:#}");
+                            let _ =
+                                db::record_cloud_sync(&manager.pool, &source_id, Some(&message))
+                                    .await;
+                            job.status = "failed".into();
+                            job.complete = false;
+                            job.message = Some(message);
+                        }
+                    }
+                }
+            }
+            manager.scan_cancels.lock().await.remove(&job_id);
+        });
+        Ok(job)
+    }
+
+    pub async fn scan_jobs(&self) -> Vec<CloudScanJob> {
+        let mut jobs: Vec<CloudScanJob> = self.scan_jobs.lock().await.values().cloned().collect();
+        jobs.sort_by_key(|job| std::cmp::Reverse(job.started_at));
+        jobs
+    }
+
+    pub async fn scan_job(&self, id: &str) -> Option<CloudScanJob> {
+        self.scan_jobs.lock().await.get(id).cloned()
+    }
+
+    pub async fn cancel_scan(&self, id: &str) -> Option<CloudScanJob> {
+        let job = self.scan_jobs.lock().await.get(id).cloned()?;
+        if job.status == "running"
+            && let Some(cancel) = self.scan_cancels.lock().await.get(id)
+        {
+            cancel.store(true, Ordering::Relaxed);
+        }
+        Some(job)
+    }
+
+    async fn prune_scan_jobs(&self) {
+        let cutoff = db::now_ms() - 3_600_000;
+        let mut jobs = self.scan_jobs.lock().await;
+        jobs.retain(|_, job| {
+            job.status == "running" || job.finished_at.is_some_and(|at| at >= cutoff)
+        });
+    }
+
+    async fn update_scan_job(&self, job_id: Option<&str>, report: &CloudScanReport) {
+        let Some(job_id) = job_id else {
+            return;
+        };
+        if let Some(job) = self.scan_jobs.lock().await.get_mut(job_id) {
+            job.scanned = report.scanned;
+            job.probed = report.probed;
+            job.skipped = report.skipped;
+            job.errors = report.errors;
+            job.removed = report.removed;
+        }
+    }
+
+    async fn scan_source_controlled(
         &self,
         source_id: &str,
         limit: usize,
         full: bool,
+        job_id: Option<&str>,
+        cancel: Option<Arc<AtomicBool>>,
     ) -> Result<CloudScanReport> {
         let source = db::cloud_source(&self.pool, source_id)
             .await?
@@ -199,7 +366,11 @@ impl CloudManager {
             .map(|root| (root.remote_id.clone(), root.display_path.clone()))
             .collect();
         let mut seen_folders = HashSet::new();
+        let mut progress_tick = 0usize;
         while let Some((folder_id, folder_path)) = queue.pop() {
+            if cancelled(&cancel) {
+                bail!("scan cancelled");
+            }
             if report.scanned >= limit {
                 complete = false;
                 break;
@@ -209,6 +380,9 @@ impl CloudManager {
             }
             let mut page = None;
             loop {
+                if cancelled(&cancel) {
+                    bail!("scan cancelled");
+                }
                 let (entries, next) =
                     match self.google.list_folder(&token, &folder_id, page.as_deref()) {
                         Ok(value) => value,
@@ -219,6 +393,9 @@ impl CloudManager {
                         }
                     };
                 for entry in entries {
+                    if cancelled(&cancel) {
+                        bail!("scan cancelled");
+                    }
                     if report.scanned >= limit {
                         complete = false;
                         break;
@@ -303,6 +480,10 @@ impl CloudManager {
                         let _ = db::set_cloud_media_probed(&self.pool, &media_id).await;
                     }
                     report.scanned += 1;
+                    progress_tick += 1;
+                    if progress_tick.is_multiple_of(10) {
+                        self.update_scan_job(job_id, &report).await;
+                    }
                 }
                 if report.scanned >= limit || next.is_none() {
                     break;
@@ -310,6 +491,7 @@ impl CloudManager {
                 page = next;
             }
         }
+        self.update_scan_job(job_id, &report).await;
         report.complete = complete && report.errors == 0;
         if full && report.complete {
             for media_id in db::stale_cloud_media(&self.pool, source_id, scan_started).await? {
@@ -626,6 +808,12 @@ fn parse_google_credentials(auth_type: &str, secret: &str) -> Result<GoogleCrede
         }
         other => bail!("unsupported Google auth type: {other}"),
     }
+}
+
+fn cancelled(cancel: &Option<Arc<AtomicBool>>) -> bool {
+    cancel
+        .as_ref()
+        .is_some_and(|cancel| cancel.load(Ordering::Relaxed))
 }
 
 fn kind_for(name: &str, mime_type: &str) -> Option<String> {

@@ -25,7 +25,7 @@ area, is in [`PLAN-REVIEW.md`](PLAN-REVIEW.md).
 | Abuse controls | Per-client public budgets for API, HLS playlists, media segments, Cast, and MPEG-TS; global and per-client MPEG-TS stream leases; `429`/`503` with retry guidance |
 | API tokens | Revocable Bearer tokens in Studio Settings; SHA-256 hashes at rest; full admin API access |
 | Backups | Create/list/download, staged restore on restart |
-| Sources | Jellyfin import configured; Emby import implemented; cloud source edit, full-rescan reconciliation, Library badges/filter, and per-source metrics |
+| Sources | Jellyfin import configured; Emby import implemented; cloud source edit, background scans with progress/cancel, full-rescan reconciliation, Library badges/filter, and per-source/Prometheus metrics |
 | UI | ChannelLoom Watch and Studio: cinematic player, channel rail, guide timeline, cast mode, skeletons, responsive layouts, and a 10-foot TV mode |
 | Apps | ChannelLoom PWA over Tailscale Serve HTTPS; Android TV wrapper APK; Tauri desktop wrapper |
 | Cast | Cast button in Watch and Studio, cast-mode overlay with remote play/pause/mute/volume/stop, channel switching while casting, branded metadata, configurable Styled/Custom receiver, signed Cast HLS and CORS |
