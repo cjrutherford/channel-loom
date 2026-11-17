@@ -20,7 +20,7 @@ use anyhow::Context;
 use crate::api::{AppState, LoginThrottle};
 use crate::config::Config;
 use crate::engine::Engine;
-use crate::limits::{MediaRateLimiter, RateLimits, StreamLimiter};
+use crate::limits::{MediaRateLimiter, RateLimits, StreamLimiter, parse_cidrs};
 use crate::precache::Precache;
 
 #[tokio::main]
@@ -71,8 +71,10 @@ async fn main() -> anyhow::Result<()> {
     }
     let precache = Arc::new(Precache::new(&config, pool.clone()));
     precache.start();
+    let admin_nets = parse_cidrs(&config.admin_allow_cidrs)?;
     let state = AppState {
         config: config.clone(),
+        admin_nets,
         pool,
         engine: engine.clone(),
         cloud: cloud.clone(),

@@ -24,6 +24,8 @@ area, is in [`PLAN-REVIEW.md`](PLAN-REVIEW.md).
 | Auth | **Watch** at `/`; **Studio** at `/admin` (login-gated shell, session cookies marked `Secure` behind TLS, per-IP login throttling, Basic auth for API clients) |
 | Abuse controls | Per-client public budgets for API, HLS playlists, media segments, Cast, and MPEG-TS; global and per-client MPEG-TS stream leases; `429`/`503` with retry guidance |
 | API tokens | Revocable Bearer tokens in Studio Settings; SHA-256 hashes at rest; full admin API access |
+| Audit | Durable `audit_events` for login, token, source, backup, and mutation activity; Settings activity view |
+| Exposure | Optional `AWESOMETV_ADMIN_ALLOW_CIDRS` guard for Studio/admin APIs; security headers on every response |
 | Backups | Create/list/download, staged restore on restart |
 | Sources | Jellyfin import configured; Emby import implemented; cloud source edit, background scans with progress/cancel, full-rescan reconciliation, Library badges/filter, and per-source/Prometheus metrics |
 | UI | ChannelLoom Watch and Studio: cinematic player, channel rail, guide timeline, cast mode, skeletons, responsive layouts, and a 10-foot TV mode |

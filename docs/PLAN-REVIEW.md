@@ -150,7 +150,7 @@ proxied locally before airing.
 | Public viewer/admin split | **Done** |
 | Login throttling, secure cookies, signed Cast/cloud URLs, encrypted secrets | **Done** |
 | API tokens | **Done** — revocable Bearer tokens, hashed at rest, managed in Studio |
-| OIDC, roles, audit log | **Not started** — next identity milestone |
+| OIDC, roles, audit log | **Audit log done**; OIDC and roles remain |
 | PostgreSQL optional | **Not started** |
 | OpenAPI, diagnostics bundle, capacity calculator, update check | **Not started** |
 | Prometheus metrics | **Done** — endpoint only, no dashboards |
@@ -194,8 +194,9 @@ Design only: `docs/P2P-CHANNELS.md`.
   still needs to be registered by the operator.
 - **Security:** public split, login throttle, secure cookies, signed media,
   encrypted cloud secrets, API tokens, public HLS/Cast/DVR rate limits,
-  concurrent stream caps, SSRF/path review, and key rotation. Still open:
-  OIDC/RBAC/audit, webhook verification, and optional Studio network restriction.
+  concurrent stream caps, SSRF/path review, key rotation, durable audit events,
+  security headers, and an optional Studio network allowlist. Still open:
+  OIDC/RBAC, webhook verification, and token scopes/expiry.
 
 ## Plan deviations and decisions
 

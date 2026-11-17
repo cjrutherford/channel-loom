@@ -287,6 +287,27 @@ pub async fn init(data_dir: &Path) -> Result<SqlitePool> {
 
     sqlx::query(
         r#"
+        CREATE TABLE IF NOT EXISTS audit_events (
+            id TEXT PRIMARY KEY,
+            at_ms INTEGER NOT NULL,
+            actor TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            action TEXT NOT NULL,
+            target TEXT,
+            detail TEXT,
+            client_ip TEXT
+        );
+        "#,
+    )
+    .execute(&pool)
+    .await?;
+
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_audit_events_at ON audit_events(at_ms DESC);")
+        .execute(&pool)
+        .await?;
+
+    sqlx::query(
+        r#"
         CREATE TABLE IF NOT EXISTS api_tokens (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
@@ -3210,4 +3231,68 @@ mod tests {
         pool.close().await;
         let _ = std::fs::remove_dir_all(dir);
     }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AuditEvent {
+    pub id: String,
+    pub at_ms: i64,
+    pub actor: String,
+    pub kind: String,
+    pub action: String,
+    pub target: Option<String>,
+    pub detail: Option<String>,
+    pub client_ip: Option<String>,
+}
+
+pub async fn record_audit(
+    pool: &SqlitePool,
+    actor: &str,
+    kind: &str,
+    action: &str,
+    target: Option<&str>,
+    detail: Option<&str>,
+    client_ip: Option<&str>,
+) -> Result<()> {
+    let now = now_ms();
+    sqlx::query(
+        "INSERT INTO audit_events (id, at_ms, actor, kind, action, target, detail, client_ip) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(Uuid::new_v4().to_string())
+    .bind(now)
+    .bind(actor)
+    .bind(kind)
+    .bind(action)
+    .bind(target)
+    .bind(detail)
+    .bind(client_ip)
+    .execute(pool)
+    .await?;
+    let _ = sqlx::query("DELETE FROM audit_events WHERE at_ms < ?")
+        .bind(now - 90 * 86_400_000)
+        .execute(pool)
+        .await;
+    Ok(())
+}
+
+pub async fn list_audit(pool: &SqlitePool, limit: i64) -> Result<Vec<AuditEvent>> {
+    let rows = sqlx::query(
+        "SELECT id, at_ms, actor, kind, action, target, detail, client_ip FROM audit_events ORDER BY at_ms DESC LIMIT ?",
+    )
+    .bind(limit.clamp(1, 500))
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| AuditEvent {
+            id: row.get("id"),
+            at_ms: row.get("at_ms"),
+            actor: row.get("actor"),
+            kind: row.get("kind"),
+            action: row.get("action"),
+            target: row.get("target"),
+            detail: row.get("detail"),
+            client_ip: row.get("client_ip"),
+        })
+        .collect())
 }

@@ -25,7 +25,7 @@ use crate::db::{self, Channel, ChannelItem, Media};
 use crate::engine::Engine;
 use crate::external;
 use crate::jellyfin;
-use crate::limits::{MediaClass, MediaRateLimiter, StreamLimiter, client_key};
+use crate::limits::{IpNet, MediaClass, MediaRateLimiter, StreamLimiter, client_key, ip_allowed};
 use crate::programming;
 use crate::scan;
 use crate::scripted;
@@ -35,6 +35,12 @@ use crate::tokens;
 pub struct Session {
     pub username: String,
     pub expires_ms: i64,
+}
+
+#[derive(Clone, Debug)]
+pub struct AuthActor {
+    pub label: String,
+    pub kind: String,
 }
 
 const LOGIN_WINDOW_MS: i64 = 15 * 60 * 1000;
@@ -181,6 +187,7 @@ mod rate_limit_tests {
 #[derive(Clone)]
 pub struct AppState {
     pub config: Config,
+    pub admin_nets: Vec<IpNet>,
     pub pool: SqlitePool,
     pub engine: Arc<Engine>,
     pub cloud: Arc<CloudManager>,
@@ -200,6 +207,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/sources/emby/sync", post(emby_sync))
         .route("/api/v1/stats", get(stats))
         .route("/api/v1/tokens", get(list_tokens).post(create_token))
+        .route("/api/v1/audit", get(audit_events))
         .route("/api/v1/tokens/{id}", delete(delete_token))
         .route("/api/v1/metrics", get(metrics))
         .route("/api/v1/precache", get(precache_status))
@@ -343,7 +351,10 @@ pub fn router(state: AppState) -> Router {
             public_rate_limit,
         ));
 
-    protected.merge(public).with_state(state)
+    protected
+        .merge(public)
+        .with_state(state)
+        .layer(axum::middleware::from_fn(security_headers))
 }
 
 #[derive(Deserialize)]
@@ -455,9 +466,22 @@ async fn login(
     headers: HeaderMap,
     Json(request): Json<LoginRequest>,
 ) -> Result<Response, ApiError> {
+    if !ip_allowed(&state.admin_nets, &headers, Some(peer)) {
+        return Err(ApiError::not_found("not found"));
+    }
     let key = client_key(&headers, Some(peer));
     let now = db::now_ms();
     if let Some(retry_after) = state.login_throttle.lock().await.retry_after(&key, now) {
+        let _ = db::record_audit(
+            &state.pool,
+            "anonymous",
+            "login",
+            "login.throttled",
+            Some(&request.username),
+            None,
+            Some(&key),
+        )
+        .await;
         let mut response = (
             StatusCode::TOO_MANY_REQUESTS,
             Json(serde_json::json!({"error": "too many failed login attempts"})),
@@ -472,9 +496,29 @@ async fn login(
         || request.password != state.config.admin_password
     {
         state.login_throttle.lock().await.record_failure(&key, now);
+        let _ = db::record_audit(
+            &state.pool,
+            "anonymous",
+            "login",
+            "login.failed",
+            Some(&request.username),
+            None,
+            Some(&key),
+        )
+        .await;
         return Err(ApiError::unauthorized("invalid credentials"));
     }
     state.login_throttle.lock().await.clear(&key);
+    let _ = db::record_audit(
+        &state.pool,
+        &request.username,
+        "session",
+        "login.success",
+        None,
+        None,
+        Some(&key),
+    )
+    .await;
     let token = uuid::Uuid::new_v4().to_string();
     state.sessions.lock().await.insert(
         token.clone(),
@@ -499,9 +543,25 @@ async fn login(
     Ok(response)
 }
 
-async fn logout(State(state): State<AppState>, request: Request) -> Response {
-    if let Some(token) = session_token(request.headers()) {
-        state.sessions.lock().await.remove(&token);
+async fn logout(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    request: Request,
+) -> Response {
+    let key = client_key(request.headers(), Some(peer));
+    if let Some(token) = session_token(request.headers())
+        && let Some(session) = state.sessions.lock().await.remove(&token)
+    {
+        let _ = db::record_audit(
+            &state.pool,
+            &session.username,
+            "session",
+            "logout",
+            None,
+            None,
+            Some(&key),
+        )
+        .await;
     }
     let mut response = StatusCode::NO_CONTENT.into_response();
     let secure = if request_is_secure(request.headers()) {
@@ -611,8 +671,15 @@ async fn cast_receiver() -> Html<&'static str> {
 /// The admin console shell is only sent to authenticated callers. Anonymous
 /// visitors get the login page instead, so the admin JavaScript and markup are
 /// not handed out publicly.
-async fn admin_index(State(state): State<AppState>, request: Request) -> Response {
-    let authorized = request_is_authorized(&state, request.headers()).await;
+async fn admin_index(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    request: Request,
+) -> Response {
+    if !ip_allowed(&state.admin_nets, request.headers(), Some(peer)) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let authorized = authorize(&state, request.headers()).await.is_some();
     let mut response = if authorized {
         Html(include_str!("../web/index.html")).into_response()
     } else {
@@ -1924,8 +1991,22 @@ async fn create_backup(
 
 async fn download_backup(
     State(state): State<AppState>,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+    axum::extract::Extension(actor): axum::extract::Extension<AuthActor>,
     Path(name): Path<String>,
 ) -> Result<Response, ApiError> {
+    let key = client_key(&headers, Some(peer));
+    let _ = db::record_audit(
+        &state.pool,
+        &actor.label,
+        &actor.kind,
+        "backup.download",
+        Some(&name),
+        None,
+        Some(&key),
+    )
+    .await;
     let path = backup::backup_path(&state.config.data_dir, &name)
         .ok_or_else(|| ApiError::bad_request("invalid backup name"))?;
     let body = tokio::fs::read(&path)
@@ -2576,6 +2657,20 @@ async fn ts_stream(
 }
 
 #[derive(Deserialize)]
+struct AuditQuery {
+    limit: Option<i64>,
+}
+
+async fn audit_events(
+    State(state): State<AppState>,
+    Query(query): Query<AuditQuery>,
+) -> Result<Json<Vec<db::AuditEvent>>, ApiError> {
+    Ok(Json(
+        db::list_audit(&state.pool, query.limit.unwrap_or(100)).await?,
+    ))
+}
+
+#[derive(Deserialize)]
 struct CreateTokenRequest {
     name: String,
 }
@@ -2646,30 +2741,25 @@ fn bearer_token(headers: &HeaderMap) -> Option<&str> {
         .filter(|value| !value.is_empty())
 }
 
-async fn verify_api_token(state: &AppState, token: &str) -> bool {
-    let Some((id, secret)) = tokens::parse(token) else {
-        return false;
-    };
+async fn verify_api_token(state: &AppState, token: &str) -> Option<String> {
+    let (id, secret) = tokens::parse(token)?;
     let stored = match db::api_token_hash(&state.pool, id).await {
         Ok(value) => value,
         Err(error) => {
             tracing::warn!(%error, "API token lookup failed");
-            return false;
+            return None;
         }
-    };
-    let Some(stored) = stored else {
-        return false;
-    };
+    }?;
     if !tokens::verify_secret(secret, &stored) {
-        return false;
+        return None;
     }
     if let Err(error) = db::touch_api_token(&state.pool, id, db::now_ms()).await {
         tracing::warn!(%error, "could not update API token last-used time");
     }
-    true
+    Some(id.to_string())
 }
 
-async fn request_is_authorized(state: &AppState, headers: &HeaderMap) -> bool {
+async fn authorize(state: &AppState, headers: &HeaderMap) -> Option<AuthActor> {
     let basic_ok = headers
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
@@ -2690,34 +2780,44 @@ async fn request_is_authorized(state: &AppState, headers: &HeaderMap) -> bool {
             )
         });
 
-    let session_ok = if let Some(token) = session_token(headers) {
+    if basic_ok {
+        return Some(AuthActor {
+            label: state.config.admin_user.clone(),
+            kind: "basic".into(),
+        });
+    }
+    if let Some(token) = bearer_token(headers)
+        && let Some(id) = verify_api_token(state, token).await
+    {
+        return Some(AuthActor {
+            label: format!("token:{id}"),
+            kind: "token".into(),
+        });
+    }
+    if let Some(token) = session_token(headers) {
         let mut sessions = state.sessions.lock().await;
-        match sessions.get(&token) {
-            Some(session) if session.expires_ms > db::now_ms() => true,
-            Some(_) => {
-                sessions.remove(&token);
-                false
+        if let Some(session) = sessions.get(&token) {
+            if session.expires_ms > db::now_ms() {
+                return Some(AuthActor {
+                    label: session.username.clone(),
+                    kind: "session".into(),
+                });
             }
-            None => false,
+            sessions.remove(&token);
         }
-    } else {
-        false
-    };
-
-    let bearer_ok = match bearer_token(headers) {
-        Some(token) => verify_api_token(state, token).await,
-        None => false,
-    };
-
-    basic_ok || session_ok || bearer_ok
+    }
+    None
 }
 
 async fn basic_auth(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
-    request: Request,
+    mut request: Request,
     next: Next,
 ) -> Response {
+    if !ip_allowed(&state.admin_nets, request.headers(), Some(peer)) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
     let key = client_key(request.headers(), Some(peer));
     let now = db::now_ms();
     if let Some(retry_after) = state.login_throttle.lock().await.retry_after(&key, now) {
@@ -2731,12 +2831,63 @@ async fn basic_auth(
         }
         return response;
     }
-    if request_is_authorized(&state, request.headers()).await {
-        next.run(request).await
+    let method = request.method().clone();
+    let path = request.uri().path().to_string();
+    let actor = authorize(&state, request.headers()).await;
+    if let Some(actor) = actor {
+        request.extensions_mut().insert(actor.clone());
+        let response = next.run(request).await;
+        if !matches!(method, Method::GET | Method::HEAD | Method::OPTIONS) {
+            let status = response.status().as_u16().to_string();
+            let _ = db::record_audit(
+                &state.pool,
+                &actor.label,
+                &actor.kind,
+                &format!("{method} {path}"),
+                None,
+                Some(&status),
+                Some(&key),
+            )
+            .await;
+        }
+        response
     } else {
         state.login_throttle.lock().await.record_failure(&key, now);
+        let _ = db::record_audit(
+            &state.pool,
+            "anonymous",
+            "auth",
+            "auth.failed",
+            Some(&path),
+            Some(method.as_str()),
+            Some(&key),
+        )
+        .await;
         (StatusCode::UNAUTHORIZED, "Authentication required\n").into_response()
     }
+}
+
+async fn security_headers(request: Request, next: Next) -> Response {
+    let mut response = next.run(request).await;
+    let headers = response.headers_mut();
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    headers.insert(
+        header::REFERRER_POLICY,
+        HeaderValue::from_static("no-referrer"),
+    );
+    headers.insert(
+        "permissions-policy",
+        HeaderValue::from_static("camera=(), microphone=(), geolocation=()"),
+    );
+    headers.insert(
+        "content-security-policy",
+        HeaderValue::from_static("frame-ancestors 'none'; base-uri 'self'; object-src 'none'"),
+    );
+    response
 }
 
 fn constant_time_eq(left: &str, right: &str) -> bool {
