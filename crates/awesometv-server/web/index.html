@@ -816,7 +816,7 @@
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
 <script>
 const $ = (id) => document.getElementById(id);
-const state = { config: null, sources: [], stats: null, media: [], channels: [], collections: [], blocks: [], classicItems: [], templates: [], overrides: [], graphics: null, stream: null, metrics: null, language: null, tvNumber: null, playerTarget: null, cloudSources: [], cloudMetrics: null, cloudBrowse: null, programChannel: null, programMode: 'blocks', selected: new Set(), kind: 'all', origin: 'all', search: '', activeChannel: null, hls: null, modalMode: null, autoPlayed: false, authed: false, tokens: [], audit: [], cloudScanJob: null };
+const state = { config: null, sources: [], stats: null, media: [], channels: [], collections: [], blocks: [], classicItems: [], templates: [], overrides: [], graphics: null, stream: null, metrics: null, language: null, tvNumber: null, playerTarget: null, cloudSources: [], cloudMetrics: null, cloudBrowse: null, programChannel: null, programMode: 'blocks', selected: new Set(), kind: 'all', origin: 'all', search: '', activeChannel: null, hls: null, modalMode: null, autoPlayed: false, authed: false, tokens: [], audit: [], role: 'admin', cloudScanJob: null };
 const KIND_LABEL = { movie: 'Movie', episode: 'Episode', music: 'Music', image: 'Image', other: 'Video' };
 
 function toast(text, error = false) {
@@ -863,6 +863,8 @@ async function checkAuth() {
   try {
     const response = await fetch('/api/v1/auth/me', { credentials: 'same-origin' });
     if (response.ok) {
+      const me = await response.json();
+      state.role = me.role || 'admin';
       state.authed = true;
       $('loginBack').classList.remove('open');
       await loadAll();
@@ -891,8 +893,9 @@ async function renderBackups() {
 
 async function loadAll() {
   try {
+    const adminOnly = state.role === 'admin';
     const [config, sources, stats, media, channels, collections, templates, metrics, language, cloudSources, precache, tokens, cloudMetrics, audit] = await Promise.all([
-      api('/api/v1/config'), api('/api/v1/sources'), api('/api/v1/stats'), api('/api/v1/media'), api('/api/v1/channels'), api('/api/v1/collections'), api('/api/v1/templates'), api('/api/v1/metrics'), api('/api/v1/settings/language'), api('/api/v1/cloud/sources'), api('/api/v1/precache'), api('/api/v1/tokens'), api('/api/v1/cloud/metrics'), api('/api/v1/audit?limit=100')
+      api('/api/v1/config'), api('/api/v1/sources'), api('/api/v1/stats'), api('/api/v1/media'), api('/api/v1/channels'), api('/api/v1/collections'), api('/api/v1/templates'), api('/api/v1/metrics'), api('/api/v1/settings/language'), api('/api/v1/cloud/sources'), api('/api/v1/precache'), adminOnly ? api('/api/v1/tokens') : Promise.resolve([]), api('/api/v1/cloud/metrics'), adminOnly ? api('/api/v1/audit?limit=100') : Promise.resolve([])
     ]);
     state.config = config; state.sources = sources; state.stats = stats; state.media = media; state.channels = channels; state.collections = collections; state.templates = templates; state.metrics = metrics; state.language = language; state.cloudSources = cloudSources; state.precache = precache; state.tokens = tokens; state.cloudMetrics = cloudMetrics; state.audit = audit;
     preloadCast();
@@ -1502,6 +1505,7 @@ function renderSettings() {
   $('setAudioLanguage').value = state.language?.audio_language || '';
   $('setSubtitleMode').value = state.language?.subtitle_mode || 'off';
   $('setSubtitleLanguage').value = state.language?.subtitle_language || '';
+  $('saveLanguageBtn').disabled = state.role !== 'admin';
   renderStreamHealth();
   renderBackups();
   renderTokens();
@@ -1511,6 +1515,10 @@ function renderSettings() {
 function renderAudit() {
   const list = $('auditList');
   if (!list) return;
+  if (state.role !== 'admin') {
+    list.innerHTML = '<p class="muted small">Admin role required to view the audit log.</p>';
+    return;
+  }
   if (!state.audit.length) {
     list.innerHTML = '<p class="muted small">No activity recorded yet.</p>';
     return;
@@ -1528,6 +1536,11 @@ function renderAudit() {
 function renderTokens() {
   const list = $('tokenList');
   if (!list) return;
+  $('createTokenBtn').disabled = state.role !== 'admin';
+  if (state.role !== 'admin') {
+    list.innerHTML = '<p class="muted small">Admin role required to manage API tokens.</p>';
+    return;
+  }
   if (!state.tokens.length) {
     list.innerHTML = '<p class="muted small">No API tokens yet.</p>';
     return;

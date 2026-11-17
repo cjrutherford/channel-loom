@@ -7,7 +7,7 @@ use axum::body::Body;
 use axum::extract::{ConnectInfo, Path, Query, Request, State};
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use axum::middleware::Next;
-use axum::response::{Html, IntoResponse, Response};
+use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use base64::Engine as _;
@@ -33,9 +33,55 @@ use crate::scan;
 use crate::scripted;
 use crate::tokens;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord)]
+pub enum Role {
+    Viewer,
+    Operator,
+    Admin,
+}
+
+impl Role {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Viewer => "viewer",
+            Self::Operator => "operator",
+            Self::Admin => "admin",
+        }
+    }
+
+    pub fn from_name(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "viewer" | "read" | "readonly" | "read-only" => Some(Self::Viewer),
+            "operator" | "control" => Some(Self::Operator),
+            "admin" | "administrator" => Some(Self::Admin),
+            _ => None,
+        }
+    }
+
+    fn from_scopes(scopes: &[String]) -> Self {
+        if scopes.iter().any(|scope| scope == "admin") {
+            Self::Admin
+        } else if scopes.iter().any(|scope| scope == "control") {
+            Self::Operator
+        } else {
+            Self::Viewer
+        }
+    }
+
+    fn allows(self, required: &str) -> bool {
+        let required = match required {
+            "admin" => Self::Admin,
+            "control" => Self::Operator,
+            _ => Self::Viewer,
+        };
+        self >= required
+    }
+}
+
 #[derive(Clone)]
 pub struct Session {
     pub username: String,
+    pub role: Role,
     pub expires_ms: i64,
 }
 
@@ -43,7 +89,7 @@ pub struct Session {
 pub struct AuthActor {
     pub label: String,
     pub kind: String,
-    pub scopes: Vec<String>,
+    pub role: Role,
 }
 
 const LOGIN_WINDOW_MS: i64 = 15 * 60 * 1000;
@@ -149,10 +195,11 @@ mod token_scope_tests {
     use super::*;
 
     fn actor(scopes: &[&str]) -> AuthActor {
+        let scopes: Vec<String> = scopes.iter().map(|scope| scope.to_string()).collect();
         AuthActor {
             label: "token:test".into(),
             kind: "token".into(),
-            scopes: scopes.iter().map(|scope| scope.to_string()).collect(),
+            role: Role::from_scopes(&scopes),
         }
     }
 
@@ -238,6 +285,8 @@ mod rate_limit_tests {
 pub struct AppState {
     pub config: Config,
     pub admin_nets: Vec<IpNet>,
+    pub oidc: Option<std::sync::Arc<crate::oidc::OidcClient>>,
+    pub oidc_pending: Arc<Mutex<std::collections::HashMap<String, crate::oidc::PendingLogin>>>,
     pub pool: SqlitePool,
     pub engine: Arc<Engine>,
     pub cloud: Arc<CloudManager>,
@@ -379,6 +428,8 @@ pub fn router(state: AppState) -> Router {
         .route("/icons/{file}", get(icon))
         .route("/api/v1/auth/login", post(login))
         .route("/api/v1/auth/logout", post(logout))
+        .route("/auth/oidc/start", get(oidc_start))
+        .route("/auth/oidc/callback", get(oidc_callback))
         .route("/healthz", get(health))
         .route("/discover.json", get(discover))
         .route("/lineup.json", get(hdhr_lineup))
@@ -443,6 +494,9 @@ fn media_class(method: &Method, path: &str) -> Option<MediaClass> {
         if *method == Method::POST && path.ends_with("/cast") {
             return Some(MediaClass::Cast);
         }
+        return Some(MediaClass::Api);
+    }
+    if path.starts_with("/auth/oidc/") {
         return Some(MediaClass::Api);
     }
     if path.starts_with("/iptv/")
@@ -511,6 +565,121 @@ async fn public_rate_limit(
     next.run(request).await
 }
 
+#[derive(Deserialize)]
+struct OidcCallbackQuery {
+    code: Option<String>,
+    state: Option<String>,
+    error: Option<String>,
+    error_description: Option<String>,
+}
+
+async fn oidc_start(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+) -> Result<Redirect, ApiError> {
+    if !ip_allowed(&state.admin_nets, &headers, Some(peer)) {
+        return Err(ApiError::not_found("not found"));
+    }
+    let Some(client) = &state.oidc else {
+        return Err(ApiError::not_found("OIDC is not configured"));
+    };
+    let (url, oidc_state, pending) = client
+        .start()
+        .await
+        .map_err(|error| ApiError::service_unavailable(format!("OIDC start: {error:#}")))?;
+    let now = db::now_ms();
+    let mut pending_map = state.oidc_pending.lock().await;
+    pending_map.retain(|_, value| now - value.created_at < 600_000);
+    pending_map.insert(oidc_state, pending);
+    Ok(Redirect::to(&url))
+}
+
+async fn oidc_callback(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+    Query(query): Query<OidcCallbackQuery>,
+) -> Result<Response, ApiError> {
+    if !ip_allowed(&state.admin_nets, &headers, Some(peer)) {
+        return Err(ApiError::not_found("not found"));
+    }
+    let Some(client) = &state.oidc else {
+        return Err(ApiError::not_found("OIDC is not configured"));
+    };
+    let key = client_key(&headers, Some(peer));
+    if let Some(error) = query.error {
+        let detail = query.error_description.unwrap_or_default();
+        let _ = db::record_audit(
+            &state.pool,
+            "anonymous",
+            "oidc",
+            "oidc.login.failed",
+            Some(&error),
+            Some(&detail),
+            Some(&key),
+        )
+        .await;
+        return Err(ApiError::bad_request("OIDC sign-in failed"));
+    }
+    let code = query
+        .code
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| ApiError::bad_request("OIDC callback has no code"))?;
+    let oidc_state = query
+        .state
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| ApiError::bad_request("OIDC callback has no state"))?;
+    let pending = state
+        .oidc_pending
+        .lock()
+        .await
+        .remove(&oidc_state)
+        .ok_or_else(|| ApiError::bad_request("OIDC state is invalid or expired"))?;
+    if db::now_ms() - pending.created_at > 600_000 {
+        return Err(ApiError::bad_request("OIDC state is expired"));
+    }
+    let profile = client
+        .finish(&code, &pending)
+        .await
+        .map_err(|error| ApiError::service_unavailable(format!("OIDC callback: {error:#}")))?;
+    let role = Role::from_name(&profile.role)
+        .ok_or_else(|| ApiError::unauthorized("OIDC account has no permitted role"))?;
+    let token = uuid::Uuid::new_v4().to_string();
+    state.sessions.lock().await.insert(
+        token.clone(),
+        Session {
+            username: profile.username.clone(),
+            role,
+            expires_ms: db::now_ms() + 7 * 86_400_000,
+        },
+    );
+    let _ = db::record_audit(
+        &state.pool,
+        &profile.username,
+        "oidc",
+        "oidc.login.success",
+        None,
+        Some(role.as_str()),
+        Some(&key),
+    )
+    .await;
+    let mut response = Redirect::to("/admin").into_response();
+    let secure = if request_is_secure(&headers) {
+        "; Secure"
+    } else {
+        ""
+    };
+    response.headers_mut().insert(
+        header::SET_COOKIE,
+        HeaderValue::from_str(&format!(
+            "awesometv_session={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800{secure}"
+        ))
+        .map_err(|error| ApiError::internal(format!("cookie: {error}")))?,
+    );
+    Ok(response)
+}
+
 async fn login(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
@@ -575,6 +744,7 @@ async fn login(
         token.clone(),
         Session {
             username: request.username,
+            role: Role::Admin,
             expires_ms: db::now_ms() + 7 * 86_400_000,
         },
     );
@@ -630,16 +800,10 @@ async fn logout(
     response
 }
 
-async fn auth_me(State(state): State<AppState>, request: Request) -> Json<serde_json::Value> {
-    let username =
-        session_token(request.headers())
-            .and_then(|token| {
-                state.sessions.try_lock().ok().and_then(|sessions| {
-                    sessions.get(&token).map(|session| session.username.clone())
-                })
-            })
-            .unwrap_or_else(|| state.config.admin_user.clone());
-    Json(serde_json::json!({ "user": username }))
+async fn auth_me(
+    axum::extract::Extension(actor): axum::extract::Extension<AuthActor>,
+) -> Json<serde_json::Value> {
+    Json(serde_json::json!({ "user": actor.label, "role": actor.role.as_str() }))
 }
 
 async fn manifest() -> impl IntoResponse {
@@ -764,6 +928,7 @@ struct PublicConfig {
     emby_configured: bool,
     cast_base_url: String,
     cast_receiver_id: String,
+    oidc_enabled: bool,
 }
 
 async fn public_config(State(state): State<AppState>) -> Json<PublicConfig> {
@@ -774,6 +939,7 @@ async fn public_config(State(state): State<AppState>) -> Json<PublicConfig> {
         emby_configured: !state.config.emby_api_key.trim().is_empty(),
         cast_base_url: cast_base(&state.config),
         cast_receiver_id: state.config.cast_receiver_id.clone(),
+        oidc_enabled: state.oidc.is_some(),
     })
 }
 
@@ -781,12 +947,14 @@ async fn public_config(State(state): State<AppState>) -> Json<PublicConfig> {
 struct ViewerConfig {
     cast_receiver_id: String,
     cast_base_url: String,
+    oidc_enabled: bool,
 }
 
 async fn public_viewer_config(State(state): State<AppState>) -> Json<ViewerConfig> {
     Json(ViewerConfig {
         cast_receiver_id: state.config.cast_receiver_id.clone(),
         cast_base_url: cast_base(&state.config),
+        oidc_enabled: state.oidc.is_some(),
     })
 }
 
@@ -2886,16 +3054,17 @@ async fn authorize(
         return Some(AuthActor {
             label: state.config.admin_user.clone(),
             kind: "basic".into(),
-            scopes: vec!["admin".into()],
+            role: Role::Admin,
         });
     }
     if let Some(token) = bearer_token(headers)
         && let Some((id, scopes)) = verify_api_token(state, token, client_ip).await
     {
+        let role = Role::from_scopes(&scopes);
         return Some(AuthActor {
             label: format!("token:{id}"),
             kind: "token".into(),
-            scopes,
+            role,
         });
     }
     if let Some(token) = session_token(headers) {
@@ -2905,7 +3074,7 @@ async fn authorize(
                 return Some(AuthActor {
                     label: session.username.clone(),
                     kind: "session".into(),
-                    scopes: vec!["admin".into()],
+                    role: session.role,
                 });
             }
             sessions.remove(&token);
@@ -3002,7 +3171,8 @@ fn required_scope(method: &Method, path: &str) -> &'static str {
         || path.starts_with("/api/v1/audit")
         || path.starts_with("/api/v1/backups")
         || path == "/api/v1/restore"
-        || path.starts_with("/api/v1/settings")
+        || (path.starts_with("/api/v1/settings")
+            && !matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS))
     {
         return "admin";
     }
@@ -3013,20 +3183,7 @@ fn required_scope(method: &Method, path: &str) -> &'static str {
 }
 
 fn actor_allows(actor: &AuthActor, required: &str) -> bool {
-    if actor.kind != "token" {
-        return true;
-    }
-    if actor.scopes.iter().any(|scope| scope == "admin") {
-        return true;
-    }
-    match required {
-        "read" => actor
-            .scopes
-            .iter()
-            .any(|scope| matches!(scope.as_str(), "read" | "control")),
-        "control" => actor.scopes.iter().any(|scope| scope == "control"),
-        _ => false,
-    }
+    actor.role.allows(required)
 }
 
 async fn security_headers(request: Request, next: Next) -> Response {

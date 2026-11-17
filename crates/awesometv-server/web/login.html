@@ -79,6 +79,7 @@
     <button type="submit" id="submitBtn">Sign in</button>
     <div class="error" id="error" role="alert"></div>
   </form>
+  <a class="back" id="oidcBtn" href="/auth/oidc/start" style="display:none; margin-top:12px; font-size:12px;">Sign in with SSO</a>
   <a class="back" href="/">← Back to Watch</a>
 </main>
 <script>
@@ -116,6 +117,10 @@ form.addEventListener('submit', async (event) => {
     submit.disabled = false;
   }
 });
+  fetch('/api/v1/public/config', { cache: 'no-store' })
+    .then((response) => response.ok ? response.json() : null)
+    .then((config) => { if (config?.oidc_enabled) document.getElementById('oidcBtn').style.display = 'inline-block'; })
+    .catch(() => {});
 </script>
 </body>
 </html>

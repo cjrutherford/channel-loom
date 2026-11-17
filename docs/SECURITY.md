@@ -69,6 +69,39 @@ Sessions are in memory and expire after seven days. A restart signs everyone
 out. Cookies are `HttpOnly`, `SameSite=Lax`, and marked `Secure` when the
 request arrived over HTTPS (including a trusted `X-Forwarded-Proto`).
 
+## OIDC and roles
+
+OIDC is optional. Set `AWESOMETV_OIDC_ISSUER` and the matching client settings
+to show **Sign in with SSO** on the Studio login page.
+
+```text
+AWESOMETV_OIDC_ISSUER=https://id.example.com
+AWESOMETV_OIDC_CLIENT_ID=channelloom
+AWESOMETV_OIDC_CLIENT_SECRET=...
+AWESOMETV_OIDC_REDIRECT_URL=https://tv.example.com/auth/oidc/callback
+AWESOMETV_OIDC_ROLE_CLAIM=roles
+AWESOMETV_OIDC_ADMIN_ROLE=admin
+AWESOMETV_OIDC_OPERATOR_ROLE=operator
+AWESOMETV_OIDC_VIEWER_ROLE=viewer
+AWESOMETV_OIDC_DEFAULT_ROLE=viewer
+```
+
+The flow uses discovery, authorization code, state, and PKCE. Identity and
+roles come from the provider's `userinfo` endpoint. Set
+`AWESOMETV_OIDC_DEFAULT_ROLE=none` to reject users without a mapped role.
+
+Roles:
+
+| Role | Access |
+|---|---|
+| `admin` | Everything, including tokens, audit, backups, restore, settings |
+| `operator` | Read plus channels, schedules, scans, and media writes |
+| `viewer` | Read-only admin APIs |
+
+The environment admin remains an `admin` break-glass account. Bearer token
+scopes map to the same hierarchy (`admin` → admin, `control` → operator,
+`read` → viewer).
+
 ## API tokens
 
 Studio **Settings → API tokens** creates revocable Bearer tokens for scripts,
@@ -181,7 +214,7 @@ depend on the secret key.
 
 ## Still open
 
-- OIDC and roles. A durable audit log is now in place.
+- OIDC integration testing against a real provider is still pending; the code path and role mapping are implemented.
 - Provider webhook signature verification and webhook rate limits. No webhook
   receiver is implemented yet.
 - Propagating the Studio CIDR allowlist to the nginx deployment used in production.

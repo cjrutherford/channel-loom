@@ -7,6 +7,7 @@ mod engine;
 mod external;
 mod jellyfin;
 mod limits;
+mod oidc;
 mod precache;
 mod programming;
 mod scan;
@@ -72,7 +73,10 @@ async fn main() -> anyhow::Result<()> {
     let precache = Arc::new(Precache::new(&config, pool.clone()));
     precache.start();
     let admin_nets = parse_cidrs(&config.admin_allow_cidrs)?;
+    let oidc = crate::oidc::OidcClient::from_env()?;
     let state = AppState {
+        oidc,
+        oidc_pending: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
         config: config.clone(),
         admin_nets,
         pool,

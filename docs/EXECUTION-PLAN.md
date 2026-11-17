@@ -176,7 +176,7 @@ Recommended order:
 - S3/WebDAV test endpoints.
 - Cache budget and secret-key recovery policy.
 - P2P discovery, pairing, share scope, numbering, re-sharing policy.
-- OIDC/roles/audit scope and whether `/admin` stays LAN/Tailscale-only until then.
+- OIDC provider validation and role-specific Studio UI polish; audit and role enforcement are implemented.
 - Public capacity policy and capacity calculator (stream caps are in place).
 - ARM target and hardware profiles.
 
