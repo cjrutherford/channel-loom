@@ -6,12 +6,12 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
-use serde_json::Value;
 use sqlx::SqlitePool;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use super::google::{GoogleClient, GoogleCredentials, RemoteEntry};
+use super::google::RemoteEntry;
+use super::provider::{ProviderHead, ProviderInfo, ProviderRegistry};
 use super::secret::SecretKey;
 use crate::db;
 use crate::scan;
@@ -67,7 +67,7 @@ pub struct CloudManager {
     pool: SqlitePool,
     data_dir: PathBuf,
     secret: Arc<SecretKey>,
-    google: GoogleClient,
+    providers: ProviderRegistry,
     internal_base: String,
     tokens: Mutex<HashMap<String, CachedToken>>,
     scan_jobs: Mutex<HashMap<String, CloudScanJob>>,
@@ -93,7 +93,7 @@ impl CloudManager {
             pool,
             data_dir,
             secret,
-            google: GoogleClient::new()?,
+            providers: ProviderRegistry::new()?,
             internal_base: format!(
                 "http://{}:{port}",
                 if bind == "0.0.0.0" || bind == "::" {
@@ -111,14 +111,13 @@ impl CloudManager {
     }
 
     pub async fn create_source(&self, input: &db::CloudSourceInput) -> Result<db::CloudSource> {
-        if input.provider != "google" {
-            bail!("only Google Drive is implemented in this milestone");
-        }
         let secret = input.secret.as_deref().unwrap_or("").trim();
         if secret.is_empty() {
             bail!("cloud source secret is required");
         }
-        validate_google_secret(&input.auth_type, secret)?;
+        self.providers
+            .require(&input.provider)?
+            .validate_secret(&input.auth_type, secret)?;
         let encrypted = self.secret.encrypt(secret.as_bytes())?;
         db::create_cloud_source(&self.pool, input, &encrypted).await
     }
@@ -170,7 +169,8 @@ impl CloudManager {
             .await?
             .context("cloud source not found")?;
         let token = self.access_token(&source).await?;
-        let (entries, _) = self.google.list_folder(&token, folder_id, None)?;
+        let provider = self.providers.require(&source.provider)?;
+        let (entries, _) = provider.list_folder(&token, folder_id, None)?;
         Ok(entries)
     }
 
@@ -179,7 +179,8 @@ impl CloudManager {
             .await?
             .context("cloud source not found")?;
         let token = self.access_token(&source).await?;
-        self.google.list_shared_drives(&token)
+        let provider = self.providers.require(&source.provider)?;
+        provider.list_drives(&token)
     }
 
     pub async fn add_root(
@@ -350,6 +351,7 @@ impl CloudManager {
             bail!("add at least one cloud folder root before scanning");
         }
         let token = self.access_token(&source).await?;
+        let provider = self.providers.require(&source.provider)?;
         let limit = limit.clamp(1, 50_000);
         let scan_started = db::now_ms();
         let mut complete = true;
@@ -384,7 +386,7 @@ impl CloudManager {
                     bail!("scan cancelled");
                 }
                 let (entries, next) =
-                    match self.google.list_folder(&token, &folder_id, page.as_deref()) {
+                    match provider.list_folder(&token, &folder_id, page.as_deref()) {
                         Ok(value) => value,
                         Err(error) => {
                             report.errors += 1;
@@ -519,6 +521,26 @@ impl CloudManager {
         Ok(report)
     }
 
+    pub async fn head_proxy(&self, source_id: &str, remote_id: &str) -> Result<ProviderHead> {
+        let source = db::cloud_source(&self.pool, source_id)
+            .await?
+            .context("cloud source not found")?;
+        if !source.enabled {
+            bail!("cloud source is disabled");
+        }
+        let token = self.access_token(&source).await?;
+        let provider = self.providers.require(&source.provider)?;
+        provider.head(&token, remote_id)
+    }
+
+    pub fn providers(&self) -> Vec<ProviderInfo> {
+        self.providers.list()
+    }
+
+    pub fn supports_provider(&self, id: &str) -> bool {
+        self.providers.get(id).is_some()
+    }
+
     pub async fn resolve_media_input(self: &Arc<Self>, media_id: &str) -> Result<ResolvedMedia> {
         let kind = db::media_kind(&self.pool, media_id)
             .await?
@@ -644,7 +666,8 @@ impl CloudManager {
             bail!("cloud source is disabled");
         }
         let token = self.access_token(&source).await?;
-        self.google.download(&token, remote_id, range)
+        let provider = self.providers.require(&source.provider)?;
+        provider.download(&token, remote_id, range)
     }
 
     pub async fn cache_media(
@@ -661,7 +684,8 @@ impl CloudManager {
             bail!("cloud source is disabled");
         }
         let token = self.access_token(&source).await?;
-        let response = self.google.download(&token, remote_id, None)?;
+        let provider = self.providers.require(&source.provider)?;
+        let response = provider.download(&token, remote_id, None)?;
         let dir = self.data_dir.join("cloud-cache").join(source_id);
         tokio::fs::create_dir_all(&dir).await?;
         let target = dir.join(format!("{media_id}.{extension}"));
@@ -718,8 +742,8 @@ impl CloudManager {
             .context("cloud source secret is missing")?;
         let plaintext = self.secret.decrypt(&encrypted)?;
         let secret = String::from_utf8(plaintext).context("cloud secret is not UTF-8")?;
-        let credentials = parse_google_credentials(&source.auth_type, &secret)?;
-        let token = self.google.access_token(&credentials)?;
+        let provider = self.providers.require(&source.provider)?;
+        let token = provider.access_token(&source.auth_type, &secret)?;
         let mut tokens = self.tokens.lock().await;
         tokens.insert(
             source.id.clone(),
@@ -738,76 +762,6 @@ fn cloud_media_id(source_id: &str, remote_id: &str) -> String {
         format!("cloud://{source_id}/{remote_id}").as_bytes(),
     )
     .to_string()
-}
-
-fn validate_google_secret(auth_type: &str, secret: &str) -> Result<()> {
-    match auth_type {
-        "service_account" => {
-            let value: Value = serde_json::from_str(secret).context("service account JSON")?;
-            for key in ["client_email", "private_key"] {
-                if value.get(key).and_then(|value| value.as_str()).is_none() {
-                    bail!("service account JSON is missing {key}");
-                }
-            }
-        }
-        "access_token" | "oauth" => {}
-        other => bail!("unsupported Google auth type: {other}"),
-    }
-    Ok(())
-}
-
-fn parse_google_credentials(auth_type: &str, secret: &str) -> Result<GoogleCredentials> {
-    match auth_type {
-        "service_account" => {
-            let value: Value = serde_json::from_str(secret).context("service account JSON")?;
-            Ok(GoogleCredentials::ServiceAccount {
-                client_email: value
-                    .get("client_email")
-                    .and_then(|value| value.as_str())
-                    .context("service account client_email")?
-                    .to_string(),
-                private_key: value
-                    .get("private_key")
-                    .and_then(|value| value.as_str())
-                    .context("service account private_key")?
-                    .to_string(),
-                token_uri: value
-                    .get("token_uri")
-                    .and_then(|value| value.as_str())
-                    .map(|uri| super::google::validate_https_endpoint(uri, "token_uri"))
-                    .transpose()?,
-            })
-        }
-        "access_token" => Ok(GoogleCredentials::AccessToken {
-            access_token: secret.trim().to_string(),
-        }),
-        "oauth" => {
-            let value: Value = serde_json::from_str(secret).context("OAuth JSON")?;
-            Ok(GoogleCredentials::OAuth {
-                refresh_token: value
-                    .get("refresh_token")
-                    .and_then(|value| value.as_str())
-                    .context("OAuth refresh_token")?
-                    .to_string(),
-                client_id: value
-                    .get("client_id")
-                    .and_then(|value| value.as_str())
-                    .context("OAuth client_id")?
-                    .to_string(),
-                client_secret: value
-                    .get("client_secret")
-                    .and_then(|value| value.as_str())
-                    .context("OAuth client_secret")?
-                    .to_string(),
-                token_uri: value
-                    .get("token_uri")
-                    .and_then(|value| value.as_str())
-                    .map(|uri| super::google::validate_https_endpoint(uri, "token_uri"))
-                    .transpose()?,
-            })
-        }
-        other => bail!("unsupported Google auth type: {other}"),
-    }
 }
 
 fn cancelled(cancel: &Option<Arc<AtomicBool>>) -> bool {

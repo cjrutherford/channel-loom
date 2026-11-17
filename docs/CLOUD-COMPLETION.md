@@ -16,8 +16,10 @@ Implemented:
 
 - cloud source/root/media schema
 - encrypted secrets and key file
+- provider trait/registry with Google Drive as the first adapter
 - Google Drive access-token and service-account auth
 - Google folder listing and Range downloads
+- proxy HEAD, redirect validation, Range fallback signaling, and content headers
 - folder browsing and scan-time ffprobe
 - `cloud://` media in the normal library
 - signed streaming proxy
@@ -39,6 +41,7 @@ Not complete:
 - interactive OAuth consent/callback
 - provider webhooks
 - shared-drive root browsing and shortcuts
+- per-root editing and enable/disable
 - incremental delta sync and rename reconciliation (full-rescan reconciliation is implemented)
 - active-playback/DVR cache pinning
 - Dropbox, OneDrive, S3, WebDAV adapters
@@ -72,14 +75,11 @@ Goal: make the Google path production-grade before multiplying adapters.
 
 Deliverables:
 
-- formal provider trait/registry instead of a Google-specific manager branch
 - resumable scan persistence across restarts (current jobs are in-memory only)
 - incremental delta sync and rename reconciliation
 - shared-drive root browsing and Google shortcut handling
 - root editing and per-root enable/disable
 - cache pinning for active playback and DVR; cache usage UI
-- proxy hardening: HEAD, Range fallback when a provider ignores Range,
-  redirects, content length, timeouts
 
 Exit criteria:
 

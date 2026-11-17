@@ -356,6 +356,7 @@ pub fn router(state: AppState) -> Router {
             delete(delete_cloud_source).patch(update_cloud_source),
         )
         .route("/api/v1/cloud/metrics", get(cloud_metrics))
+        .route("/api/v1/cloud/providers", get(cloud_providers))
         .route("/api/v1/cloud/scans", get(cloud_scan_jobs))
         .route("/api/v1/cloud/scans/{job_id}", get(cloud_scan_job))
         .route(
@@ -445,7 +446,10 @@ pub fn router(state: AppState) -> Router {
         .route("/catchup/{session}/{file}", get(catchup_segment))
         .route("/dvr/{file}", get(dvr_playlist))
         .route("/dvr/{number}/{file}", get(dvr_segment))
-        .route("/cloud/{source}/{remote_id}", get(cloud_proxy))
+        .route(
+            "/cloud/{source}/{remote_id}",
+            get(cloud_proxy).head(cloud_proxy),
+        )
         .route("/cast/{file}", get(cast_playlist))
         .route("/cast/{number}/{file}", get(cast_segment))
         .layer(axum::middleware::from_fn_with_state(
@@ -1519,6 +1523,9 @@ async fn create_cloud_source(
     State(state): State<AppState>,
     Json(input): Json<db::CloudSourceInput>,
 ) -> Result<Json<db::CloudSource>, ApiError> {
+    if !state.cloud.supports_provider(&input.provider) {
+        return Err(ApiError::bad_request("unsupported cloud provider"));
+    }
     Ok(Json(state.cloud.create_source(&input).await?))
 }
 
@@ -1543,6 +1550,10 @@ async fn delete_cloud_source(
 
 async fn cloud_metrics(State(state): State<AppState>) -> Result<Json<db::CloudMetrics>, ApiError> {
     Ok(Json(state.cloud.metrics().await?))
+}
+
+async fn cloud_providers(State(state): State<AppState>) -> Json<Vec<crate::cloud::ProviderInfo>> {
+    Json(state.cloud.providers())
 }
 
 async fn cloud_roots(
@@ -1661,12 +1672,44 @@ async fn cloud_proxy(
     Path((source_id, remote_id)): Path<(String, String)>,
     Query(query): Query<CloudProxyQuery>,
     headers: HeaderMap,
+    method: Method,
 ) -> Result<Response, ApiError> {
     if !state
         .cloud
         .verify_proxy(&source_id, &remote_id, query.expires, &query.sig)
     {
         return Err(ApiError::unauthorized("invalid cloud proxy signature"));
+    }
+    if method == Method::HEAD {
+        let head = state
+            .cloud
+            .head_proxy(&source_id, &remote_id)
+            .await
+            .map_err(|error| {
+                ApiError::service_unavailable(format!("cloud proxy HEAD failed: {error:#}"))
+            })?;
+        let status = StatusCode::from_u16(head.status).unwrap_or(StatusCode::BAD_GATEWAY);
+        let mut response = status.into_response();
+        response.headers_mut().insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_str(
+                head.content_type
+                    .as_deref()
+                    .unwrap_or("application/octet-stream"),
+            )
+            .unwrap_or(HeaderValue::from_static("application/octet-stream")),
+        );
+        if let Some(length) = head.content_length
+            && let Ok(value) = HeaderValue::from_str(&length.to_string())
+        {
+            response.headers_mut().insert(header::CONTENT_LENGTH, value);
+        }
+        if head.accept_ranges {
+            response
+                .headers_mut()
+                .insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
+        }
+        return Ok(response);
     }
     let range = headers
         .get(header::RANGE)
@@ -1677,6 +1720,7 @@ async fn cloud_proxy(
         .await
         .map_err(|error| ApiError::service_unavailable(format!("cloud proxy failed: {error:#}")))?;
     let status = StatusCode::from_u16(upstream.status()).unwrap_or(StatusCode::BAD_GATEWAY);
+    let range_fallback = range.is_some() && status == StatusCode::OK;
     let content_type = upstream
         .header("Content-Type")
         .unwrap_or("application/octet-stream")
@@ -1716,6 +1760,9 @@ async fn cloud_proxy(
     }
     if let Some(range) = content_range {
         builder = builder.header(header::CONTENT_RANGE, range);
+    }
+    if range_fallback {
+        builder = builder.header("x-channelloom-range-fallback", "1");
     }
     builder
         .body(Body::from_stream(stream))

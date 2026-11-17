@@ -11,6 +11,8 @@ use serde_json::Value;
 use time::OffsetDateTime;
 use url::Url;
 
+use super::provider::{CloudProvider, ProviderCapabilities, ProviderHead};
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum GoogleCredentials {
@@ -69,6 +71,7 @@ impl GoogleClient {
         let token_url = validate_https_endpoint(&token_url, "GOOGLE_OAUTH_TOKEN_URL")?;
         let agent = ureq::AgentBuilder::new()
             .timeout(Duration::from_secs(60))
+            .redirects(0)
             .build();
         Ok(Self {
             agent,
@@ -233,16 +236,47 @@ impl GoogleClient {
         range: Option<&str>,
     ) -> Result<ureq::Response> {
         let url = file_url(&self.api_base, remote_id)?;
-        let mut request = self
-            .agent
-            .get(url.as_str())
-            .set("Authorization", &format!("Bearer {token}"));
-        if let Some(range) = range {
-            request = request.set("Range", range);
+        self.request_with_redirects("GET", url, token, range)
+    }
+
+    fn request_with_redirects(
+        &self,
+        method: &str,
+        mut url: Url,
+        token: &str,
+        range: Option<&str>,
+    ) -> Result<ureq::Response> {
+        let original_host = url.host_str().unwrap_or_default().to_string();
+        for _ in 0..4 {
+            let mut request = if method == "HEAD" {
+                self.agent.head(url.as_str())
+            } else {
+                self.agent.get(url.as_str())
+            };
+            if url.host_str() == Some(original_host.as_str()) {
+                request = request.set("Authorization", &format!("Bearer {token}"));
+            }
+            if let Some(range) = range {
+                request = request.set("Range", range);
+            }
+            let response = request
+                .call()
+                .map_err(|error| anyhow::anyhow!("Google {method} failed: {error}"))?;
+            let status = response.status();
+            if (300..400).contains(&status) {
+                let location = response
+                    .header("Location")
+                    .context("Google redirect had no Location")?;
+                let next = url
+                    .join(location)
+                    .with_context(|| format!("invalid Google redirect: {location}"))?;
+                validate_https_endpoint(next.as_str(), "Google redirect")?;
+                url = next;
+                continue;
+            }
+            return Ok(response);
         }
-        request
-            .call()
-            .map_err(|error| anyhow::anyhow!("Google download failed: {error}"))
+        bail!("too many Google redirects")
     }
 
     fn get_json(&self, token: &str, url: &str) -> Result<Value> {
@@ -253,6 +287,138 @@ impl GoogleClient {
             .call()
             .map_err(|error| anyhow::anyhow!("Google Drive request failed: {error}"))?;
         response.into_json().context("parse Google Drive response")
+    }
+}
+
+impl CloudProvider for GoogleClient {
+    fn id(&self) -> &'static str {
+        "google"
+    }
+
+    fn capabilities(&self) -> ProviderCapabilities {
+        ProviderCapabilities {
+            range: true,
+            head: true,
+            shared_drives: true,
+            delta: true,
+            webhooks: true,
+        }
+    }
+
+    fn validate_secret(&self, auth_type: &str, secret: &str) -> Result<()> {
+        validate_google_secret(auth_type, secret)
+    }
+
+    fn access_token(&self, auth_type: &str, secret: &str) -> Result<String> {
+        let credentials = parse_google_credentials(auth_type, secret)?;
+        GoogleClient::access_token(self, &credentials)
+    }
+
+    fn list_folder(
+        &self,
+        token: &str,
+        folder_id: &str,
+        page: Option<&str>,
+    ) -> Result<(Vec<RemoteEntry>, Option<String>)> {
+        GoogleClient::list_folder(self, token, folder_id, page)
+    }
+
+    fn list_drives(&self, token: &str) -> Result<Vec<DriveEntry>> {
+        GoogleClient::list_shared_drives(self, token)
+    }
+
+    fn download(
+        &self,
+        token: &str,
+        remote_id: &str,
+        range: Option<&str>,
+    ) -> Result<ureq::Response> {
+        GoogleClient::download(self, token, remote_id, range)
+    }
+
+    fn head(&self, token: &str, remote_id: &str) -> Result<ProviderHead> {
+        let url = file_url(&self.api_base, remote_id)?;
+        let response = self.request_with_redirects("HEAD", url, token, None)?;
+        Ok(ProviderHead {
+            status: response.status(),
+            content_type: response.header("Content-Type").map(str::to_string),
+            content_length: response
+                .header("Content-Length")
+                .and_then(|value| value.parse().ok()),
+            accept_ranges: response
+                .header("Accept-Ranges")
+                .is_some_and(|value| value.eq_ignore_ascii_case("bytes")),
+        })
+    }
+}
+
+fn validate_google_secret(auth_type: &str, secret: &str) -> Result<()> {
+    match auth_type {
+        "service_account" => {
+            let value: Value = serde_json::from_str(secret).context("service account JSON")?;
+            for key in ["client_email", "private_key"] {
+                if value.get(key).and_then(|value| value.as_str()).is_none() {
+                    bail!("service account JSON is missing {key}");
+                }
+            }
+        }
+        "access_token" | "oauth" => {}
+        other => bail!("unsupported Google auth type: {other}"),
+    }
+    Ok(())
+}
+
+fn parse_google_credentials(auth_type: &str, secret: &str) -> Result<GoogleCredentials> {
+    match auth_type {
+        "service_account" => {
+            let value: Value = serde_json::from_str(secret).context("service account JSON")?;
+            Ok(GoogleCredentials::ServiceAccount {
+                client_email: value
+                    .get("client_email")
+                    .and_then(|value| value.as_str())
+                    .context("service account client_email")?
+                    .to_string(),
+                private_key: value
+                    .get("private_key")
+                    .and_then(|value| value.as_str())
+                    .context("service account private_key")?
+                    .to_string(),
+                token_uri: value
+                    .get("token_uri")
+                    .and_then(|value| value.as_str())
+                    .map(|uri| validate_https_endpoint(uri, "token_uri"))
+                    .transpose()?,
+            })
+        }
+        "access_token" => Ok(GoogleCredentials::AccessToken {
+            access_token: secret.trim().to_string(),
+        }),
+        "oauth" => {
+            let value: Value = serde_json::from_str(secret).context("OAuth JSON")?;
+            Ok(GoogleCredentials::OAuth {
+                refresh_token: value
+                    .get("refresh_token")
+                    .and_then(|value| value.as_str())
+                    .context("OAuth refresh_token")?
+                    .to_string(),
+                client_id: value
+                    .get("client_id")
+                    .and_then(|value| value.as_str())
+                    .context("OAuth client_id")?
+                    .to_string(),
+                client_secret: value
+                    .get("client_secret")
+                    .and_then(|value| value.as_str())
+                    .context("OAuth client_secret")?
+                    .to_string(),
+                token_uri: value
+                    .get("token_uri")
+                    .and_then(|value| value.as_str())
+                    .map(|uri| validate_https_endpoint(uri, "token_uri"))
+                    .transpose()?,
+            })
+        }
+        other => bail!("unsupported Google auth type: {other}"),
     }
 }
 
