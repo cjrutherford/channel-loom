@@ -430,6 +430,7 @@ all adapters target it:
 - Incremental delta sync and rename reconciliation; scans are full listings. A full rescan removes cloud media that disappeared.
 - Active playback/DVR cache pinning.
 - Scan jobs are in memory: they survive while the process runs, not across restarts.
+- The provider conformance harness covers the full mock lifecycle; real-provider runs are still C0/C4 work.
 - LRU eviction does not yet pin active DVR/playback sessions.
 
 

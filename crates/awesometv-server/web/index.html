@@ -1372,10 +1372,24 @@ function renderCloudRoots() {
       <div>${esc(root.display_path)}<div class="dim tiny">${esc(root.remote_id)}</div></div>
       <div class="mono tiny dim">${root.enabled ? 'enabled' : 'disabled'}</div>
       <div class="cloud-actions">
+        <button class="btn small ghost" data-root-rename="${esc(root.id)}">Rename</button>
         <button class="btn small ghost" data-root-toggle="${esc(root.id)}">${root.enabled ? 'Disable' : 'Enable'}</button>
         <button class="btn small ghost" data-root-del="${esc(root.id)}">Delete</button>
       </div>
     </div>`).join('');
+  panel.querySelectorAll('button[data-root-rename]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const root = state.cloudRoots.find((item) => item.id === button.dataset.rootRename);
+      if (!root) return;
+      const displayPath = prompt('Root display path', root.display_path);
+      if (displayPath === null) return;
+      try {
+        await api(`/api/v1/cloud/roots/${encodeURIComponent(root.id)}`, { method: 'PATCH', body: JSON.stringify({ display_path: displayPath }) });
+        await showCloudRoots(state.cloudRootsSource);
+        toast('Root updated.');
+      } catch (error) { toast(String(error), true); }
+    });
+  });
   panel.querySelectorAll('button[data-root-toggle]').forEach((button) => {
     button.addEventListener('click', async () => {
       const root = state.cloudRoots.find((item) => item.id === button.dataset.rootToggle);

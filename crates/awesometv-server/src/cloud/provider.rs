@@ -108,7 +108,7 @@ mod tests {
 }
 
 #[cfg(test)]
-mod conformance {
+pub(crate) mod conformance {
     use std::io::{Read, Write};
     use std::net::TcpListener;
     use std::sync::Arc;
@@ -127,7 +127,7 @@ mod conformance {
         data: Vec<u8>,
     }
 
-    struct MockProvider {
+    pub(crate) struct MockProvider {
         base: String,
         entries: Vec<MockEntry>,
         page_size: usize,
@@ -202,7 +202,7 @@ mod conformance {
             }
         }
 
-        fn tree(files: usize) -> Self {
+        pub(crate) fn tree(files: usize) -> Self {
             let mut entries = vec![
                 MockEntry {
                     id: "folder".into(),
@@ -229,6 +229,34 @@ mod conformance {
                 });
             }
             Self::new(entries)
+        }
+    }
+
+    impl MockProvider {
+        pub(crate) fn media_tree() -> Self {
+            Self::new(vec![
+                MockEntry {
+                    id: "folder".into(),
+                    name: "Folder".into(),
+                    parent: "root".into(),
+                    is_folder: true,
+                    data: Vec::new(),
+                },
+                MockEntry {
+                    id: "sample-srt".into(),
+                    name: "sample.srt".into(),
+                    parent: "root".into(),
+                    is_folder: false,
+                    data: b"1\n00:00:00,000 --> 00:00:01,000\nhello\n".to_vec(),
+                },
+                MockEntry {
+                    id: "nested-srt".into(),
+                    name: "nested.srt".into(),
+                    parent: "folder".into(),
+                    is_folder: false,
+                    data: b"1\n00:00:00,000 --> 00:00:01,000\nnested\n".to_vec(),
+                },
+            ])
         }
     }
 
