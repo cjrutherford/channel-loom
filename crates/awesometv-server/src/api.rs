@@ -25,7 +25,9 @@ use crate::db::{self, Channel, ChannelItem, Media};
 use crate::engine::Engine;
 use crate::external;
 use crate::jellyfin;
-use crate::limits::{MediaClass, MediaRateLimiter, StreamLimiter, client_key};
+use crate::limits::{
+    IpNet, MediaClass, MediaRateLimiter, StreamLimiter, TokenRateLimiter, client_key, ip_allowed,
+};
 use crate::programming;
 use crate::scan;
 use crate::scripted;
@@ -35,6 +37,13 @@ use crate::tokens;
 pub struct Session {
     pub username: String,
     pub expires_ms: i64,
+}
+
+#[derive(Clone, Debug)]
+pub struct AuthActor {
+    pub label: String,
+    pub kind: String,
+    pub scopes: Vec<String>,
 }
 
 const LOGIN_WINDOW_MS: i64 = 15 * 60 * 1000;
@@ -136,6 +145,53 @@ mod throttle_tests {
 }
 
 #[cfg(test)]
+mod token_scope_tests {
+    use super::*;
+
+    fn actor(scopes: &[&str]) -> AuthActor {
+        AuthActor {
+            label: "token:test".into(),
+            kind: "token".into(),
+            scopes: scopes.iter().map(|scope| scope.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn read_tokens_cannot_write() {
+        assert!(actor_allows(&actor(&["read"]), "read"));
+        assert!(!actor_allows(&actor(&["read"]), "control"));
+        assert!(!actor_allows(&actor(&["read"]), "admin"));
+    }
+
+    #[test]
+    fn control_tokens_can_read_and_write_but_not_administer() {
+        assert!(actor_allows(&actor(&["control"]), "read"));
+        assert!(actor_allows(&actor(&["control"]), "control"));
+        assert!(!actor_allows(&actor(&["control"]), "admin"));
+    }
+
+    #[test]
+    fn admin_tokens_allow_everything() {
+        assert!(actor_allows(&actor(&["admin"]), "read"));
+        assert!(actor_allows(&actor(&["admin"]), "control"));
+        assert!(actor_allows(&actor(&["admin"]), "admin"));
+    }
+
+    #[test]
+    fn classifies_admin_only_paths() {
+        assert_eq!(required_scope(&Method::GET, "/api/v1/tokens"), "admin");
+        assert_eq!(required_scope(&Method::GET, "/api/v1/audit"), "admin");
+        assert_eq!(required_scope(&Method::GET, "/api/v1/media"), "read");
+        assert_eq!(required_scope(&Method::POST, "/api/v1/scan"), "control");
+        assert_eq!(required_scope(&Method::POST, "/api/v1/restore"), "admin");
+        assert_eq!(
+            required_scope(&Method::PUT, "/api/v1/settings/language"),
+            "admin"
+        );
+    }
+}
+
+#[cfg(test)]
 mod rate_limit_tests {
     use super::*;
 
@@ -181,12 +237,14 @@ mod rate_limit_tests {
 #[derive(Clone)]
 pub struct AppState {
     pub config: Config,
+    pub admin_nets: Vec<IpNet>,
     pub pool: SqlitePool,
     pub engine: Arc<Engine>,
     pub cloud: Arc<CloudManager>,
     pub sessions: Arc<Mutex<HashMap<String, Session>>>,
     pub login_throttle: Arc<Mutex<LoginThrottle>>,
     pub media_limits: Arc<Mutex<MediaRateLimiter>>,
+    pub token_limits: Arc<Mutex<TokenRateLimiter>>,
     pub streams: Arc<StreamLimiter>,
     pub precache: Arc<crate::precache::Precache>,
 }
@@ -200,6 +258,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/sources/emby/sync", post(emby_sync))
         .route("/api/v1/stats", get(stats))
         .route("/api/v1/tokens", get(list_tokens).post(create_token))
+        .route("/api/v1/audit", get(audit_events))
         .route("/api/v1/tokens/{id}", delete(delete_token))
         .route("/api/v1/metrics", get(metrics))
         .route("/api/v1/precache", get(precache_status))
@@ -343,7 +402,10 @@ pub fn router(state: AppState) -> Router {
             public_rate_limit,
         ));
 
-    protected.merge(public).with_state(state)
+    protected
+        .merge(public)
+        .with_state(state)
+        .layer(axum::middleware::from_fn(security_headers))
 }
 
 #[derive(Deserialize)]
@@ -455,9 +517,22 @@ async fn login(
     headers: HeaderMap,
     Json(request): Json<LoginRequest>,
 ) -> Result<Response, ApiError> {
+    if !ip_allowed(&state.admin_nets, &headers, Some(peer)) {
+        return Err(ApiError::not_found("not found"));
+    }
     let key = client_key(&headers, Some(peer));
     let now = db::now_ms();
     if let Some(retry_after) = state.login_throttle.lock().await.retry_after(&key, now) {
+        let _ = db::record_audit(
+            &state.pool,
+            "anonymous",
+            "login",
+            "login.throttled",
+            Some(&request.username),
+            None,
+            Some(&key),
+        )
+        .await;
         let mut response = (
             StatusCode::TOO_MANY_REQUESTS,
             Json(serde_json::json!({"error": "too many failed login attempts"})),
@@ -472,9 +547,29 @@ async fn login(
         || request.password != state.config.admin_password
     {
         state.login_throttle.lock().await.record_failure(&key, now);
+        let _ = db::record_audit(
+            &state.pool,
+            "anonymous",
+            "login",
+            "login.failed",
+            Some(&request.username),
+            None,
+            Some(&key),
+        )
+        .await;
         return Err(ApiError::unauthorized("invalid credentials"));
     }
     state.login_throttle.lock().await.clear(&key);
+    let _ = db::record_audit(
+        &state.pool,
+        &request.username,
+        "session",
+        "login.success",
+        None,
+        None,
+        Some(&key),
+    )
+    .await;
     let token = uuid::Uuid::new_v4().to_string();
     state.sessions.lock().await.insert(
         token.clone(),
@@ -499,9 +594,25 @@ async fn login(
     Ok(response)
 }
 
-async fn logout(State(state): State<AppState>, request: Request) -> Response {
-    if let Some(token) = session_token(request.headers()) {
-        state.sessions.lock().await.remove(&token);
+async fn logout(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    request: Request,
+) -> Response {
+    let key = client_key(request.headers(), Some(peer));
+    if let Some(token) = session_token(request.headers())
+        && let Some(session) = state.sessions.lock().await.remove(&token)
+    {
+        let _ = db::record_audit(
+            &state.pool,
+            &session.username,
+            "session",
+            "logout",
+            None,
+            None,
+            Some(&key),
+        )
+        .await;
     }
     let mut response = StatusCode::NO_CONTENT.into_response();
     let secure = if request_is_secure(request.headers()) {
@@ -611,8 +722,18 @@ async fn cast_receiver() -> Html<&'static str> {
 /// The admin console shell is only sent to authenticated callers. Anonymous
 /// visitors get the login page instead, so the admin JavaScript and markup are
 /// not handed out publicly.
-async fn admin_index(State(state): State<AppState>, request: Request) -> Response {
-    let authorized = request_is_authorized(&state, request.headers()).await;
+async fn admin_index(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    request: Request,
+) -> Response {
+    if !ip_allowed(&state.admin_nets, request.headers(), Some(peer)) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let key = client_key(request.headers(), Some(peer));
+    let authorized = authorize(&state, request.headers(), Some(&key))
+        .await
+        .is_some();
     let mut response = if authorized {
         Html(include_str!("../web/index.html")).into_response()
     } else {
@@ -1924,8 +2045,22 @@ async fn create_backup(
 
 async fn download_backup(
     State(state): State<AppState>,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+    axum::extract::Extension(actor): axum::extract::Extension<AuthActor>,
     Path(name): Path<String>,
 ) -> Result<Response, ApiError> {
+    let key = client_key(&headers, Some(peer));
+    let _ = db::record_audit(
+        &state.pool,
+        &actor.label,
+        &actor.kind,
+        "backup.download",
+        Some(&name),
+        None,
+        Some(&key),
+    )
+    .await;
     let path = backup::backup_path(&state.config.data_dir, &name)
         .ok_or_else(|| ApiError::bad_request("invalid backup name"))?;
     let body = tokio::fs::read(&path)
@@ -2576,8 +2711,26 @@ async fn ts_stream(
 }
 
 #[derive(Deserialize)]
+struct AuditQuery {
+    limit: Option<i64>,
+}
+
+async fn audit_events(
+    State(state): State<AppState>,
+    Query(query): Query<AuditQuery>,
+) -> Result<Json<Vec<db::AuditEvent>>, ApiError> {
+    Ok(Json(
+        db::list_audit(&state.pool, query.limit.unwrap_or(100)).await?,
+    ))
+}
+
+#[derive(Deserialize)]
 struct CreateTokenRequest {
     name: String,
+    #[serde(default)]
+    scopes: Vec<String>,
+    #[serde(default)]
+    expires_days: Option<i64>,
 }
 
 #[derive(Serialize)]
@@ -2585,6 +2738,8 @@ struct CreatedToken {
     id: String,
     name: String,
     token: String,
+    scopes: Vec<String>,
+    expires_at: Option<i64>,
     created_at: i64,
 }
 
@@ -2605,16 +2760,44 @@ async fn create_token(
     if name.len() > 80 {
         return Err(ApiError::bad_request("token name is too long"));
     }
+    let mut scopes = if request.scopes.is_empty() {
+        vec!["control".to_string()]
+    } else {
+        request.scopes
+    };
+    scopes.sort();
+    scopes.dedup();
+    for scope in &scopes {
+        if !matches!(scope.as_str(), "read" | "control" | "admin") {
+            return Err(ApiError::bad_request(
+                "token scope must be read, control, or admin",
+            ));
+        }
+    }
+    let expires_at = match request.expires_days.unwrap_or(90) {
+        0 => None,
+        days if (1..=3_650).contains(&days) => Some(db::now_ms() + days * 86_400_000),
+        _ => return Err(ApiError::bad_request("token expiry must be 0-3650 days")),
+    };
     let generated =
         tokens::generate().map_err(|error| ApiError::internal(format!("create token: {error}")))?;
-    let created = db::create_api_token(&state.pool, &generated.id, name, &generated.hash)
-        .await
-        .map_err(|error| ApiError::internal(format!("store token: {error}")))?;
-    tracing::info!(token = %generated.id, name, "API token created");
+    let created = db::create_api_token(
+        &state.pool,
+        &generated.id,
+        name,
+        &generated.hash,
+        &scopes,
+        expires_at,
+    )
+    .await
+    .map_err(|error| ApiError::internal(format!("store token: {error}")))?;
+    tracing::info!(token = %generated.id, name, scopes = ?scopes, "API token created");
     Ok(Json(CreatedToken {
         id: created.id,
         name: created.name,
         token: generated.token,
+        scopes: created.scopes,
+        expires_at: created.expires_at,
         created_at: created.created_at,
     }))
 }
@@ -2646,30 +2829,39 @@ fn bearer_token(headers: &HeaderMap) -> Option<&str> {
         .filter(|value| !value.is_empty())
 }
 
-async fn verify_api_token(state: &AppState, token: &str) -> bool {
-    let Some((id, secret)) = tokens::parse(token) else {
-        return false;
-    };
-    let stored = match db::api_token_hash(&state.pool, id).await {
+async fn verify_api_token(
+    state: &AppState,
+    token: &str,
+    client_ip: Option<&str>,
+) -> Option<(String, Vec<String>)> {
+    let (id, secret) = tokens::parse(token)?;
+    let stored = match db::api_token_auth(&state.pool, id).await {
         Ok(value) => value,
         Err(error) => {
             tracing::warn!(%error, "API token lookup failed");
-            return false;
+            return None;
         }
-    };
-    let Some(stored) = stored else {
-        return false;
-    };
-    if !tokens::verify_secret(secret, &stored) {
-        return false;
+    }?;
+    if stored
+        .expires_at
+        .is_some_and(|expires| expires < db::now_ms())
+    {
+        return None;
     }
-    if let Err(error) = db::touch_api_token(&state.pool, id, db::now_ms()).await {
+    if !tokens::verify_secret(secret, &stored.token_hash) {
+        return None;
+    }
+    if let Err(error) = db::touch_api_token(&state.pool, id, db::now_ms(), client_ip).await {
         tracing::warn!(%error, "could not update API token last-used time");
     }
-    true
+    Some((id.to_string(), stored.scopes))
 }
 
-async fn request_is_authorized(state: &AppState, headers: &HeaderMap) -> bool {
+async fn authorize(
+    state: &AppState,
+    headers: &HeaderMap,
+    client_ip: Option<&str>,
+) -> Option<AuthActor> {
     let basic_ok = headers
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
@@ -2690,34 +2882,47 @@ async fn request_is_authorized(state: &AppState, headers: &HeaderMap) -> bool {
             )
         });
 
-    let session_ok = if let Some(token) = session_token(headers) {
+    if basic_ok {
+        return Some(AuthActor {
+            label: state.config.admin_user.clone(),
+            kind: "basic".into(),
+            scopes: vec!["admin".into()],
+        });
+    }
+    if let Some(token) = bearer_token(headers)
+        && let Some((id, scopes)) = verify_api_token(state, token, client_ip).await
+    {
+        return Some(AuthActor {
+            label: format!("token:{id}"),
+            kind: "token".into(),
+            scopes,
+        });
+    }
+    if let Some(token) = session_token(headers) {
         let mut sessions = state.sessions.lock().await;
-        match sessions.get(&token) {
-            Some(session) if session.expires_ms > db::now_ms() => true,
-            Some(_) => {
-                sessions.remove(&token);
-                false
+        if let Some(session) = sessions.get(&token) {
+            if session.expires_ms > db::now_ms() {
+                return Some(AuthActor {
+                    label: session.username.clone(),
+                    kind: "session".into(),
+                    scopes: vec!["admin".into()],
+                });
             }
-            None => false,
+            sessions.remove(&token);
         }
-    } else {
-        false
-    };
-
-    let bearer_ok = match bearer_token(headers) {
-        Some(token) => verify_api_token(state, token).await,
-        None => false,
-    };
-
-    basic_ok || session_ok || bearer_ok
+    }
+    None
 }
 
 async fn basic_auth(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
-    request: Request,
+    mut request: Request,
     next: Next,
 ) -> Response {
+    if !ip_allowed(&state.admin_nets, request.headers(), Some(peer)) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
     let key = client_key(request.headers(), Some(peer));
     let now = db::now_ms();
     if let Some(retry_after) = state.login_throttle.lock().await.retry_after(&key, now) {
@@ -2731,12 +2936,120 @@ async fn basic_auth(
         }
         return response;
     }
-    if request_is_authorized(&state, request.headers()).await {
-        next.run(request).await
+    let method = request.method().clone();
+    let path = request.uri().path().to_string();
+    let actor = authorize(&state, request.headers(), Some(&key)).await;
+    if let Some(actor) = actor {
+        let required = required_scope(&method, &path);
+        if !actor_allows(&actor, required) {
+            let _ = db::record_audit(
+                &state.pool,
+                &actor.label,
+                &actor.kind,
+                "auth.forbidden",
+                Some(&path),
+                Some(required),
+                Some(&key),
+            )
+            .await;
+            return (StatusCode::FORBIDDEN, "Insufficient token scope\n").into_response();
+        }
+        if actor.kind == "token" {
+            let token_id = actor.label.strip_prefix("token:").unwrap_or(&actor.label);
+            if let Some(seconds) = state.token_limits.lock().await.check(token_id, now) {
+                let mut response =
+                    (StatusCode::TOO_MANY_REQUESTS, "Token rate limit exceeded\n").into_response();
+                if let Ok(value) = HeaderValue::from_str(&seconds.to_string()) {
+                    response.headers_mut().insert(header::RETRY_AFTER, value);
+                }
+                return response;
+            }
+        }
+        request.extensions_mut().insert(actor.clone());
+        let response = next.run(request).await;
+        if !matches!(method, Method::GET | Method::HEAD | Method::OPTIONS) {
+            let status = response.status().as_u16().to_string();
+            let _ = db::record_audit(
+                &state.pool,
+                &actor.label,
+                &actor.kind,
+                &format!("{method} {path}"),
+                None,
+                Some(&status),
+                Some(&key),
+            )
+            .await;
+        }
+        response
     } else {
         state.login_throttle.lock().await.record_failure(&key, now);
+        let _ = db::record_audit(
+            &state.pool,
+            "anonymous",
+            "auth",
+            "auth.failed",
+            Some(&path),
+            Some(method.as_str()),
+            Some(&key),
+        )
+        .await;
         (StatusCode::UNAUTHORIZED, "Authentication required\n").into_response()
     }
+}
+
+fn required_scope(method: &Method, path: &str) -> &'static str {
+    if path.starts_with("/api/v1/tokens")
+        || path.starts_with("/api/v1/audit")
+        || path.starts_with("/api/v1/backups")
+        || path == "/api/v1/restore"
+        || path.starts_with("/api/v1/settings")
+    {
+        return "admin";
+    }
+    if matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS) {
+        return "read";
+    }
+    "control"
+}
+
+fn actor_allows(actor: &AuthActor, required: &str) -> bool {
+    if actor.kind != "token" {
+        return true;
+    }
+    if actor.scopes.iter().any(|scope| scope == "admin") {
+        return true;
+    }
+    match required {
+        "read" => actor
+            .scopes
+            .iter()
+            .any(|scope| matches!(scope.as_str(), "read" | "control")),
+        "control" => actor.scopes.iter().any(|scope| scope == "control"),
+        _ => false,
+    }
+}
+
+async fn security_headers(request: Request, next: Next) -> Response {
+    let mut response = next.run(request).await;
+    let headers = response.headers_mut();
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    headers.insert(
+        header::REFERRER_POLICY,
+        HeaderValue::from_static("no-referrer"),
+    );
+    headers.insert(
+        "permissions-policy",
+        HeaderValue::from_static("camera=(), microphone=(), geolocation=()"),
+    );
+    headers.insert(
+        "content-security-policy",
+        HeaderValue::from_static("frame-ancestors 'none'; base-uri 'self'; object-src 'none'"),
+    );
+    response
 }
 
 fn constant_time_eq(left: &str, right: &str) -> bool {

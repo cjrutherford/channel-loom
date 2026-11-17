@@ -710,12 +710,18 @@
         </div>
         <div class="panel panel-pad" style="margin-top:14px;">
           <div class="source-top"><div><h3>API tokens</h3><div class="muted small">Bearer tokens for scripts, native clients, and automation. A token grants full Studio API access and is shown only once.</div></div></div>
-          <div style="display:flex; gap:8px; align-items:end; margin-top:12px;">
-            <div class="field" style="flex:1; margin:0"><label for="tokenName">Token name</label><input id="tokenName" placeholder="Living room script"></div>
+          <div style="display:flex; gap:8px; align-items:end; margin-top:12px; flex-wrap:wrap;">
+            <div class="field" style="flex:1; min-width:220px; margin:0"><label for="tokenName">Token name</label><input id="tokenName" placeholder="Living room script"></div>
+            <div class="field" style="width:150px; margin:0"><label for="tokenScope">Scope</label><select id="tokenScope"><option value="control">Control</option><option value="read">Read only</option><option value="admin">Admin</option></select></div>
+            <div class="field" style="width:140px; margin:0"><label for="tokenExpiry">Expiry</label><select id="tokenExpiry"><option value="90">90 days</option><option value="30">30 days</option><option value="365">1 year</option><option value="0">Never</option></select></div>
             <button class="btn primary" id="createTokenBtn" style="flex:0 0 auto">Create token</button>
           </div>
           <div class="source-path" id="newToken" style="display:none"></div>
           <div id="tokenList" style="margin-top:10px;"></div>
+        </div>
+        <div class="panel panel-pad" style="margin-top:14px;">
+          <div class="source-top"><div><h3>Recent activity</h3><div class="muted small">Sign-ins, tokens, source changes, backups, and other mutations. Kept for 90 days.</div></div><button class="btn small" id="auditRefreshBtn">Refresh</button></div>
+          <div id="auditList"></div>
         </div>
         <div class="panel panel-pad" style="margin-top:14px;">
           <div class="row" style="justify-content:space-between"><h3>Backups</h3><button class="btn small" id="backupBtn">Create backup</button></div>
@@ -810,7 +816,7 @@
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
 <script>
 const $ = (id) => document.getElementById(id);
-const state = { config: null, sources: [], stats: null, media: [], channels: [], collections: [], blocks: [], classicItems: [], templates: [], overrides: [], graphics: null, stream: null, metrics: null, language: null, tvNumber: null, playerTarget: null, cloudSources: [], cloudMetrics: null, cloudBrowse: null, programChannel: null, programMode: 'blocks', selected: new Set(), kind: 'all', origin: 'all', search: '', activeChannel: null, hls: null, modalMode: null, autoPlayed: false, authed: false, tokens: [], cloudScanJob: null };
+const state = { config: null, sources: [], stats: null, media: [], channels: [], collections: [], blocks: [], classicItems: [], templates: [], overrides: [], graphics: null, stream: null, metrics: null, language: null, tvNumber: null, playerTarget: null, cloudSources: [], cloudMetrics: null, cloudBrowse: null, programChannel: null, programMode: 'blocks', selected: new Set(), kind: 'all', origin: 'all', search: '', activeChannel: null, hls: null, modalMode: null, autoPlayed: false, authed: false, tokens: [], audit: [], cloudScanJob: null };
 const KIND_LABEL = { movie: 'Movie', episode: 'Episode', music: 'Music', image: 'Image', other: 'Video' };
 
 function toast(text, error = false) {
@@ -885,10 +891,10 @@ async function renderBackups() {
 
 async function loadAll() {
   try {
-    const [config, sources, stats, media, channels, collections, templates, metrics, language, cloudSources, precache, tokens, cloudMetrics] = await Promise.all([
-      api('/api/v1/config'), api('/api/v1/sources'), api('/api/v1/stats'), api('/api/v1/media'), api('/api/v1/channels'), api('/api/v1/collections'), api('/api/v1/templates'), api('/api/v1/metrics'), api('/api/v1/settings/language'), api('/api/v1/cloud/sources'), api('/api/v1/precache'), api('/api/v1/tokens'), api('/api/v1/cloud/metrics')
+    const [config, sources, stats, media, channels, collections, templates, metrics, language, cloudSources, precache, tokens, cloudMetrics, audit] = await Promise.all([
+      api('/api/v1/config'), api('/api/v1/sources'), api('/api/v1/stats'), api('/api/v1/media'), api('/api/v1/channels'), api('/api/v1/collections'), api('/api/v1/templates'), api('/api/v1/metrics'), api('/api/v1/settings/language'), api('/api/v1/cloud/sources'), api('/api/v1/precache'), api('/api/v1/tokens'), api('/api/v1/cloud/metrics'), api('/api/v1/audit?limit=100')
     ]);
-    state.config = config; state.sources = sources; state.stats = stats; state.media = media; state.channels = channels; state.collections = collections; state.templates = templates; state.metrics = metrics; state.language = language; state.cloudSources = cloudSources; state.precache = precache; state.tokens = tokens; state.cloudMetrics = cloudMetrics;
+    state.config = config; state.sources = sources; state.stats = stats; state.media = media; state.channels = channels; state.collections = collections; state.templates = templates; state.metrics = metrics; state.language = language; state.cloudSources = cloudSources; state.precache = precache; state.tokens = tokens; state.cloudMetrics = cloudMetrics; state.audit = audit;
     preloadCast();
     const requested = new URLSearchParams(location.search).get('channel');
     if (requested) {
@@ -1499,6 +1505,24 @@ function renderSettings() {
   renderStreamHealth();
   renderBackups();
   renderTokens();
+  renderAudit();
+}
+
+function renderAudit() {
+  const list = $('auditList');
+  if (!list) return;
+  if (!state.audit.length) {
+    list.innerHTML = '<p class="muted small">No activity recorded yet.</p>';
+    return;
+  }
+  list.innerHTML = state.audit.map((event) => `
+    <div class="row" style="justify-content:space-between;gap:12px;padding:9px 0;border-bottom:1px solid var(--line-soft)">
+      <div style="min-width:0">
+        <b>${esc(event.action)}</b>
+        <div class="dim tiny">${esc(event.actor)} · ${esc(event.kind)}${event.target ? ` · ${esc(event.target)}` : ''}${event.detail ? ` · ${esc(event.detail)}` : ''}${event.client_ip ? ` · ${esc(event.client_ip)}` : ''}</div>
+      </div>
+      <div class="mono tiny dim" style="white-space:nowrap">${new Date(event.at_ms).toLocaleString()}</div>
+    </div>`).join('');
 }
 
 function renderTokens() {
@@ -1512,7 +1536,7 @@ function renderTokens() {
     <div class="row" style="justify-content:space-between;gap:12px;padding:9px 0;border-bottom:1px solid var(--line-soft)">
       <div style="min-width:0">
         <b>${esc(token.name)}</b>
-        <div class="dim tiny">${esc(token.id)} · created ${new Date(token.created_at).toLocaleDateString()}${token.last_used_at ? ` · used ${new Date(token.last_used_at).toLocaleDateString()}` : ''}</div>
+        <div class="dim tiny">${esc(token.id)} · ${esc((token.scopes || []).join(', ') || 'admin')} · ${token.expires_at ? `expires ${new Date(token.expires_at).toLocaleDateString()}` : 'no expiry'} · created ${new Date(token.created_at).toLocaleDateString()}${token.last_used_at ? ` · used ${new Date(token.last_used_at).toLocaleDateString()}` : ''}${token.last_used_ip ? ` from ${esc(token.last_used_ip)}` : ''}</div>
       </div>
       <button class="btn small ghost" data-token="${esc(token.id)}">Revoke</button>
     </div>`).join('');
@@ -1796,17 +1820,24 @@ $('createTokenBtn').addEventListener('click', async () => {
   const name = $('tokenName').value.trim();
   if (!name) { toast('Give the token a name first.', true); return; }
   try {
-    const created = await api('/api/v1/tokens', { method: 'POST', body: JSON.stringify({ name }) });
+    const created = await api('/api/v1/tokens', { method: 'POST', body: JSON.stringify({
+      name,
+      scopes: [$('tokenScope').value],
+      expires_days: Number($('tokenExpiry').value)
+    }) });
     $('tokenName').value = '';
     const box = $('newToken');
     box.style.display = 'block';
     box.textContent = `Copy this token now: ${created.token}`;
-    state.tokens.unshift({ id: created.id, name: created.name, created_at: created.created_at, last_used_at: null });
+    state.tokens.unshift({ id: created.id, name: created.name, scopes: created.scopes, expires_at: created.expires_at, created_at: created.created_at, last_used_at: null, last_used_ip: null });
     renderTokens();
     toast('Token created. Copy it now — it will not be shown again.');
   } catch (error) { toast(String(error), true); }
 });
 $('originFilter').addEventListener('change', () => { state.origin = $('originFilter').value; renderLibrary(); });
+$('auditRefreshBtn').addEventListener('click', async () => {
+  try { state.audit = await api('/api/v1/audit?limit=100'); renderAudit(); } catch (error) { toast(String(error), true); }
+});
 $('metricsRefreshBtn').addEventListener('click', async () => {
   try { state.metrics = await api('/api/v1/metrics'); renderStreamHealth(); } catch (error) { toast(String(error), true); }
 });

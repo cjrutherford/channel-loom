@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
+
+use anyhow::{Result, bail};
 use std::sync::{Arc, Mutex};
 
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
@@ -9,6 +11,85 @@ use axum::http::HeaderMap;
 /// One minute of allowance. Fixed windows are deliberate: they are cheap, easy
 /// to reason about, and only allow a short burst at a window boundary.
 pub const RATE_WINDOW_MS: i64 = 60_000;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct IpNet {
+    addr: IpAddr,
+    prefix: u8,
+}
+
+impl IpNet {
+    pub fn contains(&self, ip: IpAddr) -> bool {
+        let ip = normalize_ip(ip);
+        match (self.addr, ip) {
+            (IpAddr::V4(network), IpAddr::V4(ip)) => {
+                let mask = if self.prefix == 0 {
+                    0
+                } else {
+                    u32::MAX << (32 - self.prefix as u32)
+                };
+                (u32::from(network) & mask) == (u32::from(ip) & mask)
+            }
+            (IpAddr::V6(network), IpAddr::V6(ip)) => {
+                let mask = if self.prefix == 0 {
+                    0
+                } else {
+                    u128::MAX << (128 - self.prefix as u32)
+                };
+                (u128::from(network) & mask) == (u128::from(ip) & mask)
+            }
+            _ => false,
+        }
+    }
+}
+
+pub fn parse_cidrs(values: &[String]) -> Result<Vec<IpNet>> {
+    values.iter().map(|value| parse_cidr(value)).collect()
+}
+
+pub fn parse_cidr(value: &str) -> Result<IpNet> {
+    let value = value.trim();
+    let (address, prefix) = match value.split_once('/') {
+        Some((address, prefix)) => (address, Some(prefix)),
+        None => (value, None),
+    };
+    let addr: IpAddr = address
+        .parse()
+        .map_err(|_| anyhow::anyhow!("invalid CIDR address: {value}"))?;
+    let max = match addr {
+        IpAddr::V4(_) => 32,
+        IpAddr::V6(_) => 128,
+    };
+    let prefix = match prefix {
+        Some(prefix) => prefix
+            .parse::<u8>()
+            .map_err(|_| anyhow::anyhow!("invalid CIDR prefix: {value}"))?,
+        None => max,
+    };
+    if prefix > max {
+        bail!("CIDR prefix out of range: {value}");
+    }
+    Ok(IpNet { addr, prefix })
+}
+
+pub fn ip_allowed(nets: &[IpNet], headers: &HeaderMap, peer: Option<SocketAddr>) -> bool {
+    if nets.is_empty() {
+        return true;
+    }
+    client_key(headers, peer)
+        .parse::<IpAddr>()
+        .is_ok_and(|ip| nets.iter().any(|net| net.contains(ip)))
+}
+
+fn normalize_ip(ip: IpAddr) -> IpAddr {
+    match ip {
+        IpAddr::V6(address) => address
+            .to_ipv4_mapped()
+            .map(IpAddr::V4)
+            .unwrap_or(IpAddr::V6(address)),
+        other => other,
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum MediaClass {
@@ -134,6 +215,44 @@ struct Bucket {
 /// Per-client fixed-window counters for public media traffic. The map is
 /// bounded and old windows are pruned so a large number of short-lived clients
 /// cannot grow it without limit.
+#[derive(Default)]
+pub struct TokenRateLimiter {
+    limit: u32,
+    buckets: HashMap<String, Bucket>,
+}
+
+impl TokenRateLimiter {
+    pub fn new(limit: u32) -> Self {
+        Self {
+            limit,
+            buckets: HashMap::new(),
+        }
+    }
+
+    pub fn check(&mut self, key: &str, now_ms: i64) -> Option<u64> {
+        if self.limit == 0 {
+            return None;
+        }
+        if self.buckets.len() > 4_096 {
+            self.buckets
+                .retain(|_, bucket| now_ms.saturating_sub(bucket.window_start_ms) < RATE_WINDOW_MS);
+        }
+        let bucket = self.buckets.entry(key.to_string()).or_default();
+        if bucket.window_start_ms == 0
+            || now_ms.saturating_sub(bucket.window_start_ms) >= RATE_WINDOW_MS
+        {
+            bucket.window_start_ms = now_ms;
+            bucket.count = 0;
+        }
+        if bucket.count >= self.limit {
+            let remaining = RATE_WINDOW_MS - now_ms.saturating_sub(bucket.window_start_ms);
+            return Some((remaining.max(1_000) / 1_000) as u64);
+        }
+        bucket.count += 1;
+        None
+    }
+}
+
 #[derive(Default)]
 pub struct MediaRateLimiter {
     limits: RateLimits,
@@ -356,6 +475,16 @@ mod tests {
     }
 
     #[test]
+    fn token_rate_limiter_is_per_token() {
+        let mut limiter = TokenRateLimiter::new(2);
+        assert_eq!(limiter.check("one", 1_000), None);
+        assert_eq!(limiter.check("one", 1_000), None);
+        assert!(limiter.check("one", 1_000).is_some());
+        assert_eq!(limiter.check("two", 1_000), None);
+        assert_eq!(limiter.check("one", 1_000 + RATE_WINDOW_MS), None);
+    }
+
+    #[test]
     fn stream_leases_enforce_global_and_client_caps() {
         let limiter = Arc::new(StreamLimiter::new(2, 1));
         let first = limiter.try_acquire("a").expect("first stream");
@@ -365,6 +494,63 @@ mod tests {
         drop(first);
         assert!(limiter.try_acquire("c").is_some());
         drop(second);
+    }
+
+    #[test]
+    fn parses_and_matches_cidrs() {
+        let nets = parse_cidrs(&[
+            "192.168.1.0/24".to_string(),
+            "100.64.0.0/10".to_string(),
+            "fd7a:115c:a1e0::/48".to_string(),
+            "10.1.2.3".to_string(),
+        ])
+        .unwrap();
+        assert!(ip_allowed(
+            &nets,
+            &HeaderMap::new(),
+            Some(peer("192.168.1.44:1"))
+        ));
+        assert!(ip_allowed(
+            &nets,
+            &HeaderMap::new(),
+            Some(peer("100.100.1.2:1"))
+        ));
+        assert!(ip_allowed(
+            &nets,
+            &HeaderMap::new(),
+            Some(peer("[fd7a:115c:a1e0::1]:1"))
+        ));
+        assert!(ip_allowed(
+            &nets,
+            &HeaderMap::new(),
+            Some(peer("10.1.2.3:1"))
+        ));
+        assert!(!ip_allowed(
+            &nets,
+            &HeaderMap::new(),
+            Some(peer("203.0.113.5:1"))
+        ));
+        assert!(!ip_allowed(
+            &nets,
+            &HeaderMap::new(),
+            Some(peer("192.168.2.1:1"))
+        ));
+    }
+
+    #[test]
+    fn empty_admin_allowlist_allows_everyone() {
+        assert!(ip_allowed(
+            &[],
+            &HeaderMap::new(),
+            Some(peer("203.0.113.5:1"))
+        ));
+    }
+
+    #[test]
+    fn rejects_invalid_cidrs() {
+        assert!(parse_cidr("not-an-ip").is_err());
+        assert!(parse_cidr("192.168.1.0/33").is_err());
+        assert!(parse_cidr("::/129").is_err());
     }
 
     #[test]

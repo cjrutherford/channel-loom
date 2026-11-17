@@ -20,6 +20,43 @@ are still open. It is a working security note, not a claim of completeness.
 The full admin JavaScript and markup are not sent to anonymous callers. The
 public API projects only the fields Watch needs.
 
+## Studio network allowlist
+
+`AWESOMETV_ADMIN_ALLOW_CIDRS` restricts `/admin`, login, and every protected
+admin API to the listed networks. It is empty by default, which allows every
+client that can reach the app.
+
+```text
+AWESOMETV_ADMIN_ALLOW_CIDRS=192.168.0.0/16,100.64.0.0/10
+```
+
+Public Watch, HLS, Cast, catch-up, DVR, HDHomeRun, M3U, XMLTV, and
+`/api/v1/public/*` remain reachable. The same CIDR check is available as a
+nginx allowlist in `deploy/nginx/`; enabling both is defense in depth.
+
+## Audit log
+
+`audit_events` records authentication, token, source, backup, and other mutating
+admin requests for 90 days. Studio **Settings → Recent activity** shows the
+latest 100 events.
+
+Recorded fields: time, actor, actor kind (`basic`, `session`, `token`), action,
+target, detail, and client IP. Login success/failure/throttle and logout are
+explicit events. Authenticated non-GET admin requests are recorded
+automatically.
+
+## Security headers
+
+All responses include:
+
+- `X-Content-Type-Options: nosniff`
+- `X-Frame-Options: DENY`
+- `Referrer-Policy: no-referrer`
+- `Permissions-Policy: camera=(), microphone=(), geolocation=()`
+- `Content-Security-Policy: frame-ancestors 'none'; base-uri 'self'; object-src 'none'`
+
+HSTS remains a proxy concern because the app also serves plain HTTP on the LAN.
+
 ## Login throttling
 
 Failed sign-ins, Basic auth attempts, and invalid Bearer tokens are tracked in
@@ -40,9 +77,15 @@ native clients, and automation.
 - Tokens look like `cl_<id>_<secret>` and are shown once at creation.
 - Only a SHA-256 hash of the secret is stored in SQLite.
 - Send `Authorization: Bearer <token>` to any `/api/v1/*` admin route.
-- A token grants full Studio API access. There are no scopes yet.
+- Scopes:
+  - `read` — GET admin APIs.
+  - `control` — writes for channels, schedules, scans, and media.
+  - `admin` — everything, including tokens, audit, backups, restore, and settings.
+- New tokens default to `control` and 90-day expiry. Expiry can be 30/90/365 days or never.
+- Token requests are limited per token (`AWESOMETV_TOKEN_RATE_PER_MIN`, default 600/minute).
+- Tokens requiring `admin` scope are rejected with `403` when used outside that scope.
 - Revoking a token takes effect on the next request.
-- `last_used_at` is updated at most once per minute.
+- `last_used_at` and `last_used_ip` are updated at most once per minute.
 
 Basic auth and the browser session cookie remain supported.
 
@@ -138,9 +181,9 @@ depend on the secret key.
 
 ## Still open
 
-- OIDC, roles, and an audit log.
+- OIDC and roles. A durable audit log is now in place.
 - Provider webhook signature verification and webhook rate limits. No webhook
   receiver is implemented yet.
-- Optional LAN/Tailscale-only Studio exposure until SSO exists.
-- API token scopes, optional expiry, and per-token rate limits.
+- Propagating the Studio CIDR allowlist to the nginx deployment used in production.
+- API token scopes, expiry, and per-token rate limits are implemented; remaining: a dedicated token audit view and rotation reminders.
 - A repeat of the SSRF review before adding peer URLs or new providers.

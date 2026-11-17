@@ -42,6 +42,8 @@ pub struct Config {
     pub rate_limit_stream_per_min: u32,
     pub max_concurrent_streams: u32,
     pub max_streams_per_client: u32,
+    pub admin_allow_cidrs: Vec<String>,
+    pub token_rate_per_min: u32,
 }
 
 impl Config {
@@ -138,6 +140,14 @@ impl Config {
         let rate_limit_stream_per_min = env_u32("AWESOMETV_RATE_LIMIT_STREAM_PER_MIN", 12);
         let max_concurrent_streams = env_u32("AWESOMETV_MAX_CONCURRENT_STREAMS", 4).max(1);
         let max_streams_per_client = env_u32("AWESOMETV_MAX_STREAMS_PER_CLIENT", 2);
+        let token_rate_per_min = env_u32("AWESOMETV_TOKEN_RATE_PER_MIN", 600);
+        let admin_allow_cidrs = env::var("AWESOMETV_ADMIN_ALLOW_CIDRS")
+            .unwrap_or_default()
+            .split(',')
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .collect();
 
         Self {
             bind,
@@ -177,6 +187,8 @@ impl Config {
             rate_limit_stream_per_min,
             max_concurrent_streams,
             max_streams_per_client,
+            admin_allow_cidrs,
+            token_rate_per_min,
         }
     }
 }
