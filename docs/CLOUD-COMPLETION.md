@@ -20,6 +20,8 @@ Implemented:
 - Google Drive access-token and service-account auth
 - Google folder listing and Range downloads
 - proxy HEAD, redirect validation, Range fallback signaling, and content headers
+- provider conformance harness with an in-memory mock provider and 10k-entry pagination coverage
+- shared-drive browsing and per-root enable/disable/edit/delete
 - folder browsing and scan-time ffprobe
 - `cloud://` media in the normal library
 - signed streaming proxy
@@ -40,8 +42,7 @@ Not complete:
 - real Google service-account validation
 - interactive OAuth consent/callback
 - provider webhooks
-- shared-drive root browsing and shortcuts
-- per-root editing and enable/disable
+- Google shortcut handling
 - incremental delta sync and rename reconciliation (full-rescan reconciliation is implemented)
 - active-playback/DVR cache pinning
 - Dropbox, OneDrive, S3, WebDAV adapters
@@ -77,8 +78,7 @@ Deliverables:
 
 - resumable scan persistence across restarts (current jobs are in-memory only)
 - incremental delta sync and rename reconciliation
-- shared-drive root browsing and Google shortcut handling
-- root editing and per-root enable/disable
+- Google shortcut handling
 - cache pinning for active playback and DVR; cache usage UI
 
 Exit criteria:
