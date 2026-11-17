@@ -78,6 +78,16 @@ pub struct CloudManager {
 
 impl CloudManager {
     pub fn new(pool: SqlitePool, data_dir: PathBuf, bind: &str, port: u16) -> Result<Self> {
+        Self::with_providers(pool, data_dir, bind, port, ProviderRegistry::new()?)
+    }
+
+    pub(crate) fn with_providers(
+        pool: SqlitePool,
+        data_dir: PathBuf,
+        bind: &str,
+        port: u16,
+        providers: ProviderRegistry,
+    ) -> Result<Self> {
         let secret = Arc::new(SecretKey::load(&data_dir)?);
         let cache_budget_gb = std::env::var("CLOUD_CACHE_MAX_GB")
             .ok()
@@ -93,7 +103,7 @@ impl CloudManager {
             pool,
             data_dir,
             secret,
-            providers: ProviderRegistry::new()?,
+            providers,
             internal_base: format!(
                 "http://{}:{port}",
                 if bind == "0.0.0.0" || bind == "::" {
@@ -346,9 +356,13 @@ impl CloudManager {
         if !source.enabled {
             bail!("cloud source is disabled");
         }
-        let roots = db::list_cloud_roots(&self.pool, source_id).await?;
+        let roots: Vec<db::CloudRoot> = db::list_cloud_roots(&self.pool, source_id)
+            .await?
+            .into_iter()
+            .filter(|root| root.enabled)
+            .collect();
         if roots.is_empty() {
-            bail!("add at least one cloud folder root before scanning");
+            bail!("add at least one enabled cloud folder root before scanning");
         }
         let token = self.access_token(&source).await?;
         let provider = self.providers.require(&source.provider)?;
@@ -836,5 +850,70 @@ mod tests {
     #[test]
     fn builds_cloud_titles() {
         assert_eq!(cloud_title("My.Movie.2024.mkv"), "My Movie 2024");
+    }
+
+    use crate::cloud::provider::conformance::MockProvider;
+
+    #[tokio::test]
+    async fn mock_provider_lifecycle_conformance() {
+        let dir = std::env::temp_dir().join(format!("awesometv-cloud-test-{}", Uuid::new_v4()));
+        let pool = db::init(&dir).await.unwrap();
+        let provider = Arc::new(MockProvider::media_tree());
+        let registry = ProviderRegistry::from_providers(vec![provider]);
+        let manager = Arc::new(
+            CloudManager::with_providers(pool.clone(), dir.clone(), "127.0.0.1", 8421, registry)
+                .unwrap(),
+        );
+        let source = manager
+            .create_source(&db::CloudSourceInput {
+                provider: "mock".into(),
+                name: "Mock".into(),
+                auth_type: "access_token".into(),
+                policy: "auto".into(),
+                config: serde_json::json!({}),
+                secret: Some("mock".into()),
+                roots: Vec::new(),
+            })
+            .await
+            .unwrap();
+        manager
+            .add_root(
+                &source.id,
+                &db::CloudRootInput {
+                    remote_id: "root".into(),
+                    remote_path: "/".into(),
+                    display_path: "/".into(),
+                },
+            )
+            .await
+            .unwrap();
+        let report = manager
+            .scan_source_controlled(&source.id, 100, false, None, None)
+            .await
+            .unwrap();
+        assert_eq!(report.scanned, 2);
+        assert_eq!(report.errors, 0);
+        assert!(report.complete);
+
+        let media = db::list_media(&pool)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|item| item.path.contains("sample-srt"))
+            .expect("sample media indexed");
+        manager
+            .cache_media(&source.id, &media.id, "sample-srt", "srt")
+            .await
+            .unwrap();
+        let resolved = manager.resolve_media_input(&media.id).await.unwrap();
+        assert!(resolved.location.ends_with(".srt"));
+        assert!(std::path::Path::new(&resolved.location).is_file());
+
+        manager.delete_source(&source.id).await.unwrap();
+        assert!(db::cloud_source(&pool, &source.id).await.unwrap().is_none());
+        assert!(db::cloud_media(&pool, &media.id).await.unwrap().is_none());
+
+        pool.close().await;
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

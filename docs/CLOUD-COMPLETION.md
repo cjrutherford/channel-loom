@@ -20,8 +20,9 @@ Implemented:
 - Google Drive access-token and service-account auth
 - Google folder listing and Range downloads
 - proxy HEAD, redirect validation, Range fallback signaling, and content headers
-- provider conformance harness with an in-memory mock provider and 10k-entry pagination coverage
-- shared-drive browsing and per-root enable/disable/edit/delete
+- provider conformance harness with an in-memory mock provider, 10k-entry pagination, and a full manager lifecycle (add → browse → scan → cache → resolve → delete)
+- shared-drive browsing and per-root enable/disable/rename/delete
+- scans use only enabled roots
 - folder browsing and scan-time ffprobe
 - `cloud://` media in the normal library
 - signed streaming proxy
@@ -87,6 +88,7 @@ Exit criteria:
 - full scan and incremental scan both reconcile correctly
 - cache eviction never removes active playback/DVR content
 - a 10k-file mock library scans without losing jobs or corrupting metadata
+- manager lifecycle conformance covers create → browse → scan → cache → resolve → delete
 
 ### C2 — OAuth, webhooks, and public exposure
 
