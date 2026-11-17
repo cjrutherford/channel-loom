@@ -2023,6 +2023,12 @@ pub struct CloudRootInput {
     pub display_path: String,
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct CloudRootUpdate {
+    pub display_path: Option<String>,
+    pub enabled: Option<bool>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct CloudRoot {
     pub id: String,
@@ -2301,6 +2307,54 @@ pub async fn list_cloud_roots(pool: &SqlitePool, source_id: &str) -> Result<Vec<
             enabled: row.get::<i64, _>("enabled") != 0,
         })
         .collect())
+}
+
+pub async fn cloud_root(pool: &SqlitePool, id: &str) -> Result<Option<CloudRoot>> {
+    let row = sqlx::query(
+        "SELECT id, source_id, remote_id, remote_path, display_path, enabled FROM cloud_roots WHERE id = ? LIMIT 1",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|row| CloudRoot {
+        id: row.get("id"),
+        source_id: row.get("source_id"),
+        remote_id: row.get("remote_id"),
+        remote_path: row.get("remote_path"),
+        display_path: row.get("display_path"),
+        enabled: row.get::<i64, _>("enabled") != 0,
+    }))
+}
+
+pub async fn update_cloud_root(
+    pool: &SqlitePool,
+    id: &str,
+    update: &CloudRootUpdate,
+) -> Result<CloudRoot> {
+    let display_path = match update.display_path.as_deref() {
+        Some(value) => {
+            let value = value.trim();
+            if value.is_empty() {
+                bail!("root display path cannot be empty");
+            }
+            Some(value)
+        }
+        None => None,
+    };
+    let result = sqlx::query(
+        "UPDATE cloud_roots SET display_path = COALESCE(?, display_path), enabled = COALESCE(?, enabled) WHERE id = ?",
+    )
+    .bind(display_path)
+    .bind(update.enabled.map(|value| if value { 1 } else { 0 }))
+    .bind(id)
+    .execute(pool)
+    .await?;
+    if result.rows_affected() == 0 {
+        bail!("cloud root not found");
+    }
+    cloud_root(pool, id)
+        .await?
+        .context("cloud root disappeared after update")
 }
 
 pub async fn add_cloud_root(
@@ -3269,6 +3323,40 @@ pub async fn cloud_metrics(pool: &SqlitePool) -> Result<CloudMetrics> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn cloud_root_can_be_disabled_and_renamed() {
+        let dir = std::env::temp_dir().join(format!("awesometv-db-test-{}", Uuid::new_v4()));
+        let pool = init(&dir).await.unwrap();
+        let now = now_ms();
+        sqlx::query(
+            "INSERT INTO cloud_sources (id, provider, name, auth_type, policy, enabled, secret_blob, config_json, created_at) VALUES ('source', 'google', 'Test', 'access_token', 'auto', 1, 'x', '{}', ?)",
+        )
+        .bind(now)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO cloud_roots (id, source_id, remote_id, remote_path, display_path, enabled) VALUES ('root', 'source', 'remote', '/remote', 'Remote', 1)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let updated = update_cloud_root(
+            &pool,
+            "root",
+            &CloudRootUpdate {
+                display_path: Some("Renamed".into()),
+                enabled: Some(false),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(updated.display_path, "Renamed");
+        assert!(!updated.enabled);
+        pool.close().await;
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     #[tokio::test]
     async fn full_scan_reconciliation_removes_missing_cloud_media() {

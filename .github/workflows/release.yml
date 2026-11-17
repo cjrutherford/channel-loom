@@ -1,0 +1,124 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  server:
+    name: Server binary
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.98.1
+      - uses: Swatinem/rust-cache@v2
+      - name: Build server
+        run: cargo build --release -p awesometv-server
+      - name: Stage binary
+        run: |
+          mkdir -p dist
+          cp target/release/awesometv-server dist/channelloom-server-linux-amd64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: server
+          path: dist/channelloom-server-linux-amd64
+
+  android-tv:
+    name: Android TV APK
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Install Android SDK 36
+        env:
+          ANDROID_HOME: /usr/local/lib/android/sdk
+          ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+        run: |
+          SDKMANAGER=$(find "$ANDROID_HOME" -type f -path '*/bin/sdkmanager' | sort -V | tail -1)
+          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+          "$SDKMANAGER" "platforms;android-36" "build-tools;36.0.0"
+      - name: Build debug APK
+        run: |
+          chmod +x android-tv/gradlew
+          cd android-tv
+          ./gradlew assembleDebug --no-daemon --stacktrace
+      - name: Stage APK
+        run: |
+          mkdir -p dist
+          cp android-tv/app/build/outputs/apk/debug/app-debug.apk dist/channelloom-android-tv-debug.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: dist/channelloom-android-tv-debug.apk
+
+  desktop:
+    name: Desktop bundle
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux webview dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential curl wget file pkg-config \
+            libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev \
+            libayatana-appindicator3-dev libxdo-dev libssl-dev patchelf
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.98.1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --version '^2' --locked
+      - name: Build desktop bundle
+        run: |
+          cd desktop
+          cargo tauri build --bundles deb
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop
+          path: desktop/src-tauri/target/release/bundle/**/*
+
+  publish:
+    name: Publish GitHub release
+    needs: [server, android-tv, desktop]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release
+          merge-multiple: true
+      - name: Show release assets
+        run: find release -type f -printf '%p %k KB\n'
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: ChannelLoom ${{ github.ref_name }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          body: |
+            Initial ChannelLoom release.
+
+            Assets:
+            - `channelloom-server-linux-amd64` — self-hosted server binary
+            - `channelloom-android-tv-debug.apk` — Android TV debug APK
+            - Tauri Linux `.deb` desktop bundle
+
+            This Android APK is debug-signed. Register a Styled or Custom Cast
+            receiver App ID to replace the Default Media Receiver.
+          files: |
+            release/channelloom-server-linux-amd64
+            release/channelloom-android-tv-debug.apk
+            release/**/*.deb

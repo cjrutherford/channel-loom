@@ -677,6 +677,7 @@
           <div class="source-path" id="cloudMetrics"></div>
           <div id="cloudScanStatus" style="display:none; margin-top:10px;"></div>
           <div id="cloudSourceList"></div>
+          <div id="cloudRootsPanel" style="margin-top:10px;"></div>
           <div class="form-row" style="margin-top:12px;">
             <div class="field"><label for="cloudName">Name</label><input id="cloudName" placeholder="Google Drive"></div>
             <div class="field"><label for="cloudAuth">Auth</label><select id="cloudAuth"><option value="service_account">Service account JSON</option><option value="access_token">Access token (dev)</option></select></div>
@@ -692,7 +693,8 @@
             <div class="field"><label for="cloudBrowseSource">Source</label><select id="cloudBrowseSource"></select></div>
             <div class="field"><label for="cloudFolderId">Folder ID</label><input id="cloudFolderId" value="root"></div>
           </div>
-          <div class="row"><button class="btn small ghost" id="browseCloudBtn">Browse</button><button class="btn small" id="addCloudRootBtn">Add current folder</button></div>
+          <div class="row"><button class="btn small ghost" id="browseCloudBtn">Browse</button><button class="btn small" id="addCloudRootBtn">Add current folder</button><button class="btn small ghost" id="cloudDrivesBtn">Shared drives</button></div>
+          <div id="cloudDrivesList"></div>
           <div id="cloudFolderList"></div>
         </div>
         <div class="panel panel-pad" style="margin-top:14px;">
@@ -816,7 +818,7 @@
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
 <script>
 const $ = (id) => document.getElementById(id);
-const state = { config: null, sources: [], stats: null, media: [], channels: [], collections: [], blocks: [], classicItems: [], templates: [], overrides: [], graphics: null, stream: null, metrics: null, language: null, tvNumber: null, playerTarget: null, cloudSources: [], cloudMetrics: null, cloudBrowse: null, programChannel: null, programMode: 'blocks', selected: new Set(), kind: 'all', origin: 'all', search: '', activeChannel: null, hls: null, modalMode: null, autoPlayed: false, authed: false, tokens: [], audit: [], role: 'admin', cloudScanJob: null };
+const state = { config: null, sources: [], stats: null, media: [], channels: [], collections: [], blocks: [], classicItems: [], templates: [], overrides: [], graphics: null, stream: null, metrics: null, language: null, tvNumber: null, playerTarget: null, cloudSources: [], cloudMetrics: null, cloudBrowse: null, cloudRoots: [], cloudRootsSource: null, programChannel: null, programMode: 'blocks', selected: new Set(), kind: 'all', origin: 'all', search: '', activeChannel: null, hls: null, modalMode: null, autoPlayed: false, authed: false, tokens: [], audit: [], role: 'admin', cloudScanJob: null };
 const KIND_LABEL = { movie: 'Movie', episode: 'Episode', music: 'Music', image: 'Image', other: 'Video' };
 
 function toast(text, error = false) {
@@ -1315,6 +1317,7 @@ function renderCloudSources() {
       <div class="cloud-actions">
         <button class="btn small" data-cloud-scan="${esc(source.id)}" ${source.enabled ? '' : 'disabled'}>Scan</button>
         <button class="btn small ghost" data-cloud-full="${esc(source.id)}" ${source.enabled ? '' : 'disabled'}>Full rescan</button>
+        <button class="btn small ghost" data-cloud-roots="${esc(source.id)}">Roots</button>
         <button class="btn small ghost" data-cloud-edit="${esc(source.id)}">Edit</button>
         <button class="btn small ghost" data-cloud-toggle="${esc(source.id)}">${source.enabled ? 'Disable' : 'Enable'}</button>
         <button class="btn small ghost" data-cloud-del="${esc(source.id)}">Delete</button>
@@ -1323,6 +1326,7 @@ function renderCloudSources() {
   }).join('');
   list.querySelectorAll('button[data-cloud-scan]').forEach(btn => btn.addEventListener('click', () => scanCloudSource(btn.dataset.cloudScan)));
   list.querySelectorAll('button[data-cloud-full]').forEach(btn => btn.addEventListener('click', () => scanCloudSource(btn.dataset.cloudFull, true)));
+  list.querySelectorAll('button[data-cloud-roots]').forEach(btn => btn.addEventListener('click', () => showCloudRoots(btn.dataset.cloudRoots)));
   list.querySelectorAll('button[data-cloud-edit]').forEach(btn => btn.addEventListener('click', () => editCloudSource(btn.dataset.cloudEdit)));
   list.querySelectorAll('button[data-cloud-toggle]').forEach(btn => btn.addEventListener('click', () => toggleCloudSource(btn.dataset.cloudToggle)));
   list.querySelectorAll('button[data-cloud-del]').forEach(btn => btn.addEventListener('click', async () => {
@@ -1339,6 +1343,74 @@ async function toggleCloudSource(id) {
     await api(`/api/v1/cloud/sources/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ enabled: !source.enabled }) });
     await loadAll();
     toast(source.enabled ? 'Cloud source disabled.' : 'Cloud source enabled.');
+  } catch (error) { toast(String(error), true); }
+}
+
+async function showCloudRoots(id) {
+  try {
+    const roots = await api(`/api/v1/cloud/sources/${encodeURIComponent(id)}/roots`);
+    state.cloudRoots = roots;
+    state.cloudRootsSource = id;
+    renderCloudRoots();
+  } catch (error) { toast(String(error), true); }
+}
+
+function renderCloudRoots() {
+  const panel = $('cloudRootsPanel');
+  if (!panel) return;
+  if (!state.cloudRootsSource) {
+    panel.innerHTML = '';
+    return;
+  }
+  if (!state.cloudRoots.length) {
+    panel.innerHTML = '<div class="source-path">No roots on this source. Browse a folder and add it.</div>';
+    return;
+  }
+  panel.innerHTML = `<div class="source-path">Roots</div>` + state.cloudRoots.map((root) => `
+    <div class="block-row wide-actions">
+      <div class="days">${root.enabled ? '●' : '○'}</div>
+      <div>${esc(root.display_path)}<div class="dim tiny">${esc(root.remote_id)}</div></div>
+      <div class="mono tiny dim">${root.enabled ? 'enabled' : 'disabled'}</div>
+      <div class="cloud-actions">
+        <button class="btn small ghost" data-root-toggle="${esc(root.id)}">${root.enabled ? 'Disable' : 'Enable'}</button>
+        <button class="btn small ghost" data-root-del="${esc(root.id)}">Delete</button>
+      </div>
+    </div>`).join('');
+  panel.querySelectorAll('button[data-root-toggle]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const root = state.cloudRoots.find((item) => item.id === button.dataset.rootToggle);
+      if (!root) return;
+      try {
+        await api(`/api/v1/cloud/roots/${encodeURIComponent(root.id)}`, { method: 'PATCH', body: JSON.stringify({ enabled: !root.enabled }) });
+        await showCloudRoots(state.cloudRootsSource);
+      } catch (error) { toast(String(error), true); }
+    });
+  });
+  panel.querySelectorAll('button[data-root-del]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      if (!confirm('Remove this cloud root? Indexed media is removed on the next full rescan.')) return;
+      try {
+        await api(`/api/v1/cloud/roots/${encodeURIComponent(button.dataset.rootDel)}`, { method: 'DELETE' });
+        await showCloudRoots(state.cloudRootsSource);
+      } catch (error) { toast(String(error), true); }
+    });
+  });
+}
+
+async function listCloudDrives() {
+  const source = $('cloudBrowseSource').value;
+  if (!source) { toast('Add a cloud source first.', true); return; }
+  try {
+    const drives = await api(`/api/v1/cloud/sources/${encodeURIComponent(source)}/drives`);
+    const list = $('cloudDrivesList');
+    list.innerHTML = drives.length ? drives.map((drive) => `
+      <div class="row" style="justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--line-soft)">
+        <div><b>${esc(drive.name)}</b><div class="dim tiny">${esc(drive.id)}</div></div>
+        <button class="btn small" data-drive="${esc(drive.id)}">Use</button>
+      </div>`).join('') : '<div class="source-path">No shared drives returned.</div>';
+    list.querySelectorAll('button[data-drive]').forEach((button) => {
+      button.addEventListener('click', () => { $('cloudFolderId').value = button.dataset.drive; browseCloud(); });
+    });
   } catch (error) { toast(String(error), true); }
 }
 
@@ -1829,6 +1901,7 @@ $('addCloudSourceBtn').addEventListener('click', async () => {
 });
 $('browseCloudBtn').addEventListener('click', browseCloud);
 $('addCloudRootBtn').addEventListener('click', addCloudRoot);
+$('cloudDrivesBtn').addEventListener('click', listCloudDrives);
 $('createTokenBtn').addEventListener('click', async () => {
   const name = $('tokenName').value.trim();
   if (!name) { toast('Give the token a name first.', true); return; }

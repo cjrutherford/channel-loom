@@ -30,7 +30,7 @@ Detailed plan: [`CLOUD-COMPLETION.md`](CLOUD-COMPLETION.md)
 | Phase | Focus | Status |
 |---|---|---|
 | C0 | Real Google service account, test folder, provider test assets | not done |
-| C1 | Resumable scans, incremental delta, cache pins, shared-drive/root UI | partial — provider registry, proxy hardening, source edit, background scans, full reconciliation, badges, and metrics done |
+| C1 | Resumable scans, incremental delta, cache pins | partial — provider registry, conformance harness, proxy hardening, source/root edit, shared-drive UI, background scans, full reconciliation, badges, and metrics done |
 | C2 | Interactive OAuth, webhooks, public/admin split | split done; OAuth/webhooks not started |
 | C3 | Dropbox, OneDrive, S3-compatible, WebDAV | not started |
 | C4 | Real-provider tests, security review, performance, docs | not started |
@@ -166,7 +166,7 @@ Recommended order:
 | `android-tv` | debug APK | `app-debug.apk` |
 | `desktop` | Tauri Linux bundle | AppImage/deb |
 | `pwa-assets` | manifest/service-worker/icon validation | none |
-| `release` (tags) | server, APK, desktop bundle, Docker image | GitHub release assets |
+| `release` (tags) | server, APK, desktop bundle | GitHub release assets |
 
 ## Decisions pending
 

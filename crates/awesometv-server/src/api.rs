@@ -367,7 +367,10 @@ pub fn router(state: AppState) -> Router {
             "/api/v1/cloud/sources/{id}/roots",
             get(cloud_roots).post(add_cloud_root),
         )
-        .route("/api/v1/cloud/roots/{id}", delete(delete_cloud_root))
+        .route(
+            "/api/v1/cloud/roots/{id}",
+            delete(delete_cloud_root).patch(update_cloud_root),
+        )
         .route("/api/v1/cloud/sources/{id}/browse", get(browse_cloud))
         .route("/api/v1/cloud/sources/{id}/drives", get(cloud_drives))
         .route("/api/v1/cloud/sources/{id}/scan", post(scan_cloud))
@@ -1569,6 +1572,19 @@ async fn add_cloud_root(
     Json(root): Json<db::CloudRootInput>,
 ) -> Result<Json<db::CloudRoot>, ApiError> {
     Ok(Json(state.cloud.add_root(&id, &root).await?))
+}
+
+async fn update_cloud_root(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(update): Json<db::CloudRootUpdate>,
+) -> Result<Json<db::CloudRoot>, ApiError> {
+    if db::cloud_root(&state.pool, &id).await?.is_none() {
+        return Err(ApiError::not_found("cloud root not found"));
+    }
+    Ok(Json(
+        db::update_cloud_root(&state.pool, &id, &update).await?,
+    ))
 }
 
 async fn delete_cloud_root(

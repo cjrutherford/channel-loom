@@ -28,11 +28,11 @@ area, is in [`PLAN-REVIEW.md`](PLAN-REVIEW.md).
 | SSO | Optional OIDC discovery/code/PKCE flow with admin/operator/viewer role mapping; env admin remains break-glass |
 | Exposure | Optional `AWESOMETV_ADMIN_ALLOW_CIDRS` guard for Studio/admin APIs; security headers on every response |
 | Backups | Create/list/download, staged restore on restart |
-| Sources | Jellyfin import configured; Emby import implemented; cloud provider registry, HEAD/Range proxy hardening, source edit, background scans, full-rescan reconciliation, Library badges/filter, and per-source/Prometheus metrics |
+| Sources | Jellyfin import configured; Emby import implemented; cloud provider registry, conformance harness, HEAD/Range proxy hardening, source/root editing, shared-drive browsing, background scans, full-rescan reconciliation, Library badges/filter, and per-source/Prometheus metrics |
 | UI | ChannelLoom Watch and Studio: cinematic player, channel rail, guide timeline, cast mode, skeletons, responsive layouts, and a 10-foot TV mode |
 | Apps | ChannelLoom PWA over Tailscale Serve HTTPS; Android TV wrapper APK; Tauri desktop wrapper |
 | Cast | Cast button in Watch and Studio, cast-mode overlay with remote play/pause/mute/volume/stop, channel switching while casting, branded metadata, configurable Styled/Custom receiver, signed Cast HLS and CORS |
-| CI | Rust, Docker, Android TV APK, Tauri desktop bundle, PWA asset validation |
+| CI | Rust, Docker, Android TV APK, Tauri desktop bundle, PWA asset validation; tag-driven release workflow |
 | Runtime | Docker on Ubuntu 26.04 with FFmpeg 8.0.1 and VAAPI device passthrough |
 
 ## Brand
