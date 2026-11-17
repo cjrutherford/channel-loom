@@ -184,6 +184,8 @@ client-supplied value.
   rejected.
 - Google remote IDs are percent-encoded as one path segment, so a crafted ID
   cannot add query parameters or escape `/files/`.
+- Google download redirects are followed manually, capped, and revalidated at
+  every hop.
 - Segment handlers reject `/`, `\`, and `..`; HLS, DVR, catch-up, and cloud
   paths are built from server-generated IDs.
 - ffmpeg and ffprobe are invoked with argument arrays, never through a shell.

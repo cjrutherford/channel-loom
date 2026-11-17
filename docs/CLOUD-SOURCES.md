@@ -429,6 +429,8 @@ all adapters target it:
   only with access-token/mock credentials).
 - Shared-drive root browsing in the UI; folder IDs work.
 - Incremental delta sync and rename reconciliation; scans are full listings. A full rescan removes cloud media that disappeared.
+- Shared-drive root browsing and per-root editing in the UI.
+- Active playback/DVR cache pinning.
 - Scan jobs are in memory: they survive while the process runs, not across restarts.
 - LRU eviction does not yet pin active DVR/playback sessions.
 
