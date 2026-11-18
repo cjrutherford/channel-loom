@@ -19,7 +19,8 @@ E2E_PASSWORD='...' \
 corepack pnpm e2e
 ```
 
-Use `corepack pnpm e2e:headed` to watch the browser.
+Use `corepack pnpm e2e:headed` to watch the browser. Public runs can set
+`E2E_RETRIES=1` to retry a transient network failure once.
 
 Without `E2E_PASSWORD`, the public Watch tests still run and the Studio tests
 are skipped.
@@ -36,6 +37,45 @@ are skipped.
 - Auto-channel preview returns plans without creating channels.
 - Authenticated APIs, role, audit, token, provider, and metrics endpoints.
 - Anonymous access to protected APIs returns `401`.
+
+## Long playback check
+
+`tests/e2e/playback.spec.ts` samples the player clock for a longer window and
+fails if it ever moves backwards. It is opt-in because it runs for minutes:
+
+```bash
+E2E_BASE_URL=https://atv.christopherrutherford.net \
+E2E_CHANNEL=chrome \
+E2E_PLAYBACK_SECONDS=180 \
+corepack pnpm e2e:playback
+```
+
+Run it after changing HLS output, the producer supervisor, or the precache
+policy. To provoke restarts during the run, kill the channel producer from
+another shell:
+
+```bash
+pkill -f '^ffmpeg .*data/hls/1/'
+```
+
+## Manual playback checks
+
+The automated suite does not assert live playback continuity because it depends
+on producer timing. When changing HLS output or the producer supervisor, run a
+browser session for several minutes while restarting a producer, then confirm
+`player.currentTime` never decreases:
+
+```bash
+# in one shell, watch the player
+node /tmp/playback-probe.mjs
+# in another, force a producer restart
+pkill -f '^ffmpeg .*data/hls/1/'
+curl -s http://127.0.0.1:8409/channel/1.m3u8 | grep -E 'MEDIA-SEQUENCE|^1/'
+```
+
+`MEDIA-SEQUENCE` must increase or stay equal, never reset, and the first segment
+of the new playlist must have a later MPEG-TS `start_time` than the last segment
+of the old playlist.
 
 ## Notes
 

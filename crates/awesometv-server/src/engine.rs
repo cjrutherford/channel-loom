@@ -668,6 +668,28 @@ impl Engine {
     }
 }
 
+/// Continue segment numbering and MPEG-TS timestamps across producer
+/// restarts. Without this, HLS.js sees the media sequence/PTS reset when an
+/// item boundary or supervisor restart creates a new ffmpeg process.
+fn next_hls_segment_number(playlist: &Path) -> i64 {
+    let Ok(body) = std::fs::read_to_string(playlist) else {
+        return 0;
+    };
+    let mut next = 0i64;
+    for line in body.lines() {
+        let Some(name) = line.strip_suffix(".ts") else {
+            continue;
+        };
+        let Some((_, number)) = name.rsplit_once('_') else {
+            continue;
+        };
+        if let Ok(number) = number.parse::<i64>() {
+            next = next.max(number.saturating_add(1));
+        }
+    }
+    next
+}
+
 #[allow(clippy::too_many_arguments)]
 fn start_producer(
     channel: &Channel,
@@ -717,6 +739,8 @@ fn start_producer(
     };
     let tonemap = channel.stream.hdr_mode == "tonemap" && probe.hdr;
     let hardware = channel.stream.encoder == "vaapi" && !matches!(media_kind, "music" | "image");
+    let next_segment = next_hls_segment_number(&playlist);
+    let segment_offset = next_segment as f64 * channel.stream.segment_seconds.clamp(2, 10) as f64;
     let mut command = Command::new("ffmpeg");
     command
         .arg("-hide_banner")
@@ -850,7 +874,11 @@ fn start_producer(
             .arg("-force_key_frames")
             .arg(format!("expr:gte(t,n_forced*{segment_seconds})"));
     }
-    if media_kind != "image" && (media_kind == "music" || probe.audio_index.is_some()) {
+    // Always encode mapped audio. When ffprobe times out the audio index is
+    // unknown, but the optional `0:a:0?` map still lets FFmpeg pick the source
+    // track; without these args a high-bitrate source audio stream can blow
+    // past the public bitrate budget even though video is capped.
+    if media_kind != "image" {
         command
             .arg("-c:a")
             .arg("aac")
@@ -869,7 +897,11 @@ fn start_producer(
         .arg("-hls_list_size")
         .arg(channel.stream.cache_segments.clamp(4, 60).to_string())
         .arg("-hls_flags")
-        .arg("delete_segments+omit_endlist+program_date_time+independent_segments+append_list+discont_start")
+        .arg("delete_segments+omit_endlist+program_date_time+independent_segments+discont_start")
+        .arg("-start_number")
+        .arg(next_segment.to_string())
+        .arg("-output_ts_offset")
+        .arg(format!("{segment_offset:.3}"))
         .arg("-hls_segment_filename")
         .arg(&segment_pattern)
         .arg(&playlist)
@@ -902,6 +934,10 @@ fn start_slate_producer(
     data_dir: &Path,
 ) -> Result<(PathBuf, Child)> {
     let playlist = out_dir.join("index.m3u8");
+    // Read the numbering before clearing, so a slate that fills a schedule gap
+    // continues the channel timeline instead of resetting it to zero.
+    let next_segment = next_hls_segment_number(&playlist);
+    let segment_offset = next_segment as f64 * channel.stream.segment_seconds.clamp(2, 10) as f64;
     let _ = std::fs::remove_file(&playlist);
     if let Ok(entries) = std::fs::read_dir(out_dir) {
         for entry in entries.flatten() {
@@ -981,7 +1017,11 @@ fn start_slate_producer(
         .arg("-hls_list_size")
         .arg(channel.stream.cache_segments.clamp(4, 60).to_string())
         .arg("-hls_flags")
-        .arg("delete_segments+omit_endlist+program_date_time+independent_segments+append_list+discont_start")
+        .arg("delete_segments+omit_endlist+program_date_time+independent_segments+discont_start")
+        .arg("-start_number")
+        .arg(next_segment.to_string())
+        .arg("-output_ts_offset")
+        .arg(format!("{segment_offset:.3}"))
         .arg("-hls_segment_filename")
         .arg(&segment_pattern)
         .arg(&playlist)
@@ -1311,6 +1351,28 @@ mod tests {
             out_ms,
             kind: "program".into(),
         }
+    }
+
+    #[test]
+    fn segment_numbering_continues_from_the_existing_playlist() {
+        let dir = std::env::temp_dir().join(format!(
+            "awesometv-hls-test-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let playlist = dir.join("index.m3u8");
+        assert_eq!(
+            next_hls_segment_number(&playlist),
+            0,
+            "missing playlist starts at zero"
+        );
+        std::fs::write(
+            &playlist,
+            "#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:41\n#EXTINF:4.0,\n1/seg_x_00041.ts\n#EXTINF:4.0,\n1/seg_x_00042.ts\n",
+        )
+        .unwrap();
+        assert_eq!(next_hls_segment_number(&playlist), 43);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

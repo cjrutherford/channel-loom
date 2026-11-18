@@ -27,6 +27,20 @@ test.describe("Watch", () => {
     await expect(page.locator("#rail .rail-card").first()).toBeVisible({ timeout: 30_000 });
     await expect(page.locator("#bufferOverlay")).toBeHidden();
 
+    // Wait for live playback to actually be underway; otherwise the real
+    // `playing` event can land right after the synthetic `waiting` event and
+    // hide the meter before the assertion.
+    await page.waitForFunction(
+      () => {
+        const player = document.getElementById("player") as HTMLVideoElement | null;
+        return Boolean(player && !player.paused && player.readyState >= 3 && player.currentTime > 0);
+      },
+      undefined,
+      { timeout: 60_000 },
+    );
+    await page.waitForTimeout(2_000);
+    await expect(page.locator("#bufferOverlay")).toBeHidden();
+
     await page.evaluate(() => {
       document.getElementById("player")?.dispatchEvent(new Event("waiting"));
     });

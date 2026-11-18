@@ -1039,7 +1039,7 @@ async fn public_guide(
     let channels = db::list_channels(&state.pool).await?;
     let mut guide = Vec::with_capacity(channels.len());
     for channel in channels {
-        let items = db::guide_items(
+        let items = db::guide_blocks(
             &state.pool,
             &channel.id,
             // The viewer floors its guide window to the previous hour, so look
@@ -2563,7 +2563,7 @@ async fn guide(
     let now = db::now_ms();
     let hours = query.hours.clamp(1, 72);
     Ok(Json(
-        db::guide_items(&state.pool, &id, now - 3_600_000, now + hours * 3_600_000).await?,
+        db::guide_blocks(&state.pool, &id, now - 3_600_000, now + hours * 3_600_000).await?,
     ))
 }
 
@@ -2596,7 +2596,7 @@ async fn xmltv(State(state): State<AppState>) -> Result<Response, ApiError> {
         ));
     }
     for channel in &channels {
-        let items = db::guide_items(
+        let items = db::guide_blocks(
             &state.pool,
             &channel.id,
             now - 3_600_000,

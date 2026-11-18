@@ -1809,14 +1809,15 @@ function playUrl(url, label = 'HLS · 720p', target = 'player') {
   if (window.Hls && Hls.isSupported()) {
     const fromStart = label.startsWith('DVR') || label.startsWith('CATCH-UP');
     state.hls = new Hls({
-      // Hold a deeper live buffer so short Starlink/uplink dips do not stall
-      // playback. The producer keeps 12 segments (48s) in the playlist.
-      liveSyncDurationCount: 3,
-      liveMaxLatencyDurationCount: 8,
+      // Start two segments behind the edge for a safety margin, then hold a
+      // deeper buffer so short uplink dips do not stall playback. The producer
+      // keeps 12 segments (48s) in the playlist.
+      liveSyncDurationCount: 2,
+      liveMaxLatencyDurationCount: 6,
       maxLiveSyncPlaybackRate: 1,
       maxBufferLength: 30,
       maxMaxBufferLength: 60,
-      backBufferLength: 30,
+      backBufferLength: 20,
       lowLatencyMode: false,
       startPosition: fromStart ? 0 : -1,
       manifestLoadingMaxRetry: 4,

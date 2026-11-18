@@ -53,13 +53,30 @@ test.describe("Studio", () => {
 
   test("shows a real Studio buffer meter", async ({ page }) => {
     await page.click('a[data-view="on-air"]');
+    await page.waitForFunction(
+      () => {
+        const player = document.getElementById("player") as HTMLVideoElement | null;
+        return Boolean(player && !player.paused && player.readyState >= 3 && player.currentTime > 0);
+      },
+      undefined,
+      { timeout: 60_000 },
+    );
+    await page.waitForTimeout(2_000);
+    // The Studio overlay is a genuine stall indicator: it only appears when
+    // readyState drops below HAVE_FUTURE_DATA. Simulate a stall by shadowing
+    // readyState for the duration of the assertion.
     await page.evaluate(() => {
-      document.getElementById("player")?.dispatchEvent(new Event("waiting"));
+      const player = document.getElementById("player") as HTMLVideoElement;
+      Object.defineProperty(player, "readyState", { configurable: true, get: () => 0 });
+      player.dispatchEvent(new Event("waiting"));
     });
     await expect(page.locator("#studioBufferOverlay")).toBeVisible({ timeout: 5_000 });
     await expect(page.locator("#studioBufferStats")).toContainText("waiting");
+    await expect(page.locator("#studioBufferFill")).toBeAttached();
     await page.evaluate(() => {
-      document.getElementById("player")?.dispatchEvent(new Event("playing"));
+      const player = document.getElementById("player") as HTMLVideoElement;
+      delete (player as unknown as Record<string, unknown>).readyState;
+      player.dispatchEvent(new Event("playing"));
     });
     await expect(page.locator("#studioBufferOverlay")).toBeHidden();
   });

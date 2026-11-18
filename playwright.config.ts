@@ -8,6 +8,9 @@ export default defineConfig({
   expect: { timeout: 20_000 },
   fullyParallel: false,
   workers: 1,
+  // Live runs cross the public network, so allow an opt-in retry for
+  // transient failures such as ERR_NETWORK_CHANGED.
+  retries: Number(process.env.E2E_RETRIES || 0),
   reporter: [["list"], ["html", { open: "never" }]],
   use: {
     baseURL: process.env.E2E_BASE_URL || "http://127.0.0.1:8409",

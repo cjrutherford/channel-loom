@@ -594,9 +594,11 @@ async function play(channel) {
       liveMaxLatencyDurationCount: 6,
       // Never speed up playback; the "Go live" chip jumps to the edge.
       maxLiveSyncPlaybackRate: 1,
+      // Start two segments behind the edge for a safety margin, then keep
+      // filling ahead so a slow public segment cannot stall playback.
       maxBufferLength: 30,
       maxMaxBufferLength: 60,
-      backBufferLength: 30,
+      backBufferLength: 20,
       startFragPrefetch: true,
       testBandwidth: false,
       manifestLoadingMaxRetry: 6,
