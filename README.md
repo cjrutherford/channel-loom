@@ -28,6 +28,7 @@ A clean-room, modern replacement for [ErsatzTV](https://ersatztv.org/): turn a p
 - [Brand guide](docs/BRAND.md)
 - [Security and public exposure](docs/SECURITY.md)
 - [Release process](docs/RELEASE.md)
+- [End-to-end testing](docs/TESTING.md)
 - [Clean-room policy](docs/CLEAN-ROOM.md)
 
 ## Serving

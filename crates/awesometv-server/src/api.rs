@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -404,6 +404,8 @@ pub fn router(state: AppState) -> Router {
             get(channel_stream).put(update_channel_stream),
         )
         .route("/api/v1/channels", get(channels).post(create_channel))
+        .route("/api/v1/channels/auto", post(auto_channels))
+        .route("/api/v1/channels/encoder", post(set_channel_encoders))
         .route("/api/v1/channels/{id}/catchup", post(start_catchup))
         .route(
             "/api/v1/channels/{id}/dvr",
@@ -1037,7 +1039,7 @@ async fn public_guide(
     let channels = db::list_channels(&state.pool).await?;
     let mut guide = Vec::with_capacity(channels.len());
     for channel in channels {
-        let items = db::guide_items(
+        let items = db::guide_blocks(
             &state.pool,
             &channel.id,
             // The viewer floors its guide window to the previous hour, so look
@@ -1809,6 +1811,210 @@ async fn create_channel(
     Ok(Json(channel))
 }
 
+#[derive(Deserialize)]
+struct AutoChannelRequest {
+    #[serde(default = "default_auto_count")]
+    count: usize,
+    #[serde(default)]
+    collection_ids: Vec<String>,
+    #[serde(default = "default_dry_run")]
+    dry_run: bool,
+    #[serde(default = "default_auto_items")]
+    items_per_cycle: i64,
+    #[serde(default = "default_auto_order")]
+    order: String,
+    #[serde(default)]
+    start_number: Option<i64>,
+}
+
+fn default_auto_count() -> usize {
+    3
+}
+
+fn default_auto_items() -> i64 {
+    4
+}
+
+fn default_auto_order() -> String {
+    "shuffle".into()
+}
+
+fn default_dry_run() -> bool {
+    true
+}
+
+#[derive(Serialize)]
+struct AutoChannelPlan {
+    number: String,
+    name: String,
+    collection_id: String,
+    collection_name: String,
+    media_count: i64,
+}
+
+#[derive(Serialize)]
+struct AutoChannelResponse {
+    dry_run: bool,
+    channels: Vec<AutoChannelPlan>,
+    created: Vec<Channel>,
+}
+
+fn is_filler_collection(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    [
+        "filler",
+        "commercial",
+        "bumper",
+        "trailer",
+        "intro",
+        "outro",
+        "sweeper",
+        "ident",
+    ]
+    .iter()
+    .any(|word| name.contains(word))
+}
+
+async fn auto_channels(
+    State(state): State<AppState>,
+    Json(request): Json<AutoChannelRequest>,
+) -> Result<Json<AutoChannelResponse>, ApiError> {
+    let count = request.count.clamp(1, 20);
+    let items_per_cycle = request.items_per_cycle.clamp(1, 50);
+    let order = match request.order.as_str() {
+        "shuffle" | "sequential" => request.order.clone(),
+        _ => {
+            return Err(ApiError::bad_request(
+                "auto order must be shuffle or sequential",
+            ));
+        }
+    };
+    let existing_channels = db::list_channels(&state.pool).await?;
+    let existing_names: HashSet<String> = existing_channels
+        .iter()
+        .map(|channel| channel.name.to_ascii_lowercase())
+        .collect();
+    let mut collections = db::list_collections(&state.pool).await?;
+    if !request.collection_ids.is_empty() {
+        let by_id: HashMap<String, db::CollectionSummary> = collections
+            .into_iter()
+            .map(|collection| (collection.id.clone(), collection))
+            .collect();
+        collections = request
+            .collection_ids
+            .iter()
+            .filter_map(|id| by_id.get(id).cloned())
+            .collect();
+    } else {
+        collections.retain(|collection| {
+            collection.count > 0
+                && !is_filler_collection(&collection.name)
+                && !existing_names.contains(&collection.name.to_ascii_lowercase())
+        });
+        collections.sort_by(|left, right| {
+            right
+                .count
+                .cmp(&left.count)
+                .then_with(|| left.name.cmp(&right.name))
+        });
+    }
+    collections.truncate(count);
+    if collections.is_empty() {
+        return Err(ApiError::bad_request(
+            "no eligible collections found for auto-build",
+        ));
+    }
+
+    let mut used: HashSet<i64> = existing_channels
+        .into_iter()
+        .filter_map(|channel| channel.number.parse::<i64>().ok())
+        .collect();
+    let mut next = request
+        .start_number
+        .unwrap_or_else(|| used.iter().copied().max().unwrap_or(0).saturating_add(1))
+        .max(1);
+    let mut plans = Vec::new();
+    for collection in collections {
+        while used.contains(&next) {
+            next = next.saturating_add(1);
+        }
+        plans.push(AutoChannelPlan {
+            number: next.to_string(),
+            name: collection.name.clone(),
+            collection_id: collection.id,
+            collection_name: collection.name,
+            media_count: collection.count,
+        });
+        used.insert(next);
+        next = next.saturating_add(1);
+    }
+
+    let mut created = Vec::new();
+    if !request.dry_run {
+        for plan in &plans {
+            let media_ids: Vec<String> =
+                db::collection_media_paths(&state.pool, &plan.collection_id)
+                    .await?
+                    .into_iter()
+                    .map(|(id, _)| id)
+                    .collect();
+            if media_ids.is_empty() {
+                continue;
+            }
+            let channel = db::create_channel_shell(&state.pool, &plan.number, &plan.name).await?;
+            db::set_schedule_mode(&state.pool, &channel.id, "classic").await?;
+            db::set_classic_items(
+                &state.pool,
+                &channel.id,
+                &[db::ClassicItemInput {
+                    collection_id: plan.collection_id.clone(),
+                    mode: "multiple".into(),
+                    count: items_per_cycle,
+                    duration_minutes: 60,
+                    filler_collection_id: None,
+                    mid_roll_interval_minutes: 0,
+                    mid_roll_duration_seconds: 0,
+                    chapter_breaks: true,
+                    break_markers: Vec::new(),
+                    order: order.clone(),
+                }],
+            )
+            .await?;
+            programming::rebuild_channel(&state.pool, &channel.id).await?;
+            state.engine.refresh(&channel.id).await;
+            created.push(channel);
+        }
+    }
+
+    Ok(Json(AutoChannelResponse {
+        dry_run: request.dry_run,
+        channels: plans,
+        created,
+    }))
+}
+
+#[derive(Deserialize)]
+struct SetEncoderRequest {
+    encoder: String,
+}
+
+async fn set_channel_encoders(
+    State(state): State<AppState>,
+    Json(request): Json<SetEncoderRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if !matches!(request.encoder.as_str(), "software" | "vaapi") {
+        return Err(ApiError::bad_request("encoder must be software or vaapi"));
+    }
+    let count = db::set_all_channel_encoders(&state.pool, &request.encoder).await?;
+    for channel in db::list_channels(&state.pool).await? {
+        state.engine.refresh(&channel.id).await;
+    }
+    Ok(Json(serde_json::json!({
+        "encoder": request.encoder,
+        "channels": count
+    })))
+}
+
 async fn collections(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<db::CollectionSummary>>, ApiError> {
@@ -2357,7 +2563,7 @@ async fn guide(
     let now = db::now_ms();
     let hours = query.hours.clamp(1, 72);
     Ok(Json(
-        db::guide_items(&state.pool, &id, now - 3_600_000, now + hours * 3_600_000).await?,
+        db::guide_blocks(&state.pool, &id, now - 3_600_000, now + hours * 3_600_000).await?,
     ))
 }
 
@@ -2390,7 +2596,7 @@ async fn xmltv(State(state): State<AppState>) -> Result<Response, ApiError> {
         ));
     }
     for channel in &channels {
-        let items = db::guide_items(
+        let items = db::guide_blocks(
             &state.pool,
             &channel.id,
             now - 3_600_000,

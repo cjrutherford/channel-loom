@@ -18,9 +18,9 @@ area, is in [`PLAN-REVIEW.md`](PLAN-REVIEW.md).
 | Collections | 70+ show, movie, music, and filler collections; Movie Night now holds all 76 movies and Adventure Time all 278 episodes |
 | Programming | Weekly blocks, block templates, classic sequences, chapter-aware/manual mid-rolls, scripted YAML, external playout JSON, and date-range alternate schedules |
 | Graphics | Per-channel text bug, static or animated image/video watermark, and lower third; captured in block templates |
-| Streams | Resolution, preset, CRF, audio bitrate, global/per-channel languages, subtitles, HDR tonemap, software/VAAPI, segment size, prebuffer, cache depth, and startup prewarm |
-| Precache | 24 h look-ahead, 100 GB LRU, raw copy or 720p proxy for slow sources; status and removal in the admin Sources view |
-| Playback | HLS + MPEG-TS/HDHomeRun; trimmed in/out playback; catch-up restart; rolling DVR buffer; music/image items; subtitles, overlays, HDR tonemap, VAAPI; slate fallback |
+| Streams | Resolution, preset, CRF, audio bitrate, global/per-channel languages, subtitles, HDR tonemap, software/VAAPI, segment size, prebuffer, cache depth, and startup prewarm; all live channels currently use VAAPI on `/dev/dri/renderD128` |
+| Precache | 24 h look-ahead, 100 GB LRU, raw copy or 720p proxy for slow sources; background copy continues during live playback at a bounded rate |
+| Playback | HLS + MPEG-TS/HDHomeRun; trimmed in/out playback; monotonic media sequence and PTS across producer restarts; catch-up restart; rolling DVR buffer; music/image items; subtitles, overlays, HDR tonemap, VAAPI; slate fallback |
 | Auth | **Watch** at `/`; **Studio** at `/admin` (login, optional OIDC SSO, admin/operator/viewer roles, secure session cookies, login throttling, Basic auth and scoped API tokens) |
 | Abuse controls | Per-client public budgets for API, HLS playlists, media segments, Cast, and MPEG-TS; global and per-client MPEG-TS stream leases; `429`/`503` with retry guidance |
 | API tokens | Revocable Bearer tokens in Studio Settings; SHA-256 hashes at rest; read/control/admin scopes, expiry, and per-token limits |
@@ -29,10 +29,10 @@ area, is in [`PLAN-REVIEW.md`](PLAN-REVIEW.md).
 | Exposure | Optional `AWESOMETV_ADMIN_ALLOW_CIDRS` guard for Studio/admin APIs; security headers on every response |
 | Backups | Create/list/download, staged restore on restart |
 | Sources | Jellyfin import configured; Emby import implemented; cloud provider registry, full lifecycle conformance harness, HEAD/Range proxy hardening, source/root editing, enabled-root scans, shared-drive browsing, background scans, full-rescan reconciliation, Library badges/filter, and per-source/Prometheus metrics |
-| UI | ChannelLoom Watch and Studio: cinematic player, channel rail, guide timeline, cast mode, skeletons, responsive layouts, and a 10-foot TV mode |
+| UI | ChannelLoom Watch and Studio: cinematic player, channel rail, guide timeline, buffering meter, auto-channel builder, cast mode, skeletons, responsive layouts, and a 10-foot TV mode |
 | Apps | ChannelLoom PWA over Tailscale Serve HTTPS; Android TV wrapper APK; Tauri desktop wrapper |
 | Cast | Cast button in Watch and Studio, cast-mode overlay with remote play/pause/mute/volume/stop, channel switching while casting, branded metadata, configurable Styled/Custom receiver, signed Cast HLS and CORS |
-| CI | Rust, Docker, Android TV APK, Tauri desktop bundle, PWA asset validation; tag-driven release workflow |
+| CI | Rust, Docker, Android TV APK, Tauri desktop bundle, PWA asset validation; tag-driven release workflow; Playwright E2E suite documented for live/manual runs |
 | Runtime | Docker on Ubuntu 26.04 with FFmpeg 8.0.1 and VAAPI device passthrough |
 
 ## Brand
@@ -53,16 +53,16 @@ environment variables, routes, and the database name are unchanged. See
 
 | # | Channel | Schedule |
 |---|---|---|
-| 1 | Movie Night | Classic, 4 movies per shuffled cycle, 30-minute chapter-snapped breaks, HDR tonemap |
+| 1 | Movie Night | Classic, 4 movies per shuffled cycle, 45-minute chapter-snapped breaks with 120 s bumpers, HDR tonemap |
 | 2 | Animation Station | Adventure Time, Bob's Burgers, Futurama, Rick and Morty, The Great North, The Venture Bros., Voltron, X-Men, X-Men '97; 2 episodes each per cycle |
 | 3 | Adventure Time | Dedicated classic channel, 4 episodes per shuffled cycle |
 | 4 | Sci-Fi Theater | Star Trek, Discovery, Voyager, Stargate SG-1, Atlantis, Battlestar Galactica, The X-Files, Andromeda, The Expanse, For All Mankind, The Twilight Zone, Red Dwarf |
-| 5 | Doctor Who | Dedicated classic channel, 4 episodes per cycle, 20-minute chapter-snapped breaks |
+| 5 | Doctor Who | Dedicated classic channel, 4 episodes per cycle, no mid-roll breaks |
 | 6 | Sitcom Central | Cheers, The Middle, Community, My Name Is Earl, Raising Hope, Baby Daddy, Maude, Mama's Family, Are You Being Served?, Freaks and Geeks, The War at Home, Little Britain |
 | 7 | One Piece | Dedicated classic channel, 4 episodes per shuffled cycle |
 | 8 | Reality Rundown | RuPaul's Drag Race franchise, Face Off, America's Funniest Home Videos, Carpool Karaoke |
 | 9 | Drama After Dark | Supernatural, Shameless, Buffy, Dexter, Teen Wolf, Breaking Bad, Better Call Saul, The Handmaid's Tale, Animal Kingdom, The Boys, Cobra Kai, Black Sails, The White Lotus, Severance |
-| 10 | Family Movie Night | 2 family movies per shuffled classic cycle, HDR tonemap |
+| 10 | Family Movie Night | 2 family movies per shuffled classic cycle, 45-minute breaks with 90 s bumpers, HDR tonemap |
 | 11 | Music Mix | 12 shuffled music tracks per cycle, audio-only HLS |
 | 12 | Gundam Channel | 13 Gundam series, 2 episodes each per cycle |
 
@@ -80,9 +80,11 @@ errors).
 Two public-path constraints were found and addressed:
 
 - **Uplink.** Public segments travel `app -> Tailscale -> VPS -> viewer`, so the
-  home upload caps every public stream. `AWESOMETV_STREAM_MAX_KBPS=900` keeps a
-  single viewer inside the measured path throughput; the per-channel stream
-  form can override it. Multiple public viewers share the same upload.
+  home upload caps every public stream. Measured public throughput is roughly
+  1.0–1.5 Mbps, so the live default is `AWESOMETV_STREAM_MAX_KBPS=450` with
+  96 kbps AAC; a 4 s 720p segment is about 280–310 KB. The per-channel stream
+  form can override the cap. Multiple public viewers share the same upload,
+  which is the first thing to check if public playback degrades.
 - **fail2ban.** SWAG's stock `nginx-unauthorized` jail banned the home IP after
   five 401s from a logged-out UI poll. The UI now stops polling when
   unauthenticated, and that jail is disabled; the app throttles its own login
@@ -179,7 +181,8 @@ From today, a realistic public-v1 range is **3–5 months for 1–2 full-time en
 
 ## Known limits right now
 
-- HLS transitions are per-item processes with a supervisor; they are not frame-accurate yet.
+- HLS transitions are per-item processes with a supervisor; they are not frame-accurate yet, but segment numbering and MPEG-TS timestamps continue across restarts so viewers no longer rewind. A server restart starts a new timeline.
+- The guide merges program segments that are only split by short mid-roll breaks, so runtimes match the media; the raw playout timeline still contains the breaks.
 - VAAPI is validated on the current host; QSV/NVENC profiles are not exposed yet.
 - Global language defaults are English audio and subtitles off. Channels inherit these defaults; per-channel overrides still win. Files with no English track fall back to the first non-commentary audio track, and commentary tracks are skipped when tagged.
 - HDHomeRun/TS endpoints are implemented and locally verified, but not yet validated inside Plex/Emby/Channels (paused).

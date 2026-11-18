@@ -977,6 +977,30 @@ pub async fn list_media(pool: &SqlitePool) -> Result<Vec<Media>> {
         .collect())
 }
 
+pub async fn create_channel_shell(pool: &SqlitePool, number: &str, name: &str) -> Result<Channel> {
+    let id = Uuid::new_v4().to_string();
+    let start_ms = now_ms();
+    let mut tx = pool.begin().await?;
+    sqlx::query(
+        "INSERT INTO channels (id, number, name, start_ms, created_at) VALUES (?, ?, ?, ?, ?)",
+    )
+    .bind(&id)
+    .bind(number)
+    .bind(name)
+    .bind(start_ms)
+    .bind(now_ms())
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query("UPDATE channels SET subtitle_mode = 'inherit' WHERE id = ?")
+        .bind(&id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    channel_by_id(pool, &id)
+        .await?
+        .context("channel disappeared after creation")
+}
+
 pub async fn create_channel(
     pool: &SqlitePool,
     number: &str,
@@ -1158,6 +1182,45 @@ pub async fn guide_items(
             kind: row.get("kind"),
         })
         .collect())
+}
+
+/// Guide/EPG view: merge program segments that are split only by short
+/// mid-roll breaks, so the displayed runtime matches the media runtime while
+/// the playout timeline still contains the breaks.
+pub async fn guide_blocks(
+    pool: &SqlitePool,
+    channel_id: &str,
+    from_ms: i64,
+    to_ms: i64,
+) -> Result<Vec<ChannelItem>> {
+    let items = guide_items(pool, channel_id, from_ms, to_ms).await?;
+    Ok(merge_guide_blocks(items))
+}
+
+fn merge_guide_blocks(items: Vec<ChannelItem>) -> Vec<ChannelItem> {
+    const MAX_BREAK_GAP_MS: i64 = 5 * 60_000;
+    let mut merged: Vec<ChannelItem> = Vec::new();
+    for item in items {
+        if item.kind == "program"
+            && let Some(position) = merged.iter().rposition(|entry| entry.kind == "program")
+        {
+            let can_merge = {
+                let previous = &merged[position];
+                previous.media_id == item.media_id
+                    && item.start_ms.saturating_sub(previous.end_ms) <= MAX_BREAK_GAP_MS
+            };
+            if can_merge {
+                // Drop the short break items between the two program segments.
+                merged.truncate(position + 1);
+                let previous = &mut merged[position];
+                previous.end_ms = item.end_ms;
+                previous.out_ms = item.out_ms;
+                continue;
+            }
+        }
+        merged.push(item);
+    }
+    merged
 }
 
 pub async fn replace_chapters(
@@ -1629,14 +1692,19 @@ pub async fn trim_precache_queue(pool: &SqlitePool, keep: i64) -> Result<u64> {
 pub async fn next_queued_precache(
     pool: &SqlitePool,
     not_before_ms: i64,
+    allow_proxy: bool,
 ) -> Result<Option<PrecacheEntry>> {
-    let row = sqlx::query(
+    let sql = if allow_proxy {
         "SELECT * FROM precache_entries WHERE status = 'queued' AND deadline_ms >= ? \
-         ORDER BY deadline_ms, start_ms LIMIT 1",
-    )
-    .bind(not_before_ms)
-    .fetch_optional(pool)
-    .await?;
+         ORDER BY deadline_ms, start_ms LIMIT 1"
+    } else {
+        "SELECT * FROM precache_entries WHERE status = 'queued' AND mode != 'proxy' AND deadline_ms >= ? \
+         ORDER BY deadline_ms, start_ms LIMIT 1"
+    };
+    let row = sqlx::query(sql)
+        .bind(not_before_ms)
+        .fetch_optional(pool)
+        .await?;
     Ok(row.as_ref().map(precache_row))
 }
 
@@ -3039,6 +3107,14 @@ pub async fn channel_stream(pool: &SqlitePool, id: &str) -> Result<StreamSetting
         .stream)
 }
 
+pub async fn set_all_channel_encoders(pool: &SqlitePool, encoder: &str) -> Result<usize> {
+    let result = sqlx::query("UPDATE channels SET encoder = ?")
+        .bind(encoder)
+        .execute(pool)
+        .await?;
+    Ok(result.rows_affected() as usize)
+}
+
 pub async fn set_channel_stream(
     pool: &SqlitePool,
     id: &str,
@@ -3323,6 +3399,66 @@ pub async fn cloud_metrics(pool: &SqlitePool) -> Result<CloudMetrics> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn guide_merges_program_segments_across_short_breaks() {
+        let item = |id: &str, kind: &str, start: i64, end: i64| ChannelItem {
+            media_id: id.into(),
+            title: id.into(),
+            start_ms: start,
+            end_ms: end,
+            in_ms: 0,
+            out_ms: Some(end - start),
+            kind: kind.into(),
+        };
+        let merged = merge_guide_blocks(vec![
+            item("movie", "program", 0, 30_000),
+            item("bumper", "filler", 30_000, 32_000),
+            item("movie", "program", 32_000, 62_000),
+            item("other", "program", 62_000, 80_000),
+        ]);
+        assert_eq!(merged.len(), 2);
+        assert_eq!(merged[0].media_id, "movie");
+        assert_eq!(merged[0].start_ms, 0);
+        assert_eq!(merged[0].end_ms, 62_000);
+        assert_eq!(merged[1].media_id, "other");
+    }
+
+    #[tokio::test]
+    async fn precache_can_defer_proxy_jobs_while_live() {
+        let dir = std::env::temp_dir().join(format!("awesometv-db-test-{}", Uuid::new_v4()));
+        let pool = init(&dir).await.unwrap();
+        let now = now_ms();
+        for (media_id, mode, deadline) in [
+            ("proxy", "proxy", now + 1_000),
+            ("copy", "copy", now + 2_000),
+        ] {
+            sqlx::query(
+                "INSERT INTO precache_entries (media_id, source_path, source_size, source_mtime, mode, status, start_ms, created_ms, updated_ms, deadline_ms) VALUES (?, '/media/x', 10, 0, ?, 'queued', ?, ?, ?, ?)",
+            )
+            .bind(media_id)
+            .bind(mode)
+            .bind(now + 10_000)
+            .bind(now)
+            .bind(now)
+            .bind(deadline)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        let live = next_queued_precache(&pool, now, false)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(live.mode, "copy");
+        let idle = next_queued_precache(&pool, now, true)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(idle.mode, "proxy");
+        pool.close().await;
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     #[tokio::test]
     async fn cloud_root_can_be_disabled_and_renamed() {
