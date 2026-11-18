@@ -38,12 +38,36 @@ The release workflow:
   - Cast uses the Default Media Receiver until an App ID is registered.
   - Public streams are capped at the configured bitrate.
 
+## Deploy a release
+
+Run the published server binary inside the current runtime image, so FFmpeg and
+the SQLite client match the container:
+
+```bash
+VERSION=v0.1.2
+gh release download "$VERSION" \
+  --pattern channelloom-server-linux-amd64 \
+  --dir /tmp/channelloom-release --clobber
+cid=$(docker create --name channelloom-deploy awesome-tv-awesometv:latest)
+docker cp /tmp/channelloom-release/channelloom-server-linux-amd64 \
+  "$cid":/usr/local/bin/awesometv-server
+docker commit "$cid" "awesome-tv-awesometv:release-$VERSION"
+docker rm "$cid"
+docker tag "awesome-tv-awesometv:release-$VERSION" awesome-tv-awesometv:latest
+docker compose up -d --force-recreate --no-build
+```
+
+Then verify `healthz`, a channel playlist, one segment, and the guide. Rebasing on
+the runtime image means a release does not rebuild FFmpeg; rebuild the image from
+the tag (`docker compose build`) when the runtime packages need to change.
+
 ## Verify
 
 ```bash
-gh release view v0.1.0
-gh release download v0.1.0 --dir /tmp/channelloom-release
+gh release view v0.1.2
+gh release download v0.1.2 --dir /tmp/channelloom-release
 ```
 
-Check that the server binary runs `--help` or starts with a test data directory,
-the APK is installable, and the `.deb` installs on a Linux desktop.
+Check that the server binary starts (it has no `--help` flag; run it with a test
+data directory and port), the APK is installable, and the `.deb` installs on a
+Linux desktop.

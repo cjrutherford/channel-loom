@@ -1,7 +1,10 @@
 # Status and remaining work
 
-Date: 2026-11-16
+Date: 2026-11-17
 Running: `https://atv.christopherrutherford.net` (public), `http://192.168.1.153:8409` (LAN), `http://100.120.253.100:8409` (Tailscale), `https://nirvana.tail5a4a0.ts.net:8447` (Tailscale HTTPS). Public TLS terminates in SWAG on the VPS; config lives in `deploy/nginx/swag/`.
+
+Release: **v0.1.2**. Production runs the published `channelloom-server-linux-amd64`
+asset (`awesome-tv-awesometv:release-v0.1.2`) rather than a working-tree build.
 
 ## Plan coverage
 
