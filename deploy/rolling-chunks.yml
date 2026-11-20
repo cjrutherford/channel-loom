@@ -1,0 +1,5 @@
+services:
+  awesometv:
+    image: awesometv:rolling-window-20261120
+    environment:
+      AWESOMETV_PRECACHE_ROLLING_CHUNKS: "false"

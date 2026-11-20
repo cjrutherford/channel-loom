@@ -18,6 +18,25 @@ pub struct Target { pub airing: Airing, pub source_start_ms: i64, pub source_end
 #[derive(Clone, Debug)]
 pub struct Request { pub source: SourceIdentity, pub start_ms: i64, pub end_ms: i64 }
 
+/// Real encodes carry small timestamp gaps (dropped or variable-rate frames);
+/// the stream copy keeps them and the publisher holds the last frame across
+/// them. A gap beyond this suggests lost data, and the chunk is rejected.
+const MAX_PACKET_GAP_MS: i64 = 1_000;
+/// A remux may legitimately end this far before the requested end when the
+/// source's real duration is shorter than its catalogued runtime. The manifest
+/// records the real end, and the planner ignores a trailing gap this small.
+const END_TOLERANCE_MS: i64 = 2_000;
+/// Failure backoff doubles per consecutive failure of a source, up to this cap.
+const MAX_BACKOFF_MS: i64 = 30 * 60_000;
+/// The worker fills only coverage that airs within this window, plus the head
+/// of each channel's next programme. One serial worker on a slow share cannot
+/// fill whole programmes for every channel; this bound keeps every channel a
+/// little ahead instead of a few channels far ahead.
+const LOOKAHEAD_MS: i64 = 10 * 60_000;
+/// A source that keeps failing (usually a remux timeout on a high-bitrate file)
+/// is retried with halved chunks, down to this floor.
+const MIN_RETRY_CHUNK_MS: i64 = 60_000;
+
 /// Current, next, and conditional third targets; each interval is capped to its airing.
 pub fn targets(rows: &[Airing], now: i64) -> Vec<Target> {
     let mut channels: BTreeMap<&str, Vec<&Airing>> = BTreeMap::new();
@@ -153,6 +172,18 @@ impl ChunkIndex {
         entry.leases += 1;
         Some(ChunkLease { state: self.state.clone(), manifest_path: entry.manifest_path.clone(), path, local_seek, source_coverage_end: entry.manifest.source_end_ms })
     }
+    /// Source identities recorded by indexed manifests, newest mtime first per path.
+    /// Lets a restarted process recognise cached sources whose origin is offline.
+    pub fn indexed_identities(&self) -> Vec<SourceIdentity> {
+        let entries = self.state.lock().unwrap();
+        let mut newest: std::collections::HashMap<&str, &Manifest> = std::collections::HashMap::new();
+        for entry in entries.iter().filter(|e| !e.deleting) {
+            let m = &entry.manifest;
+            let slot = newest.entry(m.source_path.as_str()).or_insert(m);
+            if m.source_mtime > slot.source_mtime { *slot = m; }
+        }
+        newest.values().map(|m| SourceIdentity::new(m.source_path.clone(), m.source_size, m.source_mtime)).collect()
+    }
     /// Rejects gaps and stale identities; does not imply that the range is leased.
     pub fn covers(&self, identity: &SourceIdentity, mut start: i64, end: i64) -> bool {
         if end <= start { return false; }
@@ -249,15 +280,54 @@ pub struct WorkerControl<B> {
     pub cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
     pub chunk_ms: i64,
     failures: std::sync::Mutex<Vec<(Request, i64)>>,
+    strikes: std::sync::Mutex<std::collections::HashMap<String, u32>>,
     active: std::sync::Mutex<()>,
 }
 impl<B> WorkerControl<B> {
     pub fn new(budget: B, directory: PathBuf, max_bytes: u64, timeout: std::time::Duration, cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>) -> Self {
-        Self { budget, directory, max_bytes, timeout, cancelled, chunk_ms: CHUNK, failures: Default::default(), active: Default::default() }
+        Self { budget, directory, max_bytes, timeout, cancelled, chunk_ms: CHUNK, failures: Default::default(), strikes: Default::default(), active: Default::default() }
     }
 }
 #[derive(Debug, PartialEq, Eq)]
 pub enum TickOutcome { Idle, Completed, Failed }
+/// Missing coverage only, earliest deadline first across all channels. A gap's
+/// deadline is the wall time playback reaches it, so an uncovered head precedes
+/// every extension and a next programme's head is ordered by its air time.
+/// Planning from verified coverage (not a grid anchored at the moving playhead)
+/// makes covered heads extend sequentially instead of being re-cut each tick.
+fn missing_requests(targets: &[Target], index: &ChunkIndex, chunk: i64, now: i64) -> Vec<Request> {
+    let mut pending: Vec<(i64, String, Request)> = Vec::new();
+    for t in targets {
+        let (start, end) = (t.source_start_ms, t.source_end_ms);
+        let mut cursor = start;
+        let mut gaps = Vec::new();
+        for (a, b) in index.verified_ranges(&t.airing.source, start, end) {
+            if a > cursor { gaps.push((cursor, a)); }
+            cursor = cursor.max(b);
+        }
+        if end - cursor >= END_TOLERANCE_MS.min(chunk) { gaps.push((cursor, end)); }
+        for (a, b) in gaps {
+            let mut s = a;
+            while s < b {
+                let e = (s + chunk).min(b);
+                let deadline = t.airing.start_ms.saturating_add(s.saturating_sub(t.airing.in_ms));
+                let next_head = t.tier > 0 && s < t.airing.in_ms.saturating_add(LOOKAHEAD_MS);
+                if deadline > now.saturating_add(LOOKAHEAD_MS) && !next_head { break; }
+                pending.push((deadline, t.airing.channel_id.clone(), Request { source: t.airing.source.clone(), start_ms: s, end_ms: e }));
+                s = e;
+            }
+        }
+    }
+    pending.sort_by(|x, y| (x.0, &x.1).cmp(&(y.0, &y.1)));
+    let mut out: Vec<Request> = Vec::new();
+    for (_, _, r) in pending {
+        // The same source may air on two channels; never cut one interval twice.
+        if out.iter().any(|o| o.source == r.source && o.start_ms < r.end_ms && r.start_ms < o.end_ms) { continue; }
+        out.push(r);
+    }
+    out
+}
+
 pub fn rolling_worker_tick<B: ChunkBudget>(schedule_snapshot: &[Airing], now: i64, index: &ChunkIndex, control: &WorkerControl<B>) -> TickOutcome {
     let Ok(_active) = control.active.try_lock() else { return TickOutcome::Idle };
     if control.cancelled.load(std::sync::atomic::Ordering::Relaxed) || control.chunk_ms <= 0 || control.chunk_ms > CHUNK { return TickOutcome::Idle; }
@@ -265,16 +335,28 @@ pub fn rolling_worker_tick<B: ChunkBudget>(schedule_snapshot: &[Airing], now: i6
     index.expire(&required, &control.budget);
     let mut failures = control.failures.lock().unwrap();
     failures.retain(|(_, until)| *until > now);
-    let candidate = requests_with_chunk(&required, control.chunk_ms).into_iter().find(|r| {
-        !index.covers(&r.source, r.start_ms, r.end_ms) && !failures.iter().any(|(old, _)| old.source == r.source)
+    let candidate = missing_requests(&required, index, control.chunk_ms, now).into_iter().find(|r| {
+        !failures.iter().any(|(old, _)| old.source == r.source)
     });
     drop(failures);
-    let Some(request) = candidate else { return TickOutcome::Idle };
-    if write_chunk_controlled(&request, index, &control.directory, &control.budget, control.max_bytes, control.timeout, &control.cancelled).is_some() { TickOutcome::Completed }
+    let Some(mut request) = candidate else { return TickOutcome::Idle };
+    let prior = control.strikes.lock().unwrap().get(&request.source.path).copied().unwrap_or(0);
+    if prior > 0 {
+        let shrunk = (control.chunk_ms >> prior.min(8)).max(MIN_RETRY_CHUNK_MS.min(control.chunk_ms));
+        request.end_ms = request.end_ms.min(request.start_ms.saturating_add(shrunk));
+    }
+    let started = std::time::Instant::now();
+    if let Some(manifest) = write_chunk_controlled(&request, index, &control.directory, &control.budget, control.max_bytes, control.timeout, &control.cancelled) {
+        control.strikes.lock().unwrap().remove(&request.source.path);
+        tracing::info!(source = %request.source.path, start_ms = manifest.source_start_ms, end_ms = manifest.source_end_ms, bytes = manifest.payload_bytes, elapsed_ms = started.elapsed().as_millis() as u64, "rolling chunk written");
+        TickOutcome::Completed
+    }
     else {
         if !control.cancelled.load(std::sync::atomic::Ordering::Relaxed) {
-            tracing::warn!(source = %request.source.path, "rolling chunk unavailable; using source fallback, whole-copy job suppressed; retry in 60 seconds");
-            control.failures.lock().unwrap().push((request, now.saturating_add(60_000)));
+            let strikes = { let mut m = control.strikes.lock().unwrap(); let n = m.entry(request.source.path.clone()).or_insert(0); *n = n.saturating_add(1); *n };
+            let backoff = 60_000i64.saturating_mul(1i64 << strikes.saturating_sub(1).min(5)).min(MAX_BACKOFF_MS);
+            tracing::warn!(source = %request.source.path, strikes, backoff_ms = backoff, "rolling chunk unavailable; using source fallback, whole-copy job suppressed");
+            control.failures.lock().unwrap().push((request, now.saturating_add(backoff)));
         }
         TickOutcome::Failed
     }
@@ -310,6 +392,21 @@ pub fn write_chunk<B: ChunkBudget>(request: &Request, directory: &Path, budget: 
     let index = ChunkIndex::open(directory).ok()?;
     write_chunk_controlled(request, &index, directory, budget, max_bytes, timeout, &std::sync::atomic::AtomicBool::new(false))
 }
+/// Log a failed remux with exit status/signal and a bounded (~2KB) tail of ffmpeg stderr.
+fn warn_remux_failure(request: &Request, status: &std::process::ExitStatus, stderr_path: &Path) {
+    use std::io::{Read, Seek, SeekFrom};
+    #[cfg(unix)] let signal = std::os::unix::process::ExitStatusExt::signal(status);
+    #[cfg(not(unix))] let signal: Option<i32> = None;
+    let mut tail = String::new();
+    if let Ok(mut file) = std::fs::File::open(stderr_path) {
+        let len = file.metadata().map(|m| m.len()).unwrap_or(0);
+        let _ = file.seek(SeekFrom::Start(len.saturating_sub(2048)));
+        let mut bytes = Vec::new();
+        let _ = file.take(2048).read_to_end(&mut bytes);
+        tail = String::from_utf8_lossy(&bytes).into_owned();
+    }
+    tracing::warn!(source=%request.source.path, start_ms=request.start_ms, end_ms=request.end_ms, status=%status, signal=?signal, stderr_tail=%tail.trim(), "chunk remux failed");
+}
 fn write_chunk_controlled<B: ChunkBudget>(request: &Request, index: &ChunkIndex, directory: &Path, budget: &B, max_bytes: u64, timeout: std::time::Duration, cancelled: &std::sync::atomic::AtomicBool) -> Option<Manifest> {
     use std::process::{Command, Stdio};
     use std::time::Instant;
@@ -324,18 +421,20 @@ fn write_chunk_controlled<B: ChunkBudget>(request: &Request, index: &ChunkIndex,
     let paths = vec![temporary.clone(), directory.join(&published), metadata_tmp.clone(), metadata_final.clone(), directory.join(format!(".{id}.probe")), directory.join(format!(".{id}.source")), directory.join(format!(".{id}.format"))];
     let total_cap = max_bytes.checked_add(8_000_000 + 65_536 + 1_024 + 65_536)?;
     let mut guard = budget.reserve(request, &paths, total_cap)?;
+    let stderr_path = directory.join(format!(".{id}.stderr"));
+    macro_rules! bail { ($($a:tt)*) => {{ tracing::warn!(source=%request.source.path, start_ms=request.start_ms, end_ms=request.end_ms, "chunk validation failed: {}", format!($($a)*)); return None; }} }
     let mut run = || -> Option<Manifest> {
         // All streams are mapped: unsupported container/codec combinations fail.
         // ffmpeg's file size limit bounds output; timeout kills and reaps child.
         let mut command = Command::new("ffmpeg");
         command.args(["-nostdin", "-v", "error", "-ss", &format!("{:.3}",request.start_ms as f64/1000.0), "-copyts", "-i"]).arg(&request.source.path)
             .args(["-t", &format!("{:.3}",request.end_ms as f64/1000.0), "-map", "0", "-c", "copy", "-avoid_negative_ts", "disabled", "-fs", &max_bytes.to_string(), "-f", "matroska", "-y"]).arg(&temporary)
-            .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+            .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::from(std::fs::File::create(&stderr_path).ok()?));
         limit_child_file_size(&mut command, max_bytes).ok()?;
         let mut child = command.spawn().ok()?;
         let deadline = Instant::now().checked_add(timeout)?;
-        loop { match child.try_wait() { Ok(Some(status)) => { if !status.success() { return None; } break; }, Ok(None) if !cancelled.load(std::sync::atomic::Ordering::Relaxed) && Instant::now() < deadline => std::thread::sleep(std::time::Duration::from_millis(20)), _ => { let _ = child.kill(); let _ = child.wait(); return None; } } }
-        if std::fs::metadata(&temporary).ok()?.len() >= max_bytes { return None; }
+        loop { match child.try_wait() { Ok(Some(status)) => { if !status.success() { warn_remux_failure(request, &status, &stderr_path); return None; } break; }, Ok(None) if !cancelled.load(std::sync::atomic::Ordering::Relaxed) && Instant::now() < deadline => std::thread::sleep(std::time::Duration::from_millis(20)), _ => { let _ = child.kill(); let _ = child.wait(); tracing::warn!(source=%request.source.path, start_ms=request.start_ms, "chunk remux cancelled or timed out"); return None; } } }
+        if std::fs::metadata(&temporary).ok()?.len() >= max_bytes { bail!("remux output reached max_bytes {max_bytes}"); }
         // ffprobe output is redirected to a bounded local file, never an unbounded pipe.
         let probe = directory.join(format!(".{id}.probe"));
         let result = (|| -> Option<Manifest> {
@@ -359,17 +458,19 @@ fn write_chunk_controlled<B: ChunkBudget>(request: &Request, index: &ChunkIndex,
             // Audio-only and missing timing explicitly fall back. Require the first
             // packet to be a keyframe and contiguous presentation timestamps.
             let first = *packets.first()?;
-            if !first.2 || first.0 < 0 || first.0 > request.start_ms { return None; }
+            if !first.2 || first.0 < 0 || first.0 > request.start_ms { bail!("first packet pts={} keyframe={} requested_start={}", first.0, first.2, request.start_ms); }
             packets.sort_by_key(|p| p.0);
             let mut end = first.0;
-            for (pts, dur, _) in packets { if pts > end + 2 { return None; } end = end.max(pts.checked_add(dur)?); }
-            if end < request.end_ms { return None; }
+            for (pts, dur, _) in packets { if pts > end + MAX_PACKET_GAP_MS { bail!("packet gap: pts={pts} after end={end}"); } end = end.max(pts.checked_add(dur)?); }
+            if end < request.end_ms - END_TOLERANCE_MS.min((request.end_ms - request.start_ms) / 4) { bail!("output ends at {end}ms, short of {}ms", request.end_ms); }
+            let end = end.min(request.end_ms);
             // Confirm the retained keyframe matches the source, rather than assuming
             // a remuxer preserved timestamps for every input/container combination.
             let source_probe = directory.join(format!(".{id}.source"));
             let source_result = (|| -> Option<i64> {
                 let output = std::fs::File::create(&source_probe).ok()?;
-                let interval = format!("{:.3}%+0.1",request.start_ms as f64/1000.0);
+                // Probe at the chunk's retained keyframe: ffmpeg may seek to the keyframe before an exact-keyframe start.
+                let interval = format!("{:.3}%+0.1",first.0 as f64/1000.0);
                 let mut command = Command::new("ffprobe");
                 command.args(["-v","error","-select_streams","v:0","-read_intervals",&interval,"-show_entries","packet=pts_time,flags","-of","csv=p=0"]).arg(&request.source.path).stdout(Stdio::from(output)).stderr(Stdio::null());
                 limit_child_file_size(&mut command, 65_536).ok()?;
@@ -383,7 +484,7 @@ fn write_chunk_controlled<B: ChunkBudget>(request: &Request, index: &ChunkIndex,
                 Some((pts * 1000.0).round() as i64)
             })();
             let _ = std::fs::remove_file(source_probe);
-            if source_result? != first.0 { return None; }
+            let source_pts = source_result; if source_pts != Some(first.0) { bail!("source keyframe {:?} != chunk first pts {}", source_pts, first.0); }
             // The output container's start time defines FFmpeg's default relative seek origin.
             let format_probe = directory.join(format!(".{id}.format"));
             let format_result = (|| -> Option<i64> {
@@ -399,10 +500,11 @@ fn write_chunk_controlled<B: ChunkBudget>(request: &Request, index: &ChunkIndex,
             })();
             let _ = std::fs::remove_file(format_probe);
             let format_start = format_result?;
-            if format_start > first.0 || cancelled.load(std::sync::atomic::Ordering::Relaxed) || !matches_source() { return None; }
+            if format_start > first.0 { bail!("format start {format_start} > first pts {}", first.0); }
+            if cancelled.load(std::sync::atomic::Ordering::Relaxed) || !matches_source() { return None; }
             let payload = std::fs::symlink_metadata(&temporary).ok()?;
             if !payload.file_type().is_file() || payload.len() == 0 || payload.len() >= max_bytes { return None; }
-            let manifest = Manifest { version:2, payload_bytes:payload.len(), source_path:request.source.path.clone(), source_size:request.source.size, source_mtime:request.source.mtime, chunk_file:published.clone(), source_start_ms:first.0, source_end_ms:request.end_ms, local_start_ms:first.0.checked_sub(format_start)? };
+            let manifest = Manifest { version:2, payload_bytes:payload.len(), source_path:request.source.path.clone(), source_size:request.source.size, source_mtime:request.source.mtime, chunk_file:published.clone(), source_start_ms:first.0, source_end_ms:end, local_start_ms:first.0.checked_sub(format_start)? };
             let metadata = serde_json::to_vec(&manifest).ok()?;
             if metadata.len() > 65_536 { return None; }
             std::fs::write(&metadata_tmp, metadata).ok()?;
@@ -419,6 +521,7 @@ fn write_chunk_controlled<B: ChunkBudget>(request: &Request, index: &ChunkIndex,
         result
     };
     let result = run();
+    let _ = std::fs::remove_file(stderr_path);
     let _ = std::fs::remove_file(temporary);
     let _ = std::fs::remove_file(metadata_tmp);
     result
@@ -528,6 +631,34 @@ mod tests {
         let meta=std::fs::metadata(&audio).unwrap();
         let audio_req=Request { source:SourceIdentity::new(audio.to_str().unwrap(),meta.len() as i64,super::super::metadata_mtime(&meta)),start_ms:1000,end_ms:3000 };
         assert!(write_chunk(&audio_req,&dir,&Budget,10_000_000,std::time::Duration::from_secs(15)).is_none());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test] fn missing_requests_extend_covered_heads_earliest_deadline_first() {
+        let dir=std::env::temp_dir().join(format!("atv-edf-{}",uuid::Uuid::new_v4()));
+        std::fs::create_dir(&dir).unwrap();
+        let a=SourceIdentity::new("/never-stat/a",10,2);
+        let b=SourceIdentity::new("/never-stat/b",10,2);
+        // Channel A's head was cut last tick at playhead 1_000_000 for 300 s.
+        std::fs::write(dir.join("a1.mkv"),b"payload").unwrap();
+        let m=Manifest { version:2,payload_bytes:7,source_path:a.path.clone(),source_size:10,source_mtime:2,chunk_file:"a1.mkv".into(),source_start_ms:1_000_000,source_end_ms:1_300_000,local_start_ms:0 };
+        std::fs::write(dir.join("a1.json"),serde_json::to_vec(&m).unwrap()).unwrap();
+        let index=ChunkIndex::open(&dir).unwrap();
+        let air=|ch:&str,src:&SourceIdentity,start:i64,end:i64,in_ms:i64| Airing { airing_id:ch.into(), channel_id:ch.into(), media_id:ch.into(), source:src.clone(), in_ms, start_ms:start, end_ms:end };
+        let now=10_060_000;
+        // A: playhead advanced 60 s into source (1_060_000). B: head uncovered.
+        let c=SourceIdentity::new("/never-stat/c",10,2);
+        let rows=vec![air("a",&a,9_000_000,12_000_000,0), air("b",&b,10_000_000,13_000_000,0), air("b",&c,13_000_000,16_000_000,0)];
+        let reqs=missing_requests(&targets(&rows,now),&index,300_000,now);
+        // Lookahead: nothing that airs more than 10 min out, except the next head.
+        assert!(reqs.iter().all(|r| r.source!=a || r.start_ms<1_660_000), "current programme capped at lookahead");
+        let next: Vec<_>=reqs.iter().filter(|r| r.source==c).map(|r| (r.start_ms,r.end_ms)).collect();
+        assert_eq!(next, vec![(0,300_000),(300_000,600_000)], "next programme head only");
+        assert!(reqs.iter().position(|r| r.source==c).unwrap() > reqs.iter().position(|r| r.source==a).unwrap(), "next head after current window");
+        assert_eq!((reqs[0].source.path.as_str(),reqs[0].start_ms),("/never-stat/b",60_000), "uncovered head first");
+        let ext=reqs.iter().find(|r| r.source==a).unwrap();
+        assert_eq!((ext.start_ms,ext.end_ms),(1_300_000,1_600_000), "covered head extends from its end, not the playhead");
+        assert!(reqs.iter().all(|r| !(r.source==a && r.start_ms<1_300_000)));
         std::fs::remove_dir_all(dir).unwrap();
     }
 

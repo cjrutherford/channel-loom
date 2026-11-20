@@ -610,6 +610,7 @@ impl Precache {
         if let Err(error) = self.initialize_index().await { tracing::warn!(%error, "chunk accounting unavailable"); return; }
         let directory = match std::fs::canonicalize(self.dir.join("chunks")) { Ok(path) => path, Err(_) => return };
         let index = match self.shared_chunk_index().await { Ok(Some(index)) => index, Ok(None) => return, Err(error) => { tracing::warn!(%error, "chunk index unavailable"); return; } };
+        self.seed_verified_sources(&index).await;
         let budget = SharedChunkBudget { index: self.index.clone(), admission: self.eviction_lock.clone(), directory: directory.clone(), floor: self.free_space_floor };
         let control = Arc::new(chunks::WorkerControl::new(budget, directory, 1_000_000_000, Duration::from_secs(120), self.shutdown.clone()));
         while !self.shutdown.load(Ordering::Relaxed) {
@@ -619,7 +620,12 @@ impl Precache {
                     self.publish_verified_sources(&snapshot);
                     let index = index.clone();
                     let control = control.clone();
-                    if tokio::time::timeout(Duration::from_secs(125), tokio::task::spawn_blocking(move || chunks::rolling_worker_tick(&snapshot, now, &index, &control))).await.is_err() { tracing::warn!("chunk worker did not retire; stopping rolling loop"); return; }
+                    match tokio::time::timeout(Duration::from_secs(125), tokio::task::spawn_blocking(move || chunks::rolling_worker_tick(&snapshot, now, &index, &control))).await {
+                        Err(_) => { tracing::warn!("chunk worker did not retire; stopping rolling loop"); return; }
+                        // More coverage may be missing: plan again without idling.
+                        Ok(Ok(chunks::TickOutcome::Completed)) => continue,
+                        Ok(_) => {}
+                    }
                 }
                 Err(error) => tracing::warn!(%error, "rolling schedule unavailable"),
             }
@@ -646,6 +652,35 @@ impl Precache {
         for a in snapshot {
             sources.insert((a.media_id.clone(), a.source.path.clone()), a.source.clone());
         }
+    }
+
+    /// Verified identities live in memory, so a restart with an offline origin
+    /// would forget them. Manifests on disk record the identity they were cut
+    /// from; seed from them without overriding anything verified live. The
+    /// snapshot still only admits airings whose slot has not ended.
+    async fn seed_verified_sources(&self, index: &chunks::ChunkIndex) {
+        let mut seeded = 0usize;
+        for identity in index.indexed_identities() {
+            let ids: Vec<String> = match sqlx::query_scalar("SELECT id FROM media_items WHERE path = ?").bind(&identity.path).fetch_all(&self.pool).await {
+                Ok(ids) => ids,
+                Err(error) => { tracing::warn!(%error, "chunk identity seed lookup failed"); continue; }
+            };
+            let mut sources = self.verified_sources.lock().unwrap();
+            for id in ids {
+                if let std::collections::hash_map::Entry::Vacant(slot) = sources.entry((id, identity.path.clone())) {
+                    slot.insert(identity.clone());
+                    seeded += 1;
+                }
+            }
+        }
+        if seeded > 0 { tracing::info!(seeded, "seeded verified sources from chunk manifests"); }
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn test_seed_verified_sources(&self) -> Result<()> {
+        let index = self.shared_chunk_index().await?.context("rolling enabled")?;
+        self.seed_verified_sources(&index).await;
+        Ok(())
     }
 
     pub(crate) fn verified_rolling_source(&self, media_id: &str, path: &str) -> Option<SourceIdentity> {
@@ -2421,6 +2456,20 @@ mod tests {
         let offline = on.rolling_snapshot(1).await.unwrap();
         assert_eq!(offline.len(), 1, "a temporarily unavailable source must retain its protected window");
         assert_eq!(offline[0].source, snapshot[0].source);
+        // A restarted process has no in-memory identity; manifests restore it,
+        // but only for airings whose slot has not ended.
+        let chunk_dir = root.join("cache/chunks"); std::fs::create_dir_all(&chunk_dir).unwrap();
+        std::fs::write(chunk_dir.join("restart.mkv"), b"payload").unwrap();
+        let manifest = chunks::Manifest { version: 2, payload_bytes: 7, source_path: snapshot[0].source.path.clone(), source_size: snapshot[0].source.size,
+            source_mtime: snapshot[0].source.mtime, chunk_file: "restart.mkv".into(), source_start_ms: 0, source_end_ms: 10_000, local_start_ms: 0 };
+        std::fs::write(chunk_dir.join("restart.json"), serde_json::to_vec(&manifest).unwrap()).unwrap();
+        let restarted = Precache::new(&config, pool.clone()).isolated_from_host_readers();
+        assert!(restarted.rolling_snapshot(1).await.unwrap().is_empty(), "no identity before seeding");
+        restarted.test_seed_verified_sources().await.unwrap();
+        let resumed = restarted.rolling_snapshot(1).await.unwrap();
+        assert_eq!(resumed.len(), 1, "cached airing must survive a restart with its origin offline");
+        assert_eq!(resumed[0].source, snapshot[0].source);
+        assert!(restarted.rolling_snapshot(10_000).await.unwrap().is_empty(), "an ended slot is not retained");
         pool.close().await; std::fs::remove_dir_all(root).unwrap();
     }
 

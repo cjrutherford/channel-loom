@@ -3761,7 +3761,8 @@ mod auto_build_api_tests {
         let manifest = Manifest { version: 2, payload_bytes: 7, source_path: identity.path.clone(), source_size: identity.size, source_mtime: identity.mtime, chunk_file: "part.mkv".into(), source_start_ms: 600_000, source_end_ms: 1_000_000, local_start_ms: 0 };
         std::fs::write(chunks.join("part.json"), serde_json::to_vec(&manifest).unwrap()).unwrap();
         std::fs::remove_file(source).unwrap();
-        assert!(precache.test_publish_rolling_snapshot(now).await.unwrap().is_empty());
+        // Cached chunks keep a missing origin's current airing (aired to slot end).
+        assert_eq!(precache.test_publish_rolling_snapshot(now).await.unwrap().len(), 1);
         let mut socket = tokio::net::TcpStream::connect(addr).await.unwrap();
         socket.write_all(b"GET /api/v1/precache/coverage HTTP/1.1\r\nHost: localhost\r\nAuthorization: Basic Zml4dHVyZTpmaXh0dXJlLXBhc3N3b3Jk\r\nConnection: close\r\n\r\n").await.unwrap();
         let mut response = Vec::new(); socket.read_to_end(&mut response).await.unwrap();
