@@ -58,6 +58,11 @@ pub struct GoogleClient {
 }
 
 impl GoogleClient {
+    #[cfg(test)]
+    pub(crate) fn for_test(base: String, timeout: Duration) -> Self {
+        Self { agent: ureq::AgentBuilder::new().timeout(timeout).build(), api_base: base.clone(), token_url: base }
+    }
+
     pub fn new() -> Result<Self> {
         let api_base = std::env::var("GOOGLE_DRIVE_API_BASE")
             .ok()
@@ -123,7 +128,7 @@ impl GoogleClient {
             .agent
             .post(token_url)
             .send_form(form)
-            .map_err(|error| anyhow::anyhow!("Google token exchange failed: {error}"))?;
+            .map_err(|_| anyhow::anyhow!("Google token exchange failed"))?;
         let value: Value = response
             .into_json()
             .context("parse Google token response")?;
@@ -163,12 +168,13 @@ impl GoogleClient {
             .get("files")
             .and_then(|value| value.as_array())
             .cloned()
-            .unwrap_or_default();
+            .context("Google Drive response missing files")?;
         let mut entries = Vec::new();
         for file in files {
-            let Some(id) = file.get("id").and_then(|value| value.as_str()) else {
-                continue;
-            };
+            let id = file
+                .get("id")
+                .and_then(|value| value.as_str())
+                .context("Google Drive file missing id")?;
             let mime_type = file
                 .get("mimeType")
                 .and_then(|value| value.as_str())
@@ -261,7 +267,7 @@ impl GoogleClient {
             }
             let response = request
                 .call()
-                .map_err(|error| anyhow::anyhow!("Google {method} failed: {error}"))?;
+                .map_err(|_| anyhow::anyhow!("Google {method} failed"))?;
             let status = response.status();
             if (300..400).contains(&status) {
                 let location = response
@@ -285,7 +291,10 @@ impl GoogleClient {
             .get(url)
             .set("Authorization", &format!("Bearer {token}"))
             .call()
-            .map_err(|error| anyhow::anyhow!("Google Drive request failed: {error}"))?;
+            .map_err(|error| match error {
+                ureq::Error::Status(401, _) | ureq::Error::Status(403, _) => anyhow::anyhow!(crate::cloud::provider::AuthenticationError),
+                _ => anyhow::anyhow!("Google Drive request failed"),
+            })?;
         response.into_json().context("parse Google Drive response")
     }
 }
@@ -353,19 +362,20 @@ impl CloudProvider for GoogleClient {
 }
 
 fn validate_google_secret(auth_type: &str, secret: &str) -> Result<()> {
-    match auth_type {
-        "service_account" => {
-            let value: Value = serde_json::from_str(secret).context("service account JSON")?;
-            for key in ["client_email", "private_key"] {
-                if value.get(key).and_then(|value| value.as_str()).is_none() {
-                    bail!("service account JSON is missing {key}");
-                }
-            }
-        }
-        "access_token" | "oauth" => {}
-        other => bail!("unsupported Google auth type: {other}"),
+    parse_google_credentials(auth_type, secret).map(|_| ())
+}
+
+fn credential_field<'a>(value: &'a Value, key: &str) -> Result<&'a str> {
+    value.get(key).and_then(Value::as_str).filter(|v| !v.trim().is_empty())
+        .with_context(|| format!("credential {key} is required"))
+}
+
+fn credential_token_uri(value: &Value) -> Result<Option<String>> {
+    match value.get("token_uri") {
+        None => Ok(None),
+        Some(Value::String(uri)) => validate_https_endpoint(uri, "token_uri").map(Some),
+        Some(_) => bail!("token_uri must be a URL string"),
     }
-    Ok(())
 }
 
 fn parse_google_credentials(auth_type: &str, secret: &str) -> Result<GoogleCredentials> {
@@ -373,21 +383,9 @@ fn parse_google_credentials(auth_type: &str, secret: &str) -> Result<GoogleCrede
         "service_account" => {
             let value: Value = serde_json::from_str(secret).context("service account JSON")?;
             Ok(GoogleCredentials::ServiceAccount {
-                client_email: value
-                    .get("client_email")
-                    .and_then(|value| value.as_str())
-                    .context("service account client_email")?
-                    .to_string(),
-                private_key: value
-                    .get("private_key")
-                    .and_then(|value| value.as_str())
-                    .context("service account private_key")?
-                    .to_string(),
-                token_uri: value
-                    .get("token_uri")
-                    .and_then(|value| value.as_str())
-                    .map(|uri| validate_https_endpoint(uri, "token_uri"))
-                    .transpose()?,
+                client_email: credential_field(&value, "client_email")?.to_string(),
+                private_key: credential_field(&value, "private_key")?.to_string(),
+                token_uri: credential_token_uri(&value)?,
             })
         }
         "access_token" => Ok(GoogleCredentials::AccessToken {
@@ -396,26 +394,10 @@ fn parse_google_credentials(auth_type: &str, secret: &str) -> Result<GoogleCrede
         "oauth" => {
             let value: Value = serde_json::from_str(secret).context("OAuth JSON")?;
             Ok(GoogleCredentials::OAuth {
-                refresh_token: value
-                    .get("refresh_token")
-                    .and_then(|value| value.as_str())
-                    .context("OAuth refresh_token")?
-                    .to_string(),
-                client_id: value
-                    .get("client_id")
-                    .and_then(|value| value.as_str())
-                    .context("OAuth client_id")?
-                    .to_string(),
-                client_secret: value
-                    .get("client_secret")
-                    .and_then(|value| value.as_str())
-                    .context("OAuth client_secret")?
-                    .to_string(),
-                token_uri: value
-                    .get("token_uri")
-                    .and_then(|value| value.as_str())
-                    .map(|uri| validate_https_endpoint(uri, "token_uri"))
-                    .transpose()?,
+                refresh_token: credential_field(&value, "refresh_token")?.to_string(),
+                client_id: credential_field(&value, "client_id")?.to_string(),
+                client_secret: credential_field(&value, "client_secret")?.to_string(),
+                token_uri: credential_token_uri(&value)?,
             })
         }
         other => bail!("unsupported Google auth type: {other}"),
@@ -530,6 +512,47 @@ fn pem_to_der(pem: &str) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn http_pages_and_auth_error_are_sanitized() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let handle = std::thread::spawn(move || {
+            for body in [r#"{"files":[],"nextPageToken":"next"}"#, "secret-response"] {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut buffer = [0; 4096];
+                let _ = stream.read(&mut buffer);
+                let status = if body == "secret-response" {
+                    "401 Unauthorized"
+                } else {
+                    "200 OK"
+                };
+                write!(
+                    stream,
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .unwrap();
+            }
+        });
+        let client = GoogleClient {
+            agent: ureq::AgentBuilder::new()
+                .timeout(Duration::from_secs(1))
+                .build(),
+            api_base: base.clone(),
+            token_url: base.clone(),
+        };
+        let (_, next) = client.list_folder("secret-token", "folder", None).unwrap();
+        assert_eq!(next.as_deref(), Some("next"));
+        let error = client
+            .list_folder("secret-token", "folder", next.as_deref())
+            .unwrap_err();
+        assert!(error.is::<crate::cloud::provider::AuthenticationError>());
+        assert!(!error.to_string().contains("secret") && !error.to_string().contains(&base));
+        handle.join().unwrap();
+    }
 
     #[test]
     fn accepts_google_https_endpoints() {

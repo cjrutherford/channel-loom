@@ -105,10 +105,10 @@
 
   /* ---------- layout ---------- */
   .wrap { max-width: 1580px; margin: 0 auto; padding: 22px 26px 54px; }
-  .stage { display: grid; grid-template-columns: minmax(0, 1fr) 356px; gap: 18px; align-items: start; }
+  .stage { position: sticky; top: 0; z-index: 10; background: var(--ink); }
   .panel { border: 1px solid var(--line); background: linear-gradient(180deg, rgba(255,255,255,.025), transparent 46%), var(--panel); border-radius: 16px; }
   .player { position: relative; overflow: hidden; box-shadow: 0 26px 80px rgba(0,0,0,.5), 0 0 0 1px rgba(255,255,255,.02) inset; }
-  .screen { position: relative; background: #000; aspect-ratio: 16 / 9; overflow: hidden; }
+  .screen { position: relative; background: #000; aspect-ratio: 16 / 9; max-height: 45vh; overflow: hidden; }
   .screen video { display: block; width: 100%; height: 100%; object-fit: contain; background: #000; }
   .screen::after {
     content: ""; position: absolute; inset: 0; pointer-events: none;
@@ -225,9 +225,15 @@
   .section-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 14px; margin-bottom: 12px; }
   .eyebrow { font-family: var(--mono); font-size: 9px; letter-spacing: .2em; text-transform: uppercase; color: var(--signal); margin-bottom: 5px; }
   h2 { font-family: var(--display); font-size: 30px; letter-spacing: -.015em; margin: 0; font-weight: 700; }
+  #guideToggle { width: auto; padding: 0 12px; }
+  .guide-shell[hidden] { display: none; }
   .guide-shell { border: 1px solid var(--line); border-radius: 13px; overflow: hidden; background: var(--panel); }
   .guide-scroll { overflow-x: auto; scrollbar-width: thin; scrollbar-color: #2a333a transparent; }
   .guide-inner { min-width: 980px; }
+  .guide-inner:has(.guide-empty) { min-width: 0; }
+  .guide-label button { color: inherit; font: inherit; text-align: left; background: none; border: 0; padding: 4px; min-height: 36px; }
+  .retry { margin: 8px 2px; padding: 8px 14px; color: var(--paper); background: var(--panel-2); border: 1px solid var(--signal); border-radius: 8px; }
+  [hidden] { display: none !important; }
   .guide-ticks { display: grid; grid-template-columns: 150px minmax(0, 1fr); background: var(--ink-2); border-bottom: 1px solid var(--line-soft); position: sticky; top: 0; z-index: 2; }
   .guide-ticks .spacer { border-right: 1px solid var(--line-soft); }
   .ticks { display: grid; font-family: var(--mono); font-size: 9px; color: var(--dim); letter-spacing: .04em; }
@@ -251,7 +257,7 @@
   .guide-block .when { font-family: var(--mono); font-size: 8px; opacity: .62; margin-top: 1px; }
   .guide-now { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--red); z-index: 3; box-shadow: 0 0 8px rgba(255,107,122,.65); }
   .guide-now::before { content: ""; position: absolute; top: 0; left: -2.5px; width: 6px; height: 6px; border-radius: 99px; background: var(--red); }
-  .guide-empty { padding: 30px 18px; text-align: center; color: var(--dim); }
+  .guide-empty { padding: 30px 18px; text-align: center; color: #b4c1df; }
   .guide-skeleton { height: 48px; border-bottom: 1px solid var(--line-soft); background: linear-gradient(100deg, #0f1316 30%, #171d21 50%, #0f1316 70%); background-size: 200% 100%; animation: shimmer 1.5s infinite; }
 
   footer { border-top: 1px solid var(--line-soft); margin-top: 34px; padding: 15px 26px 22px; display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; color: var(--dim); font-family: var(--mono); font-size: 9px; letter-spacing: .12em; text-transform: uppercase; }
@@ -260,7 +266,7 @@
   footer a:hover { color: var(--signal); }
   .toast-wrap { position: fixed; right: 18px; bottom: 18px; z-index: 120; display: grid; gap: 8px; }
   .toast { background: var(--paper); color: var(--ink); border-radius: 9px; padding: 10px 13px; font-size: 12px; font-weight: 600; box-shadow: 0 14px 40px rgba(0,0,0,.5); max-width: 360px; animation: toast .25s var(--ease) both; }
-  .toast.err { background: var(--red); color: #fff; }
+  .toast.err { background: var(--red); color: #101820; }
   @keyframes toast { from { opacity: 0; transform: translateY(8px); } }
 
   @media (max-width: 1180px) {
@@ -285,7 +291,9 @@
     .channel-no { font-size: 44px; min-width: 42px; }
     .hero-title { font-size: clamp(25px, 8vw, 34px); }
     .hero-top { gap: 11px; }
-    .hero-actions { position: absolute; right: 12px; top: 12px; display: none; }
+    .hero-top { flex-wrap: wrap; }
+    .hero-copy { flex: 1; min-width: 0; }
+    .hero-actions { position: static; display: flex; }
     .timeline { margin-top: 10px; }
     .guide-inner { min-width: 860px; }
     .guide-ticks, .guide-row { grid-template-columns: 112px minmax(0, 1fr); }
@@ -293,7 +301,7 @@
     footer { padding: 13px 14px 18px; }
   }
   @media (prefers-reduced-motion: reduce) {
-    *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
+    *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; scroll-behavior: auto !important; }
   }
 </style>
 </head>
@@ -324,12 +332,13 @@
   <section class="stage">
     <div class="panel player">
       <div class="screen">
-        <video id="player" controls playsinline preload="metadata"></video>
+        <video id="player" aria-label="Live channel player" controls playsinline preload="metadata"></video>
         <div class="tuning" id="tuning">
           <div>
             <div class="tuning-mark" aria-hidden="true"></div>
             <div class="tuning-title" id="tuningTitle">Tuning in</div>
             <div class="tuning-sub" id="tuningSub">Tuning in…</div>
+            <button class="icon-btn" id="retryPlayback" hidden>Retry playback</button>
           </div>
         </div>
         <div class="buffer-overlay" id="bufferOverlay" hidden role="status" aria-live="polite">
@@ -390,16 +399,6 @@
       </div>
     </div>
 
-    <aside class="rail" aria-label="Live channels">
-      <div class="rail-head">
-        <h2 class="rail-title">Channels</h2>
-        <span class="rail-count" id="channelCount">—</span>
-      </div>
-      <div class="rail-list" id="rail">
-        <div class="rail-skeleton"></div><div class="rail-skeleton"></div><div class="rail-skeleton"></div>
-        <div class="rail-skeleton"></div><div class="rail-skeleton"></div><div class="rail-skeleton"></div>
-      </div>
-    </aside>
   </section>
 
   <section class="guide-section" id="guide">
@@ -408,10 +407,14 @@
         <div class="eyebrow">What's on</div>
         <h2>What's on</h2>
       </div>
-      <div class="mono tiny dim" id="guideRange"></div>
+      <div><span class="mono tiny dim" id="guideRange"></span> <button class="icon-btn" id="guideToggle" aria-expanded="true" aria-controls="guidePanel">Hide guide</button></div>
     </div>
-    <div class="guide-shell">
-      <div class="guide-scroll">
+    <div class="guide-shell" id="guidePanel">
+      <div id="channelStatus" role="status" aria-live="polite">Loading channels…</div>
+      <button class="retry" id="retryChannels" hidden>Retry channels</button>
+      <div id="guideStatus" role="status" aria-live="polite">Loading guide…</div>
+    <button class="retry" id="retryGuide" hidden>Retry guide</button>
+      <div class="guide-scroll" tabindex="0" role="region" aria-label="Program guide, scroll horizontally for later times">
         <div class="guide-inner" id="guideBody">
           <div class="guide-skeleton"></div><div class="guide-skeleton"></div><div class="guide-skeleton"></div>
           <div class="guide-skeleton"></div><div class="guide-skeleton"></div>
@@ -444,7 +447,10 @@ const state = {
   castReceiverId: 'CC1AD845',
   castBase: location.origin,
   castDevice: '',
-  castLoading: false
+  castLoading: false,
+  playout: null,
+  guide: null,
+  gate: null
 };
 
 function esc(value) {
@@ -460,10 +466,9 @@ function toast(text, error = false) {
 function fmtClock(ms) {
   return new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
-function progress(item) {
+function progress(item, at = Date.now()) {
   if (!item) return 0;
-  const now = Date.now();
-  return Math.max(0, Math.min(100, ((now - item.start_ms) / Math.max(1, item.end_ms - item.start_ms)) * 100));
+  return Math.max(0, Math.min(100, ((at - item.start_ms) / Math.max(1, item.end_ms - item.start_ms)) * 100));
 }
 function current() {
   return state.channels.find((channel) => channel.number === state.active) || null;
@@ -481,43 +486,111 @@ function writeCache(key, data) {
   try { localStorage.setItem(key, JSON.stringify({ at: Date.now(), data })); } catch {}
 }
 
-function renderRail() {
-  const rail = $('rail');
-  $('channelCount').textContent = state.channels.length ? `${state.channels.length} live` : '—';
-  if (!state.channels.length) {
-    rail.innerHTML = '<div class="guide-empty" style="grid-column:1/-1">No channels are live right now.</div>';
-    return;
-  }
-  rail.innerHTML = state.channels.map((channel) => `
-    <button class="rail-card ${channel.number === state.active ? 'active' : ''}" data-number="${esc(channel.number)}" aria-label="Watch ${esc(channel.name)}">
-      <span class="rail-no">${esc(channel.number)}</span>
-      <span class="rail-copy">
-        <span class="rail-name">${esc(channel.name)}</span>
-        <span class="rail-now">${esc(channel.now?.title || 'Off air')}</span>
-      </span>
-      <span class="rail-play" aria-hidden="true">${channel.number === state.active ? '●' : '▶'}</span>
-      <span class="rail-progress"><span style="width:${channel.now ? progress(channel.now) : 0}%"></span></span>
-    </button>`).join('');
-  rail.querySelectorAll('[data-number]').forEach((button) => {
-    button.addEventListener('click', () => selectChannel(button.dataset.number, true));
-  });
-}
 
 function renderNow() {
   const channel = current();
   if (!channel) return;
   $('channelNo').textContent = channel.number;
   $('channelName').textContent = channel.name;
-  $('nowTitle').textContent = channel.now?.title || 'Off air';
-  $('nextTitle').innerHTML = channel.next
-    ? `Next at <b>${fmtClock(channel.next.start_ms)}</b> · ${esc(channel.next.title)}`
-    : 'Live now';
-  $('startTime').textContent = channel.now ? fmtClock(channel.now.start_ms) : '--:--';
-  $('endTime').textContent = channel.now ? fmtClock(channel.now.end_ms) : '--:--';
-  $('progress').style.width = `${channel.now ? progress(channel.now) : 0}%`;
+  $('nowTitle').textContent = playoutLabel();
+  // Describe the program under the playhead (which trails wall clock by the
+  // live-sync cushion), not the one the wall clock says should be on air.
+  const t = playheadMs();
+  const row = state.guide?.find((entry) => String(entry.number) === String(channel.number));
+  const items = (row?.items || []).slice().sort((x, y) => x.start_ms - y.start_ms);
+  const contains = (item) => item && t >= item.start_ms && t < item.end_ms;
+  let cur = items.find(contains) || null;
+  let next = cur ? items.find((item) => item.start_ms >= cur.end_ms) || null : null;
+  if (!cur) {
+    if (contains(channel.now)) { cur = channel.now; next = channel.next || null; }
+    else if (contains(channel.next)) { cur = channel.next; next = null; }
+  }
+  $('nextTitle').innerHTML = next
+    ? `Scheduled: ${esc(cur?.title || 'Off air')} · Next at <b>${fmtClock(next.start_ms)}</b> · ${esc(next.title)}`
+    : `Scheduled: ${esc(cur?.title || 'Off air')}`;
+  $('startTime').textContent = cur ? fmtClock(cur.start_ms) : '--:--';
+  $('endTime').textContent = cur ? fmtClock(cur.end_ms) : '--:--';
+  $('progress').style.width = `${cur ? progress(cur, t) : 0}%`;
   document.title = `${channel.name} — ChannelLoom`;
   $('tuningTitle').textContent = channel.name;
-  $('tuningSub').textContent = channel.now?.title || 'Tuning in…';
+  if ($('retryPlayback').hidden) $('tuningSub').textContent = 'Preparing playback…';
+}
+
+// Identity comes only from a fragment containing the actual playhead and a
+// matching published segment. The schedule and the live edge are not clocks.
+function playheadFragment() {
+  const video = $('player');
+  const hls = state.hls;
+  const details = hls?.levels?.[hls.currentLevel]?.details;
+  const fragments = details?.fragments || [];
+  const time = video.currentTime;
+  const frag = fragments.find((f) => Number.isFinite(f.start) && Number.isFinite(f.duration) && time >= f.start && time < f.start + f.duration);
+  if (!frag) return null;
+  const pdt = typeof frag.programDateTime === 'number' ? frag.programDateTime : Date.parse(frag.rawProgramDateTime || '');
+  if (!Number.isFinite(pdt)) return null;
+  return { frag, pdt, time, timestamp: pdt + (time - frag.start) * 1000 };
+}
+
+// Wall-clock ms of the frame under the playhead; Date.now() only when no
+// playback position can be established.
+function playheadMs() {
+  const video = $('player');
+  const found = playheadFragment();
+  if (found) return found.timestamp;
+  if (!state.hls && video.currentTime > 0 && typeof video.getStartDate === 'function') {
+    const start = video.getStartDate()?.getTime();
+    if (Number.isFinite(start)) return start + video.currentTime * 1000;
+  }
+  return Date.now();
+}
+
+function playoutLabel() {
+  const status = state.playout;
+  if (!status || status.state === 'preparing') return 'Preparing';
+  const found = playheadFragment();
+  if (!found || !status.generation) return 'Playback identity unknown';
+  const { frag, pdt, timestamp } = found;
+  const segment = status.segments?.find((s) => String(s.sequence) === String(frag.sn) &&
+    Math.abs(s.start_ms - pdt) <= 2 && timestamp >= s.start_ms && timestamp < s.end_ms);
+  if (!segment) return 'Playback identity unknown';
+  if (segment.source === 'slate') {
+    if (!segment.fallback_reason || segment.fallback_reason === 'scheduled_gap') return 'Standby';
+    const reasons = { source_unavailable: 'source unavailable', encoder_stall: 'encoder stalled', early_eof: 'source ended early' };
+    const title = segment.scheduled_programme?.title || 'Programme';
+    const reason = reasons[segment.fallback_reason];
+    return `${title} — temporarily unavailable${reason ? ` (${reason})` : ''}`;
+  }
+  return segment.source === 'media' && segment.title ? segment.title : 'Playback identity unknown';
+}
+
+let playoutToken = 0;
+let playoutAbort = null;
+let playoutTimer = null;
+function startPlayoutPolling(channel) {
+  const token = ++playoutToken;
+  if (playoutAbort) playoutAbort.abort();
+  clearTimeout(playoutTimer);
+  state.playout = null;
+  if (!channel?.id) { state.playout = { state: 'unknown', segments: [] }; renderNow(); return; }
+  async function poll() {
+    const controller = new AbortController();
+    playoutAbort = controller;
+    const timeout = setTimeout(() => controller.abort(), 4000);
+    try {
+      const response = await fetch(`/api/v1/public/channels/${encodeURIComponent(channel.id)}/playout`, { cache: 'no-store', signal: controller.signal });
+      if (!response.ok) throw new Error('playout unavailable');
+      const status = await response.json();
+      if (token !== playoutToken || current()?.id !== channel.id || status.channel_id !== channel.id) return;
+      state.playout = status;
+    } catch {
+      if (token !== playoutToken) return;
+      state.playout = { state: 'unknown', segments: [] };
+    } finally {
+      clearTimeout(timeout);
+      if (token === playoutToken) { renderNow(); playoutTimer = setTimeout(poll, 2000); }
+    }
+  }
+  poll();
 }
 
 let hlsLoader = null;
@@ -528,7 +601,7 @@ function loadHls() {
       const script = document.createElement('script');
       script.src = 'https://cdn.jsdelivr.net/npm/hls.js@1';
       script.onload = resolve;
-      script.onerror = () => reject(new Error('player failed to load'));
+      script.onerror = () => { hlsLoader = null; script.remove(); reject(new Error('Player failed to load. Try again.')); };
       document.head.appendChild(script);
     });
   }
@@ -539,6 +612,11 @@ function showTuning(show) {
   $('tuning').hidden = !show;
 }
 
+const START_BUFFER_S = 16;
+const RESUME_BUFFER_S = 10;
+let gateTarget = START_BUFFER_S;
+let gateTimer = null;
+let lastSeekAt = 0;
 let bufferTimer = null;
 let bufferStarted = 0;
 
@@ -556,7 +634,7 @@ function bufferedAhead() {
 function updateBufferMeter() {
   const ahead = bufferedAhead();
   const waited = bufferStarted ? (Date.now() - bufferStarted) / 1000 : 0;
-  $('bufferFill').style.width = `${Math.min(100, (ahead / 10) * 100)}%`;
+  $('bufferFill').style.width = `${Math.min(100, (ahead / gateTarget) * 100)}%`;
   $('bufferStats').textContent = `${ahead.toFixed(1)}s ready · ${waited.toFixed(0)}s waiting`;
 }
 
@@ -574,31 +652,98 @@ function showBufferOverlay(show) {
   }
 }
 
+function cancelGate() {
+  if (gateTimer) { clearInterval(gateTimer); gateTimer = null; }
+  if (state.gate) { state.gate = null; showBufferOverlay(false); }
+  gateTarget = START_BUFFER_S;
+}
+
+// Hold playback until `target` seconds are buffered ahead, the max wait
+// elapses, or (startup only) buffering stops growing. Cancelled on retune.
+function startGate(kind, hls, generation, target, maxWaitS, onRelease) {
+  cancelGate();
+  const video = $('player');
+  state.gate = kind;
+  gateTarget = target;
+  showBufferOverlay(true);
+  const began = Date.now();
+  let best = bufferedAhead();
+  let grewAt = began;
+  gateTimer = setInterval(() => {
+    if (generation !== tuneGeneration || state.hls !== hls || state.gate !== kind) { cancelGate(); return; }
+    const ahead = bufferedAhead();
+    const now = Date.now();
+    if (ahead > best + 0.05) { best = ahead; grewAt = now; }
+    const stuck = kind === 'start' && now - grewAt >= 8000;
+    if (ahead >= target || (now - began) / 1000 >= maxWaitS || stuck) {
+      clearInterval(gateTimer); gateTimer = null;
+      state.gate = null;
+      gateTarget = START_BUFFER_S;
+      showBufferOverlay(false);
+      onRelease();
+    }
+  }, 250);
+}
+
+function resumePlayback() {
+  const video = $('player');
+  video.muted = state.muted;
+  video.play().catch(() => {
+    state.muted = true;
+    video.muted = true;
+    video.play().catch(() => {});
+  });
+  renderNow();
+}
+
+let tuneGeneration = 0;
+function playbackFailed(message) {
+  cancelGate();
+  state.started = true;
+  state.playing = false;
+  $('tuningSub').textContent = message;
+  $('retryPlayback').hidden = false;
+  showTuning(true);
+}
 async function play(channel) {
+  const generation = ++tuneGeneration;
+  cancelGate();
   if (!channel) return;
   const video = $('player');
+  state.started = true;
+  if (state.hls) { state.hls.destroy(); state.hls = null; }
+  video.pause();
+  video.removeAttribute('src');
+  video.load();
+  state.playing = false;
+  $('retryPlayback').hidden = true;
+  $('tuningSub').textContent = 'Tuning in…';
   showTuning(true);
   try {
     await loadHls();
   } catch (error) {
-    toast(String(error), true);
-    showTuning(false);
+    if (generation !== tuneGeneration || state.active !== channel.number) return;
+    playbackFailed(String(error));
     return;
   }
+  if (generation !== tuneGeneration || state.active !== channel.number) return;
+  cancelGate();
   if (state.hls) { state.hls.destroy(); state.hls = null; }
   state.playing = false;
   const source = `/channel/${encodeURIComponent(channel.number)}.m3u8`;
   if (window.Hls && Hls.isSupported()) {
     const hls = new Hls({
-      liveSyncDurationCount: 2,
-      liveMaxLatencyDurationCount: 6,
+      // The producer publishes 4s segments paced to wall clock, so distance
+      // behind the live edge is the only cushion against slow segments.
+      // Sit ~20s back (max 44s) and fill ahead; the startup and rebuffer
+      // gates below wait for that cushion before playing.
+      liveSyncDuration: 20,
+      liveMaxLatencyDuration: 44,
       // Never speed up playback; the "Go live" chip jumps to the edge.
       maxLiveSyncPlaybackRate: 1,
-      // Start two segments behind the edge for a safety margin, then keep
-      // filling ahead so a slow public segment cannot stall playback.
-      maxBufferLength: 30,
+      maxBufferLength: 40,
       maxMaxBufferLength: 60,
-      backBufferLength: 20,
+      backBufferLength: 30,
       startFragPrefetch: true,
       testBandwidth: false,
       manifestLoadingMaxRetry: 6,
@@ -611,18 +756,14 @@ async function play(channel) {
     state.hls = hls;
     hls.on(Hls.Events.LEVEL_UPDATED, updateLiveLag);
     hls.on(Hls.Events.MANIFEST_PARSED, () => {
-      video.muted = state.muted;
-      video.play().catch(() => {
-        state.muted = true;
-        video.muted = true;
-        video.play().catch(() => {});
-      });
+      if (generation !== tuneGeneration || state.hls !== hls) return;
+      startGate('start', hls, generation, START_BUFFER_S, 30, () => resumePlayback());
     });
+    let recoveries = 0;
     hls.on(Hls.Events.ERROR, (_event, data) => {
-      if (!data.fatal) return;
-      if (data.type === Hls.ErrorTypes.NETWORK_ERROR) hls.startLoad();
-      else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) hls.recoverMediaError();
-      else toast(`Playback error: ${data.type}`, true);
+      if (!data.fatal || generation !== tuneGeneration || state.hls !== hls) return;
+      if (recoveries++ < 1 && data.type === Hls.ErrorTypes.MEDIA_ERROR) hls.recoverMediaError();
+      else { hls.destroy(); state.hls = null; playbackFailed('Channel unavailable. Try again or choose another channel.'); }
     });
     hls.loadSource(source);
     hls.attachMedia(video);
@@ -639,10 +780,13 @@ function selectChannel(number, autoplay) {
   const channel = state.channels.find((entry) => entry.number === String(number));
   if (!channel) return;
   state.active = channel.number;
+  startPlayoutPolling(channel);
+  tuneGeneration += 1;
+  cancelGate();
+  state.started = false;
   const url = new URL(location.href);
   url.searchParams.set('channel', channel.number);
   history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
-  renderRail();
   renderNow();
   if (autoplay) {
     if (casting()) loadOnCast(channel).catch((error) => toast(String(error), true));
@@ -655,12 +799,18 @@ async function refreshChannels() {
     const response = await fetch('/api/v1/public/channels', { cache: 'no-store' });
     if (!response.ok) throw new Error(`${response.status}`);
     const channels = await response.json();
+    const previousId = current()?.id;
     state.channels = channels;
     state.fromCache = false;
     writeCache('atv:channels', channels);
+    $('retryChannels').hidden = true;
+    $('channelStatus').textContent = channels.length ? `${channels.length} channels available` : 'No channels are live right now.';
     if (!channels.length) {
+      state.active = null;
+      startPlayoutPolling(null);
+      $('statusLine').textContent = 'No channels';
+      showTuning(false);
       $('nowTitle').textContent = 'No channels yet';
-      renderRail();
       return;
     }
     if (!state.active) {
@@ -670,7 +820,7 @@ async function refreshChannels() {
     } else if (!channels.some((channel) => channel.number === state.active)) {
       state.active = channels[0].number;
     }
-    renderRail();
+    if (current()?.id !== previousId || !playoutToken) startPlayoutPolling(current());
     renderNow();
     if (!state.started) {
       const channel = current();
@@ -680,7 +830,13 @@ async function refreshChannels() {
   } catch {
     if (!state.channels.length) {
       $('statusLine').textContent = 'Offline';
-      toast('We could not load your channels.', true);
+      $('channelStatus').textContent = 'Could not load channels.';
+      $('nowTitle').textContent = 'Channels unavailable';
+      showTuning(false);
+      $('retryChannels').hidden = false;
+    } else {
+      $('channelStatus').textContent = 'Could not refresh channels; showing saved channels.';
+      $('retryChannels').hidden = false;
     }
   }
 }
@@ -692,7 +848,11 @@ async function loadGuide() {
     const guide = await response.json();
     writeCache('atv:guide', guide);
     renderGuide(guide);
+    $('guideStatus').textContent = guide.length ? 'Guide loaded.' : 'No guide listings available.';
+    $('retryGuide').hidden = true;
   } catch {
+    $('guideStatus').textContent = $('guideBody').querySelector('.guide-row') ? 'Could not refresh guide; showing saved listings.' : 'Guide unavailable.';
+    $('retryGuide').hidden = false;
     if (!$('guideBody').querySelector('.guide-row')) {
       $('guideBody').innerHTML = '<div class="guide-empty">Guide unavailable.</div>';
     }
@@ -700,6 +860,8 @@ async function loadGuide() {
 }
 
 function renderGuide(guide) {
+  state.guide = guide;
+  if (!guide.length) { $('guideBody').innerHTML = '<div class="guide-empty">No guide listings available.</div>'; $('guideRange').textContent = ''; return; }
   const now = Date.now();
   const start = Math.floor((now - 3_600_000) / 3_600_000) * 3_600_000;
   const span = state.guideHours * 3_600_000;
@@ -715,7 +877,7 @@ function renderGuide(guide) {
       </div>`;
     }).join('');
     return `<div class="guide-row" data-number="${esc(channel.number)}">
-      <div class="guide-label"><span class="n">${esc(channel.number)}</span><span class="nm">${esc(channel.name)}</span>${channel.number === state.active ? '<span class="live-dot"></span>' : ''}</div>
+      <div class="guide-label"><span class="n">${esc(channel.number)}</span><button type="button" data-tune="${esc(channel.number)}" aria-label="Watch ${esc(channel.name)}">${esc(channel.name)}</button>${channel.number === state.active ? '<span class="live-dot"></span>' : ''}</div>
       <div class="guide-track">${blocks}<div class="guide-now" style="left:${nowLeft}%"></div></div>
     </div>`;
   }).join('');
@@ -723,10 +885,9 @@ function renderGuide(guide) {
     <div class="guide-ticks"><div class="spacer"></div><div class="ticks" style="grid-template-columns:repeat(${state.guideHours},1fr)">${ticks}</div></div>
     ${rows}`;
   $('guideRange').textContent = `${fmtClock(start)} – ${fmtClock(start + span)}`;
-  $('guideBody').querySelectorAll('.guide-row[data-number]').forEach((row) => {
-    row.addEventListener('click', () => {
-      selectChannel(row.dataset.number, true);
-      $('player').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  $('guideBody').querySelectorAll('[data-tune]').forEach((button) => {
+    button.addEventListener('click', () => {
+      selectChannel(button.dataset.tune, true);
     });
   });
 }
@@ -747,7 +908,7 @@ $('goLiveBtn').addEventListener('click', () => {
   video.play().catch(() => {});
   $('goLiveBtn').hidden = true;
 });
-$('guideBtn').addEventListener('click', () => $('guide').scrollIntoView({ behavior: 'smooth' }));
+$('guideBtn').addEventListener('click', () => $('guide').scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' }));
 $('fullBtn').addEventListener('click', () => {
   const video = $('player');
   if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
@@ -927,12 +1088,21 @@ $('castBtn').addEventListener('click', () => {
 });
 
 const video = $('player');
+video.addEventListener('seeking', () => { lastSeekAt = Date.now(); });
 video.addEventListener('waiting', () => {
+  // Rebuffer gate: pause and refill to RESUME_BUFFER_S instead of stuttering.
+  const hls = state.hls;
+  if (hls && !state.gate && !casting() && state.playing && !video.paused && !video.seeking &&
+      Date.now() - lastSeekAt > 2000 && bufferedAhead() < RESUME_BUFFER_S) {
+    video.pause();
+    startGate('rebuffer', hls, tuneGeneration, RESUME_BUFFER_S, 20, () => resumePlayback());
+  }
   state.playing = false;
   if (casting()) return;
   bufferStarted = Date.now();
+  const generation = tuneGeneration;
   setTimeout(() => {
-    if (!state.playing && !casting()) showBufferOverlay(true);
+    if (generation === tuneGeneration && !state.playing && !casting() && $('retryPlayback').hidden) showBufferOverlay(true);
   }, 500);
 });
 video.addEventListener('stalled', () => {
@@ -941,12 +1111,16 @@ video.addEventListener('stalled', () => {
 });
 video.addEventListener('playing', () => {
   state.playing = true;
+  if (gateTimer) { clearInterval(gateTimer); gateTimer = null; }
+  state.gate = null;
+  gateTarget = START_BUFFER_S;
   showBufferOverlay(false);
 });
 video.addEventListener('progress', () => {
   if (!$('bufferOverlay').hidden) updateBufferMeter();
 });
 video.addEventListener('timeupdate', () => {
+  renderNow();
   if (!$('bufferOverlay').hidden) updateBufferMeter();
 });
 $('unmuteBtn').addEventListener('click', () => {
@@ -972,8 +1146,17 @@ video.addEventListener('playing', () => {
 });
 video.addEventListener('canplay', () => { $('bufferChip').hidden = true; });
 
+$('retryPlayback').addEventListener('click', () => play(current()));
+$('guideToggle').addEventListener('click', () => {
+  const expanded = $('guideToggle').getAttribute('aria-expanded') === 'true';
+  $('guideToggle').setAttribute('aria-expanded', String(!expanded));
+  $('guideToggle').textContent = expanded ? 'Show guide' : 'Hide guide';
+  $('guidePanel').hidden = expanded;
+});
+$('retryChannels').addEventListener('click', refreshChannels);
+$('retryGuide').addEventListener('click', loadGuide);
 document.addEventListener('keydown', (event) => {
-  if (event.target && /input|textarea|select/i.test(event.target.tagName)) return;
+  if (event.target && (event.target.closest('input, textarea, select, button, a, video, [contenteditable], .guide-scroll'))) return;
   const index = state.channels.findIndex((channel) => channel.number === state.active);
   if (event.key === 'ArrowDown' || event.key === ']') {
     event.preventDefault();
@@ -993,7 +1176,7 @@ document.addEventListener('keydown', (event) => {
 setInterval(() => {
   $('clock').textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   const channel = current();
-  if (channel?.now) $('progress').style.width = `${progress(channel.now)}%`;
+  if (channel) renderNow();
   updateLiveLag();
 }, 1000);
 setInterval(refreshChannels, 15000);
@@ -1022,7 +1205,6 @@ if (cachedChannels && cachedChannels.length) {
   const requested = new URLSearchParams(location.search).get('channel');
   const match = cachedChannels.find((channel) => channel.number === requested);
   state.active = match ? match.number : cachedChannels[0].number;
-  renderRail();
   renderNow();
   showTuning(true);
 }
@@ -1031,7 +1213,7 @@ if (cachedGuide && cachedGuide.length) renderGuide(cachedGuide);
 
 refreshChannels();
 loadGuide();
-if (location.hash === '#guide') setTimeout(() => $('guide').scrollIntoView({ behavior: 'smooth' }), 400);
+if (location.hash === '#guide') setTimeout(() => $('guide').scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' }), 400);
 </script>
 </body>
 </html>

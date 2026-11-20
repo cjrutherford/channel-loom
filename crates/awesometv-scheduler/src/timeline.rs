@@ -13,6 +13,8 @@ const DAY_MS: i64 = 86_400_000;
 pub struct SchedulerState {
     pub cursors: BTreeMap<String, CursorState>,
     pub last_played_ms: BTreeMap<String, i64>,
+    #[serde(default)]
+    pub rng_state: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -76,6 +78,14 @@ impl BuildResult {
 ///
 /// This is deliberately pure: callers inject the start date and state.
 pub fn build_week(plan: &Plan, state: &SchedulerState, start_date: Date) -> BuildResult {
+    let offset =
+        UtcOffset::from_whole_seconds(plan.utc_offset_minutes * 60).unwrap_or(UtcOffset::UTC);
+    let start = local_midnight_ms(start_date, offset);
+    build_range(plan, state, start, start + 7 * DAY_MS)
+}
+
+/// Generate within an explicit half-open interval using the supplied continuation.
+pub fn build_range(plan: &Plan, state: &SchedulerState, start_ms: i64, end_ms: i64) -> BuildResult {
     let mut result = BuildResult {
         items: Vec::new(),
         state: state.clone(),
@@ -83,16 +93,23 @@ pub fn build_week(plan: &Plan, state: &SchedulerState, start_date: Date) -> Buil
         coverage_ms: 0,
         scheduled_ms: 0,
     };
-    let mut rng = Rng::new(plan.seed);
+    let mut rng = state
+        .rng_state
+        .map(Rng::from_state)
+        .unwrap_or_else(|| Rng::new(plan.seed));
     let offset =
         UtcOffset::from_whole_seconds(plan.utc_offset_minutes * 60).unwrap_or(UtcOffset::UTC);
 
-    let week_start = local_midnight_ms(start_date, offset);
-    let week_end = week_start + 7 * DAY_MS;
+    let week_start = start_ms;
+    let week_end = end_ms;
+    let start_date = time::OffsetDateTime::from_unix_timestamp_nanos(start_ms as i128 * 1_000_000)
+        .expect("scheduler start timestamp in range")
+        .to_offset(offset)
+        .date();
     let mut occupied: Vec<(i64, i64)> = Vec::new();
 
-    for day_index in 0..7 {
-        let date = start_date + Duration::days(day_index);
+    let mut date = start_date;
+    while local_midnight_ms(date, offset) < week_end {
         let weekday = date.weekday();
         let day_start = local_midnight_ms(date, offset);
 
@@ -110,6 +127,7 @@ pub fn build_week(plan: &Plan, state: &SchedulerState, start_date: Date) -> Buil
 
         for daypart in active {
             let (start, mut end) = daypart_window(daypart, day_start);
+            let start = start.max(week_start);
             if end <= start {
                 continue;
             }
@@ -141,6 +159,7 @@ pub fn build_week(plan: &Plan, state: &SchedulerState, start_date: Date) -> Buil
                 occupied.push((item.start_ms, item.end_ms));
             }
         }
+        date += Duration::days(1);
     }
 
     // Fill the remaining week with fallback content, if configured.
@@ -179,6 +198,7 @@ pub fn build_week(plan: &Plan, state: &SchedulerState, start_date: Date) -> Buil
         .filter(|i| i.kind == ItemKind::Program)
         .map(TimelineItem::duration_ms)
         .sum::<u64>();
+    result.state.rng_state = Some(rng.state());
     result
 }
 
@@ -577,6 +597,27 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&a.items).unwrap(),
             serde_json::to_string(&b.items).unwrap()
+        );
+    }
+
+    #[test]
+    fn shuffled_week_persists_random_state_for_restart() {
+        let mut plan = simple_plan();
+        plan.dayparts[0].slots[0].order = Order::Shuffle;
+        let first = build_week(&plan, &SchedulerState::default(), start_date());
+        let json = serde_json::to_string(&first.state).unwrap();
+        assert!(serde_json::from_str::<serde_json::Value>(&json).unwrap()["rng_state"].is_number());
+        let restored: SchedulerState = serde_json::from_str(&json).unwrap();
+        let date = start_date() + Duration::days(7);
+        let a = build_week(&plan, &first.state, date);
+        let b = build_week(&plan, &restored, date);
+        assert_eq!(
+            serde_json::to_string(&a.items).unwrap(),
+            serde_json::to_string(&b.items).unwrap()
+        );
+        assert_ne!(
+            serde_json::to_value(&first.state).unwrap()["rng_state"],
+            serde_json::to_value(&a.state).unwrap()["rng_state"]
         );
     }
 

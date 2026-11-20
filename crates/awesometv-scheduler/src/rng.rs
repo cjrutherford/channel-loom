@@ -6,6 +6,14 @@ pub struct Rng {
 }
 
 impl Rng {
+    pub(crate) fn from_state(state: u64) -> Self {
+        Self { state }
+    }
+
+    pub(crate) fn state(&self) -> u64 {
+        self.state
+    }
+
     pub fn new(seed: u64) -> Self {
         Self {
             state: seed.wrapping_add(0x9E37_79B9_7F4A_7C15),

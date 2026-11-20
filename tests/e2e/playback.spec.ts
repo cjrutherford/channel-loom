@@ -71,3 +71,18 @@ test.describe("Live playback continuity", () => {
     expect(last.ahead).toBeGreaterThan(0);
   });
 });
+
+// Opt-in because this starts an isolated server and captures real media for
+// about a minute. The harness asserts decoded marker order and schedule timing.
+test("isolated decoded stream agrees with the guide", async () => {
+  test.skip(process.env.E2E_STREAM_AGREEMENT !== "1", "Set E2E_STREAM_AGREEMENT=1 to capture the isolated streams.");
+  test.setTimeout(200_000);
+  const { execFileSync } = await import("node:child_process");
+  const { resolve } = await import("node:path");
+  const output = execFileSync("python3", [resolve("tests/e2e/stream_agreement.py")], {
+    encoding: "utf8",
+    timeout: 180_000,
+    env: process.env,
+  });
+  expect(output).toContain("PASS HLS");
+});

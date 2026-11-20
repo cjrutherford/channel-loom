@@ -1,0 +1,17 @@
+const fs = require('fs');
+const vm = require('vm');
+const assert = require('assert');
+const html = fs.readFileSync('crates/awesometv-server/web/public.html', 'utf8');
+const code = html.match(/function playoutLabel\(\) \{[\s\S]*?\n\}/)[0];
+const segment = { sequence: '1', start_ms: 0, end_ms: 100, source: 'slate', fallback_reason: 'encoder_stall', scheduled_programme: { title: 'Example' } };
+const context = { state: { playout: { state: 'ready', generation: 'g', segments: [segment] } }, playheadFragment: () => ({ frag: { sn: 1 }, pdt: 0, timestamp: 1 }) };
+vm.createContext(context); vm.runInContext(code, context);
+assert.match(context.playoutLabel(), /Example — temporarily unavailable.*encoder/i);
+segment.fallback_reason = 'source_unavailable';
+assert.match(context.playoutLabel(), /Example — temporarily unavailable.*source unavailable/i);
+segment.fallback_reason = 'early_eof';
+assert.match(context.playoutLabel(), /Example — temporarily unavailable.*ended early/i);
+segment.scheduled_programme = null;
+assert.match(context.playoutLabel(), /^Programme — temporarily unavailable/);
+segment.fallback_reason = 'scheduled_gap'; segment.scheduled_programme = null;
+assert.equal(context.playoutLabel(), 'Standby');

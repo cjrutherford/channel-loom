@@ -1,5 +1,8 @@
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use serde::Serialize;
+use std::io::Read;
+use std::path::Path;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
@@ -14,60 +17,159 @@ const VIDEO_EXTENSIONS: &[&str] = &[
 const MUSIC_EXTENSIONS: &[&str] = &["flac", "mp3", "m4a", "aac", "ogg", "opus", "wav"];
 const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "webp", "gif", "bmp", "tif", "tiff"];
 
-pub fn scan_path(root: &Path, limit: usize, kind: &str) -> Result<Vec<Media>> {
-    if !root.exists() {
-        bail!("media path does not exist: {}", root.display());
+#[derive(Debug, Serialize)]
+pub struct ScanFileStatus {
+    pub path: String,
+    pub error: Option<String>,
+}
+
+pub struct ScanReport {
+    pub media: Vec<Media>,
+    pub files: Vec<ScanFileStatus>,
+    pub complete: bool,
+}
+
+pub fn scan_path(root: &Path, limit: usize, kind: &str) -> Result<ScanReport> {
+    if !root.is_dir() {
+        bail!(
+            "media directory does not exist or is unreadable: {}",
+            root.display()
+        );
     }
     let extensions = extensions_for(kind);
-    let mut paths: Vec<PathBuf> = WalkDir::new(root)
-        .follow_links(false)
-        .into_iter()
-        .filter_map(|entry| entry.ok())
-        .filter(|entry| entry.file_type().is_file())
-        .map(|entry| entry.into_path())
-        .filter(|path| !is_ignored(path))
-        .filter(|path| {
-            path.extension()
-                .and_then(|ext| ext.to_str())
-                .map(|ext| extensions.contains(&ext.to_ascii_lowercase().as_str()))
-                .unwrap_or(false)
-        })
-        .collect();
-    paths.sort();
-    if limit > 0 {
-        paths.truncate(limit);
-    }
-
-    let mut media = Vec::new();
-    for path in paths {
-        match probe(&path, kind) {
-            Ok(item) => media.push(item),
-            Err(error) => tracing::warn!(path = %path.display(), %error, "probe failed"),
+    let mut paths = Vec::new();
+    let mut files = Vec::new();
+    let mut complete = true;
+    for entry in WalkDir::new(root).follow_links(false) {
+        match entry {
+            Ok(entry) if entry.file_type().is_file() => {
+                let path = entry.into_path();
+                if !is_ignored(&path)
+                    && path
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .map(|e| extensions.contains(&e.to_ascii_lowercase().as_str()))
+                        .unwrap_or(false)
+                {
+                    paths.push(path);
+                }
+            }
+            Ok(_) => {}
+            Err(error) => {
+                complete = false;
+                files.push(ScanFileStatus {
+                    path: error
+                        .path()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_default(),
+                    error: Some(error.to_string()),
+                });
+            }
         }
     }
-    Ok(media)
+    paths.sort();
+    if limit > 0 && paths.len() > limit {
+        paths.truncate(limit);
+        complete = false;
+        files.push(ScanFileStatus {
+            path: root.display().to_string(),
+            error: Some(format!(
+                "scan limit {limit} reached; inventory is incomplete"
+            )),
+        });
+    }
+    let mut media = Vec::new();
+    for path in paths {
+        let error = match probe(&path, kind) {
+            Ok(item) => {
+                media.push(item);
+                None
+            }
+            Err(error) => {
+                complete = false;
+                Some(format!("{error:#}"))
+            }
+        };
+        files.push(ScanFileStatus {
+            path: path.display().to_string(),
+            error,
+        });
+    }
+    Ok(ScanReport {
+        media,
+        files,
+        complete,
+    })
+}
+
+// Drain pipes concurrently to avoid a full pipe blocking the child, but retain bounded output.
+fn bounded_probe_output(
+    command: &mut Command,
+) -> Result<(std::process::ExitStatus, Vec<u8>, Vec<u8>)> {
+    let mut child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("start ffprobe")?;
+    let drain = |mut pipe: Box<dyn Read + Send>| {
+        std::thread::spawn(move || {
+            let mut kept = Vec::new();
+            let mut buf = [0u8; 8192];
+            while let Ok(n) = pipe.read(&mut buf) {
+                if n == 0 {
+                    break;
+                }
+                let remaining = (1024 * 1024usize).saturating_sub(kept.len());
+                kept.extend_from_slice(&buf[..n.min(remaining)]);
+            }
+            kept
+        })
+    };
+    let stdout = drain(Box::new(child.stdout.take().unwrap()));
+    let stderr = drain(Box::new(child.stderr.take().unwrap()));
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Ok(status),
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(25)),
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break Err(anyhow::anyhow!("ffprobe timed out after 15 seconds"));
+            }
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break Err(error.into());
+            }
+        }
+    };
+    let out = stdout.join().unwrap_or_default();
+    let err = stderr.join().unwrap_or_default();
+    Ok((status?, out, err))
 }
 
 pub fn probe(path: &Path, kind: &str) -> Result<Media> {
-    let output = Command::new("ffprobe")
-        .arg("-v")
-        .arg("error")
-        .arg("-print_format")
-        .arg("json")
-        .arg("-show_format")
-        .arg("-show_streams")
-        .arg("-show_chapters")
-        .arg(path)
-        .output()
-        .with_context(|| format!("run ffprobe on {}", path.display()))?;
-    if !output.status.success() {
+    let (status, stdout, stderr) = bounded_probe_output(
+        Command::new("ffprobe")
+            .arg("-v")
+            .arg("error")
+            .arg("-print_format")
+            .arg("json")
+            .arg("-show_format")
+            .arg("-show_streams")
+            .arg("-show_chapters")
+            .arg(path),
+    )
+    .with_context(|| format!("run ffprobe on {}", path.display()))?;
+    if !status.success() {
         bail!(
             "ffprobe failed for {}: {}",
             path.display(),
-            String::from_utf8_lossy(&output.stderr)
+            String::from_utf8_lossy(&stderr[..stderr.len().min(4096)])
         );
     }
-    let value: Value = serde_json::from_slice(&output.stdout).context("parse ffprobe JSON")?;
+    let value: Value = serde_json::from_slice(&stdout).context("parse ffprobe JSON")?;
     let duration_seconds = value
         .get("format")
         .and_then(|format| format.get("duration"))
@@ -405,4 +507,144 @@ fn xml_text_from(raw: &str, tag: &str) -> Option<String> {
         .replace("&gt;", ">");
     let value = value.trim();
     (!value.is_empty()).then(|| value.to_string())
+}
+
+#[cfg(test)]
+mod local_scan_tests {
+    use super::*;
+    use crate::db;
+
+    fn wav(path: &Path, samples: usize) {
+        let data_len = (samples * 2) as u32;
+        let mut data = Vec::new();
+        data.extend(b"RIFF");
+        data.extend((36 + data_len).to_le_bytes());
+        data.extend(b"WAVEfmt ");
+        data.extend(16u32.to_le_bytes());
+        data.extend(1u16.to_le_bytes());
+        data.extend(1u16.to_le_bytes());
+        data.extend(8000u32.to_le_bytes());
+        data.extend(16000u32.to_le_bytes());
+        data.extend(2u16.to_le_bytes());
+        data.extend(16u16.to_le_bytes());
+        data.extend(b"data");
+        data.extend(data_len.to_le_bytes());
+        data.resize(44 + data_len as usize, 0);
+        std::fs::write(path, data).unwrap();
+    }
+
+    async fn persist(pool: &sqlx::SqlitePool, root: &Path, report: &ScanReport) -> Vec<String> {
+        for item in &report.media {
+            db::upsert_media(pool, item).await.unwrap();
+        }
+        db::reconcile_local_scan(
+            pool,
+            root.to_str().unwrap(),
+            "music",
+            &report.media,
+            report.complete,
+        )
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn local_scan_reconciles_only_complete_inventory() {
+        let base = std::env::temp_dir().join(format!("awesome-scan-{}", Uuid::new_v4()));
+        let root = base.join("library");
+        std::fs::create_dir_all(&root).unwrap();
+        let pool = db::init(&base.join("db")).await.unwrap();
+        let a = root.join("a.wav");
+        let b = root.join("b.wav");
+        wav(&a, 8000);
+        wav(&b, 8000);
+        let initial = scan_path(&root, 0, "music").unwrap();
+        assert!(initial.complete);
+        assert_eq!(initial.files.len(), 2);
+        assert!(persist(&pool, &root, &initial).await.is_empty());
+        std::fs::remove_file(&b).unwrap();
+        wav(&a, 16000);
+        let c = root.join("c.wav");
+        wav(&c, 8000);
+        let corrupt = root.join("broken.wav");
+        std::fs::write(&corrupt, b"invalid").unwrap();
+        let partial = scan_path(&root, 0, "music").unwrap();
+        assert!(!partial.complete);
+        assert!(
+            partial
+                .files
+                .iter()
+                .any(|f| f.path == corrupt.to_string_lossy() && f.error.is_some())
+        );
+        assert!(persist(&pool, &root, &partial).await.is_empty());
+        assert_eq!(db::list_media(&pool).await.unwrap().len(), 3);
+        std::fs::remove_file(&corrupt).unwrap();
+        let interrupted = scan_path(&root, 1, "music").unwrap();
+        assert!(!interrupted.complete);
+        assert!(
+            interrupted
+                .files
+                .iter()
+                .any(|f| f.error.as_deref().is_some_and(|e| e.contains("limit")))
+        );
+        assert!(persist(&pool, &root, &interrupted).await.is_empty());
+        // Dropping a scan before persistence cannot commit missing markers.
+        drop(scan_path(&root, 0, "music").unwrap());
+        assert!(
+            db::reconcile_local_scan(&pool, root.to_str().unwrap(), "music", &[], false)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        let complete = scan_path(&root, 0, "music").unwrap();
+        assert!(complete.complete);
+        assert_eq!(
+            persist(&pool, &root, &complete).await,
+            vec![b.to_string_lossy().to_string()]
+        );
+        let items = db::list_media(&pool).await.unwrap();
+        assert_eq!(items.len(), 3);
+        assert_eq!(
+            items
+                .iter()
+                .find(|m| m.path == a.to_string_lossy())
+                .unwrap()
+                .duration_ms,
+            2000
+        );
+        assert!(scan_path(&root.join("absent"), 0, "music").is_err());
+        pool.close().await;
+        std::fs::remove_dir_all(base).unwrap();
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn unreadable_directory_preserves_missing_markers() {
+        use std::os::unix::fs::PermissionsExt;
+        let base = std::env::temp_dir().join(format!("awesome-scan-permission-{}", Uuid::new_v4()));
+        let root = base.join("library");
+        let blocked = root.join("blocked");
+        std::fs::create_dir_all(&blocked).unwrap();
+        let pool = db::init(&base.join("db")).await.unwrap();
+        let hidden = blocked.join("hidden.wav");
+        wav(&hidden, 8000);
+        let initial = scan_path(&root, 0, "music").unwrap();
+        assert!(initial.complete);
+        assert!(persist(&pool, &root, &initial).await.is_empty());
+        std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0)).unwrap();
+        let denial_enforced = std::fs::read_dir(&blocked).is_err();
+        let report = scan_path(&root, 0, "music").unwrap();
+        std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o700)).unwrap();
+        if !denial_enforced {
+            eprintln!("permission proof unavailable: directory remains readable");
+            pool.close().await;
+            std::fs::remove_dir_all(base).unwrap();
+            return;
+        }
+        assert!(!report.complete);
+        assert!(report.files.iter().any(|entry| entry.error.is_some()));
+        assert!(persist(&pool, &root, &report).await.is_empty());
+        assert_eq!(db::list_media(&pool).await.unwrap().len(), 1);
+        pool.close().await;
+        std::fs::remove_dir_all(base).unwrap();
+    }
 }

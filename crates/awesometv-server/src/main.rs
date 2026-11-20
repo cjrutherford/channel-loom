@@ -10,6 +10,8 @@ mod limits;
 mod oidc;
 mod precache;
 mod programming;
+mod renewal;
+mod remote_refresh;
 mod scan;
 mod scripted;
 mod tokens;
@@ -33,6 +35,9 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
+    let args: Vec<_> = std::env::args_os().skip(1).collect();
+    anyhow::ensure!(args.is_empty() || args == ["--migrate-only"], "usage: awesometv-server [--migrate-only]");
+    let migrate_only = !args.is_empty();
     let config = Config::from_env();
     let pool = db::init(&config.data_dir).await?;
     db::ensure_app_setting(
@@ -53,24 +58,29 @@ async fn main() -> anyhow::Result<()> {
         &config.default_subtitle_language,
     )
     .await?;
+    if migrate_only {
+        pool.close().await;
+        tracing::info!("database migration and schema initialization complete");
+        return Ok(());
+    }
     let cloud = Arc::new(cloud::CloudManager::new(
         pool.clone(),
         config.data_dir.clone(),
         &config.bind,
         config.port,
     )?);
+    let precache = Arc::new(Precache::new(&config, pool.clone()));
     let engine = Arc::new(Engine::new(
         pool.clone(),
         config.data_dir.clone(),
         cloud.clone(),
         config.stream_max_kbps,
-    ));
+    ).with_precache(precache.clone()));
     if let Ok(rotated) = cloud.rotate_secrets().await
         && rotated > 0
     {
         tracing::info!(rotated, "re-encrypted cloud secrets with the primary key");
     }
-    let precache = Arc::new(Precache::new(&config, pool.clone()));
     precache.start();
     let admin_nets = parse_cidrs(&config.admin_allow_cidrs)?;
     let oidc = crate::oidc::OidcClient::from_env()?;
@@ -118,6 +128,8 @@ async fn main() -> anyhow::Result<()> {
             }
         });
     }
+    let (refresh_stop, refresh_task) = remote_refresh::start(state.pool.clone(), config.clone(), cloud.clone());
+    let state_pool_for_renewal = state.pool.clone();
     let app = api::router(state);
 
     let listener = tokio::net::TcpListener::bind((config.bind.as_str(), config.port))
@@ -139,12 +151,19 @@ async fn main() -> anyhow::Result<()> {
     }
     println!();
 
+    let (renewal_stop, renewal_task) = renewal::start(state_pool_for_renewal);
     axum::serve(
         listener,
         app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
     .with_graceful_shutdown(async move {
         shutdown_signal().await;
+        let _ = refresh_stop.send(true);
+        let _ = refresh_task.await;
+        let _ = renewal_stop.send(true);
+        if let Err(error) = renewal_task.await {
+            tracing::error!(%error, "renewal worker stopped unexpectedly");
+        }
         engine.stop_all().await;
     })
     .await?;

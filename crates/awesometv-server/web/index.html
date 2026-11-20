@@ -277,7 +277,7 @@
   .backup-row a { color: var(--signal); text-decoration: none; font-family: var(--mono); font-size: 10px; }
   .mobile-nav { display: none; }
   @media (max-width: 980px) {
-    .shell { grid-template-columns: 1fr; }
+    .shell { grid-template-columns: minmax(0, 1fr); }
     .sidebar { position: static; height: auto; flex-direction: row; align-items: center; padding: 12px 14px; gap: 14px; overflow-x: auto; }
     .brand { flex: 0 0 auto; }
     .brand-sub { display: none; }
@@ -354,14 +354,14 @@
   .toast { border-radius: 10px; }
   :focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; border-radius: 4px; }
   @media (max-width: 980px) {
-    .sidebar { width: 100%; padding: 10px 12px; flex-wrap: wrap; row-gap: 8px; overflow: visible; }
+    .sidebar { width: 100%; min-width: 0; height: auto; padding: 10px 12px; flex-wrap: wrap; row-gap: 8px; overflow: visible; }
     .brand { flex: 1 1 auto; }
-    nav { order: 2; flex: 1 0 100%; overflow-x: auto; padding-bottom: 2px; scrollbar-width: none; }
-    nav::-webkit-scrollbar { display: none; }
+    nav { order: 2; flex: 1 1 100%; min-width: 0; overflow-x: auto; padding: 2px 2px 6px; scrollbar-width: thin; }
+
     .topbar { height: auto; padding: 10px 14px; flex-wrap: wrap; overflow: visible; row-gap: 8px; }
     .crumb { display: none; }
     .top-actions { margin-left: 0; width: 100%; gap: 6px; overflow-x: auto; flex-wrap: nowrap; scrollbar-width: none; }
-    .top-actions::-webkit-scrollbar { display: none; }
+
     .top-actions .btn { padding: 7px 9px; font-size: 11px; white-space: nowrap; flex: 0 0 auto; }
     .top-actions #installAppBtn { display: none !important; }
     .content { padding: 16px 14px 46px; }
@@ -369,9 +369,28 @@
     .rail { max-height: none; overflow: visible; }
     .view-head h1 { font-size: 40px; }
   }
+  .settings-title { font-family: var(--body); font-size: 13px; letter-spacing: normal; margin: 0 0 5px; font-weight: 600; }
+  .skip-link { position: fixed; top: 8px; left: 8px; z-index: 300; padding: 10px; background: var(--paper); color: var(--ink); transform: translateY(-150%); }
+  .skip-link:focus { transform: none; }
+  .modal { max-height: calc(100dvh - 36px); overflow-y: auto; }
+  .dim, .tr.head, .empty { color: #a8b3d4; }
+  @media (max-width: 600px) {
+    .view-head { align-items: flex-start; flex-wrap: wrap; }
+    .form-row { grid-template-columns: minmax(0, 1fr); }
+    .source-grid { grid-template-columns: minmax(0, 1fr); }
+    .tabs { max-width: 100%; overflow-x: auto; }
+    .tab { white-space: nowrap; }
+    .btn, .nav-item, .tab { min-height: 44px; }
+    .tr { grid-template-columns: 28px minmax(0,1fr) 60px; }
+    .tr .format, .tr .kind, .tr .codec { display: none; }
+    .tr .name { white-space: normal; overflow-wrap: anywhere; }
+    .tr input { width: 20px; height: 20px; }
+  }
+  @media (prefers-reduced-motion: reduce) { .view { animation: none; } }
 </style>
 </head>
 <body>
+<a class="skip-link" href="#studio-main">Skip to Studio content</a>
 <span id="swStatus" style="display:none">PENDING</span>
 <div class="shell">
   <aside class="sidebar">
@@ -379,7 +398,7 @@
       <img class="brand-wordmark" src="/icons/channelloom-wordmark.png" alt="ChannelLoom">
       <div class="brand-sub">Studio</div>
     </div>
-    <nav>
+    <nav aria-label="Studio sections">
       <a class="nav-item active" href="#on-air" data-view="on-air"><span class="nav-icon">◉</span> On Air <span class="key">1</span></a>
       <a class="nav-item" href="#channels" data-view="channels"><span class="nav-icon">▤</span> Channels <span class="key">2</span></a>
       <a class="nav-item" href="#library" data-view="library"><span class="nav-icon">▦</span> Library <span class="key">3</span></a>
@@ -398,7 +417,7 @@
     </div>
   </aside>
 
-  <main class="main">
+  <main class="main" id="studio-main" tabindex="-1">
     <header class="topbar">
       <div class="crumb">ChannelLoom / <b id="crumbView">On Air</b></div>
       <div class="top-actions">
@@ -504,7 +523,7 @@
             <div class="field"><label for="autoChannelOrder">Order</label><select id="autoChannelOrder"><option value="shuffle">Shuffle</option><option value="sequential">Sequential</option></select></div>
             <div class="field" style="display:flex; align-items:end;"><button class="btn primary" id="autoPreviewBtn">Preview</button></div>
           </div>
-          <div id="autoChannelPreview" style="margin-top:10px"></div>
+          <div id="autoChannelPreview" role="status" aria-live="polite" style="margin-top:10px"></div>
           <div style="margin-top:10px"><button class="btn primary" id="autoCreateBtn" disabled>Create channels</button></div>
         </div>
         <div class="cards" id="channelCards"></div>
@@ -520,14 +539,14 @@
             <button class="tab" data-kind="music">Music</button>
             <button class="tab" data-kind="image">Images</button>
           </div>
-          <select class="search" id="originFilter" style="max-width:160px"><option value="all">All sources</option><option value="local">Local</option><option value="cloud">Cloud</option></select>
-          <input class="search" id="mediaSearch" placeholder="Search title…">
+          <select aria-label="Filter library by source" class="search" id="originFilter" style="max-width:160px"><option value="all">All sources</option><option value="local">Local</option><option value="cloud">Cloud</option></select>
+          <input aria-label="Search library titles" class="search" id="mediaSearch" placeholder="Search title…">
           <button class="btn ghost" id="selectAllBtn">Select all</button>
           <button class="btn ghost" id="clearSelBtn">Clear</button>
           <button class="btn ghost" id="createCollectionBtn" disabled>Create collection</button>
           <button class="btn primary" id="createFromSelBtn" disabled>Create channel</button>
         </div>
-        <div class="table" id="mediaTable"></div>
+        <div class="table" id="mediaTable" role="region" aria-label="Library media" aria-live="polite"><div class="empty">Loading library…</div></div>
       </section>
 
       <section class="view" id="view-guide">
@@ -743,12 +762,12 @@
       <section class="view" id="view-settings">
         <div class="view-head"><div><div class="eyebrow">System</div><h1>Settings</h1></div></div>
         <div class="grid-3">
-          <div class="panel panel-pad"><h3>Public URL</h3><div class="source-path" id="setPublic"></div><div class="muted small">Bound to the Tailscale address only.</div></div>
-          <div class="panel panel-pad"><h3>Data</h3><div class="source-path">SQLite · ./data/awesometv.db</div><div class="muted small">7-day timelines, in-memory HLS producer state.</div></div>
-          <div class="panel panel-pad"><h3>Jellyfin</h3><div class="source-path" id="setJellyfin"></div><div class="muted small">External metadata source.</div></div>
+          <div class="panel panel-pad"><h2 class="settings-title">Public URL</h2><div class="source-path" id="setPublic"></div><div class="muted small">Bound to the Tailscale address only.</div></div>
+          <div class="panel panel-pad"><h2 class="settings-title">Data</h2><div class="source-path">SQLite · ./data/awesometv.db</div><div class="muted small">7-day timelines, in-memory HLS producer state.</div></div>
+          <div class="panel panel-pad"><h2 class="settings-title">Jellyfin</h2><div class="source-path" id="setJellyfin"></div><div class="muted small">External metadata source.</div></div>
         </div>
         <div class="panel panel-pad" style="margin-top:14px;">
-          <div class="source-top"><div><h3>API tokens</h3><div class="muted small">Bearer tokens for scripts, native clients, and automation. A token grants full Studio API access and is shown only once.</div></div></div>
+          <div class="source-top"><div><h2 class="settings-title">API tokens</h2><div class="muted small">Bearer tokens for scripts, native clients, and automation. A token grants full Studio API access and is shown only once.</div></div></div>
           <div style="display:flex; gap:8px; align-items:end; margin-top:12px; flex-wrap:wrap;">
             <div class="field" style="flex:1; min-width:220px; margin:0"><label for="tokenName">Token name</label><input id="tokenName" placeholder="Living room script"></div>
             <div class="field" style="width:150px; margin:0"><label for="tokenScope">Scope</label><select id="tokenScope"><option value="control">Control</option><option value="read">Read only</option><option value="admin">Admin</option></select></div>
@@ -759,25 +778,25 @@
           <div id="tokenList" style="margin-top:10px;"></div>
         </div>
         <div class="panel panel-pad" style="margin-top:14px;">
-          <div class="source-top"><div><h3>Hardware acceleration</h3><div class="muted small">VAAPI uses /dev/dri/renderD128 for encoding. Applying a profile restarts live producers.</div></div><span class="badge" id="encoderStatus">—</span></div>
+          <div class="source-top"><div><h2 class="settings-title">Hardware acceleration</h2><div class="muted small">VAAPI uses /dev/dri/renderD128 for encoding. Applying a profile restarts live producers.</div></div><span class="badge" id="encoderStatus">—</span></div>
           <div class="row" style="margin-top:12px; gap:8px"><button class="btn small primary" id="applyVaapiBtn">Use VAAPI on all</button><button class="btn small ghost" id="applySoftwareBtn">Use software on all</button></div>
         </div>
         <div class="panel panel-pad" style="margin-top:14px;">
-          <div class="source-top"><div><h3>Recent activity</h3><div class="muted small">Sign-ins, tokens, source changes, backups, and other mutations. Kept for 90 days.</div></div><button class="btn small" id="auditRefreshBtn">Refresh</button></div>
+          <div class="source-top"><div><h2 class="settings-title">Recent activity</h2><div class="muted small">Sign-ins, tokens, source changes, backups, and other mutations. Kept for 90 days.</div></div><button class="btn small" id="auditRefreshBtn">Refresh</button></div>
           <div id="auditList"></div>
         </div>
         <div class="panel panel-pad" style="margin-top:14px;">
-          <div class="row" style="justify-content:space-between"><h3>Backups</h3><button class="btn small" id="backupBtn">Create backup</button></div>
+          <div class="row" style="justify-content:space-between"><h2 class="settings-title">Backups</h2><button class="btn small" id="backupBtn">Create backup</button></div>
           <p class="muted small">SQLite snapshots of the catalog, collections, channels, and settings. Restore takes effect on the next restart.</p>
           <div id="backupList"></div>
         </div>
         <div class="panel panel-pad" style="margin-top:14px;">
-          <div class="row" style="justify-content:space-between"><h3>Stream health</h3><button class="btn small" id="metricsRefreshBtn">Refresh</button></div>
+          <div class="row" style="justify-content:space-between"><h2 class="settings-title">Stream health</h2><button class="btn small" id="metricsRefreshBtn">Refresh</button></div>
           <p class="muted small">Producer startup latency, cached HLS segments, and disk usage per channel.</p>
           <div id="streamHealth"></div>
         </div>
         <div class="panel panel-pad" style="margin-top:14px;">
-          <div class="source-top"><div><h3>Language defaults</h3><div class="muted small">Used by channels that inherit the global language settings.</div></div><button class="btn primary" id="saveLanguageBtn">Save defaults</button></div>
+          <div class="source-top"><div><h2 class="settings-title">Language defaults</h2><div class="muted small">Used by channels that inherit the global language settings.</div></div><button class="btn primary" id="saveLanguageBtn">Save defaults</button></div>
           <div class="form-row" style="margin-top:12px;">
             <div class="field"><label for="setAudioLanguage">Default audio language</label><input id="setAudioLanguage" placeholder="eng; blank = first audio"></div>
             <div class="field"><label for="setSubtitleMode">Default subtitles</label><select id="setSubtitleMode"><option value="off">Off</option><option value="burn">Burn text subtitles</option></select></div>
@@ -787,13 +806,13 @@
           </div>
         </div>
         <div class="panel panel-pad" style="margin-top:14px;">
-          <div class="row" style="justify-content:space-between"><h3>Native apps</h3><button class="btn small" id="settingsInstallBtn">Install app</button></div>
+          <div class="row" style="justify-content:space-between"><h2 class="settings-title">Native apps</h2><button class="btn small" id="settingsInstallBtn">Install app</button></div>
           <p class="muted small">Install ChannelLoom as a standalone app on desktop, mobile, or a TV browser. Installation requires HTTPS or localhost.</p>
           <div class="source-path" id="setManifest"></div>
           <div class="muted small">Native players can use the HDHomeRun, M3U, and XMLTV endpoints above.</div>
         </div>
         <div class="panel panel-pad" style="margin-top:14px;">
-          <h3>Client URLs</h3>
+          <h2 class="settings-title">Client URLs</h2>
           <div class="source-path" id="setHdhr"></div>
           <div class="source-path" id="setM3u"></div>
           <div class="source-path" id="setXmltv"></div>
@@ -818,7 +837,7 @@
 </div>
 
 <div class="modal-back" id="modalBack">
-  <div class="modal">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle" aria-describedby="modalSub">
     <div class="eyebrow" id="modalKicker">Create</div>
     <h2 id="modalTitle">New channel</h2>
     <p class="muted small" id="modalSub">Selected media loops in order for seven days.</p>
@@ -854,7 +873,7 @@
     </div>
   </div>
 </div>
-<div class="toast-wrap" id="toasts"></div>
+<div class="toast-wrap" id="toasts" role="status" aria-live="polite" aria-atomic="false"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
 <script>
@@ -881,10 +900,51 @@ async function api(path, options = {}) {
     showLogin();
     throw new Error('Authentication required');
   }
-  if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+  if (!res.ok) { const error = new Error(`${res.status} ${await res.text()}`); error.status = res.status; throw error; }
   if (res.status === 204) return null;
   return res.json();
 }
+// Form feedback uses only known validation messages; arbitrary server text may contain secrets.
+function formFeedback(buttonId, fields) {
+  const button = $(buttonId);
+  let pending = false;
+  const status = document.createElement('div');
+  status.id = buttonId + 'Status'; status.tabIndex = -1;
+  status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite');
+  status.className = 'muted small'; button.insertAdjacentElement('afterend', status);
+  for (const id of fields) {
+    const input = $(id), error = document.createElement('div');
+    error.id = id + 'Error'; error.className = 'small'; error.style.color = 'var(--danger, #ff8a80)';
+    input.insertAdjacentElement('afterend', error);
+    input.addEventListener('input', () => { input.removeAttribute('aria-invalid'); error.textContent = ''; });
+    input.addEventListener('change', () => { input.removeAttribute('aria-invalid'); error.textContent = ''; });
+  }
+  function clear() { for (const id of fields) { $(id).removeAttribute('aria-invalid'); $(id + 'Error').textContent = ''; } }
+  return {
+    begin() { if (pending || button.disabled) return false; pending = true; clear(); button.disabled = true; status.textContent = 'Saving…'; return true; },
+    end() { pending = false; button.disabled = buttonId === 'saveLanguageBtn' && state.role !== 'admin'; },
+    success(message) { status.textContent = message; },
+    fail(id, message) {
+      status.textContent = 'Could not save. ' + (message || 'Check the entered values and connection, then try again.');
+      if (id) { const input = $(id); input.setAttribute('aria-invalid', 'true');
+        const described = new Set((input.getAttribute('aria-describedby') || '').split(/\s+/).filter(Boolean));
+        described.add(id + 'Error'); input.setAttribute('aria-describedby', [...described].join(' '));
+        $(id + 'Error').textContent = message; }
+      status.focus();
+    }
+  };
+}
+const languageFeedback = formFeedback('saveLanguageBtn', ['setAudioLanguage','setSubtitleLanguage','setSubtitleMode']);
+const streamFeedback = formFeedback('saveStreamBtn', ['streamCrf','streamMaxKbps','streamAudio','streamSegment','streamPrebuffer','streamCache','streamResolution','streamPreset','streamAudioLanguage','streamSubtitleLanguage','streamSubtitleMode','streamHdrMode','streamEncoder']);
+const cloudFeedback = formFeedback('addCloudSourceBtn', ['cloudName','cloudSecret','cloudRootId']);
+const rootFeedback = formFeedback('addCloudRootBtn', ['cloudBrowseSource','cloudFolderId']);
+function validation(error, mappings, feedback) {
+  if (error.status === 400) for (const [pattern, id, message] of mappings) {
+    if (pattern.test(error.message)) { feedback.fail(id, message); return; }
+  }
+  feedback.fail(null);
+}
+const rootError = /remote_id|remote_path|display_path|folder ID/i;
 function fmtDuration(ms) {
   const m = Math.max(0, Math.round(ms / 60000));
   return m >= 60 ? `${Math.floor(m/60)}h ${m%60}m` : `${m}m`;
@@ -960,6 +1020,7 @@ async function loadAll(attempt = 1) {
       return loadAll(attempt + 1);
     }
     $('healthText').textContent = 'SYSTEM DEGRADED';
+    if (!state.config) $('mediaTable').innerHTML = '<div class="empty"><b>Library unavailable</b>Refresh to try again.</div>';
     toast(String(error), true);
   }
 }
@@ -1114,14 +1175,14 @@ function renderLibrary() {
   $('createCollectionBtn').textContent = state.selected.size ? `Create collection (${state.selected.size})` : 'Create collection';
   const rows = filtered.slice(0, 400).map(m => `
     <div class="tr">
-      <input type="checkbox" data-id="${esc(m.id)}" ${state.selected.has(m.id) ? 'checked' : ''}>
+      <input type="checkbox" aria-label="Select ${esc(m.title)}" data-id="${esc(m.id)}" ${state.selected.has(m.id) ? 'checked' : ''}>
       <div class="name">${esc(m.title)}${String(m.path || '').startsWith('cloud://') ? ' <span class="badge">Cloud</span>' : ''}</div>
       <div class="kind"><span class="badge">${esc(KIND_LABEL[m.kind] || m.kind)}</span></div>
       <div class="mono tiny dim">${fmtDuration(m.duration_ms)}</div>
-      <div class="mono tiny dim">${m.width ? `${m.width}×${m.height}` : '—'}</div>
-      <div class="mono tiny dim">${esc(m.video_codec || m.audio_codec || '—')}</div>
+      <div class="mono tiny dim format">${m.width ? `${m.width}×${m.height}` : '—'}</div>
+      <div class="mono tiny dim codec">${esc(m.video_codec || m.audio_codec || '—')}</div>
     </div>`).join('');
-  $('mediaTable').innerHTML = `<div class="tr head"><div></div><div>Title</div><div>Kind</div><div>Runtime</div><div>Format</div><div>Codec</div></div>` + (rows || `<div class="empty" style="border:0"><b>No media</b>Scan a source to populate the catalog.</div>`);
+  $('mediaTable').innerHTML = `<div class="tr head"><div></div><div>Title</div><div class="kind">Kind</div><div>Runtime</div><div class="format">Format</div><div class="codec">Codec</div></div>` + (rows || `<div class="empty" style="border:0">${state.media.length ? '<b>No matching media</b>Try another search or filter.' : '<b>No media</b>Scan a source to populate the catalog.'}</div>`);
   document.querySelectorAll('#mediaTable input[type=checkbox]').forEach(box => box.addEventListener('change', () => {
     if (box.checked) state.selected.add(box.dataset.id); else state.selected.delete(box.dataset.id);
     $('createFromSelBtn').disabled = state.selected.size === 0;
@@ -1595,12 +1656,13 @@ async function browseCloud() {
 async function addCloudRoot() {
   const source = $('cloudBrowseSource').value;
   const folder = $('cloudFolderId').value.trim();
-  if (!source || !folder) { toast('Choose a source and folder first.', true); return; }
+  if (!rootFeedback.begin()) return;
+  if (!source || !folder) { rootFeedback.fail(!source ? 'cloudBrowseSource' : 'cloudFolderId', !source ? 'Choose a source.' : 'Enter a folder ID.'); rootFeedback.end(); return; }
   try {
     await api(`/api/v1/cloud/sources/${encodeURIComponent(source)}/roots`, { method: 'POST', body: JSON.stringify({ remote_id: folder, remote_path: folder, display_path: folder }) });
     await loadAll();
-    toast('Folder added to the cloud source.');
-  } catch (error) { toast(String(error), true); }
+    rootFeedback.success('Folder added to the cloud source.');
+  } catch (error) { validation(error, [[rootError, 'cloudFolderId', 'Enter a valid Google folder ID without slashes or dot segments.']], rootFeedback); } finally { rootFeedback.end(); }
 }
 
 function renderPrecache() {
@@ -1809,11 +1871,11 @@ function playUrl(url, label = 'HLS · 720p', target = 'player') {
   if (window.Hls && Hls.isSupported()) {
     const fromStart = label.startsWith('DVR') || label.startsWith('CATCH-UP');
     state.hls = new Hls({
-      // Start two segments behind the edge for a safety margin, then hold a
-      // deeper buffer so short uplink dips do not stall playback. The producer
-      // keeps 12 segments (48s) in the playlist.
-      liveSyncDurationCount: 2,
-      liveMaxLatencyDurationCount: 6,
+      // Sit ~20s behind the live edge (max 44s): distance behind the edge is
+      // the only cushion against slow segments. The producer keeps 12+
+      // segments (48s+) in the playlist.
+      liveSyncDuration: 20,
+      liveMaxLatencyDuration: 44,
       maxLiveSyncPlaybackRate: 1,
       maxBufferLength: 30,
       maxMaxBufferLength: 60,
@@ -1956,7 +2018,7 @@ async function scanSource(source) {
 function go(view) {
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
   $(`view-${view}`).classList.add('active');
-  document.querySelectorAll('.nav-item').forEach(n => n.classList.toggle('active', n.dataset.view === view));
+  document.querySelectorAll('.nav-item').forEach(n => { n.classList.toggle('active', n.dataset.view === view); if (n.dataset.view === view) n.setAttribute('aria-current', 'page'); else n.removeAttribute('aria-current'); });
   $('crumbView').textContent = ({'on-air':'On Air','channels':'Channels','library':'Library','guide':'Guide','collections':'Collections','programming':'Programming','sources':'Sources','settings':'Settings','tv':'TV'})[view] || view;
   if (view === 'guide') renderGuide();
   if (view === 'programming') { renderProgramming(); loadProgramming(); }
@@ -1970,7 +2032,9 @@ function go(view) {
   history.replaceState(null, '', `#${view}`);
 }
 
+let modalOpener = null;
 function openModal(mode) {
+  modalOpener = document.activeElement;
   state.modalMode = mode;
   $('modalBack').classList.add('open');
   const isScan = mode === 'scan';
@@ -1984,8 +2048,17 @@ function openModal(mode) {
   $('channelNumberField').style.display = isScan || isCollection ? 'none' : '';
   $('channelNameField').style.display = isScan || isCollection ? 'none' : '';
   $('modalConfirm').textContent = isScan ? 'Scan' : isCollection ? 'Create collection' : 'Create';
+  $(isScan ? 'scanSource' : isCollection ? 'collectionName' : 'channelNumber').focus();
 }
-function closeModal() { $('modalBack').classList.remove('open'); }
+function closeModal() { $('modalBack').classList.remove('open'); if (modalOpener?.isConnected) modalOpener.focus(); }
+document.addEventListener('keydown', (event) => {
+  if (!$('modalBack').classList.contains('open')) return;
+  if (event.key === 'Escape') { event.preventDefault(); closeModal(); return; }
+  if (event.key !== 'Tab') return;
+  const controls = [...$('modalBack').querySelectorAll('input, select, button')].filter(el => el.getClientRects().length && !el.disabled);
+  if (event.shiftKey && document.activeElement === controls[0]) { event.preventDefault(); controls[controls.length - 1].focus(); }
+  else if (!event.shiftKey && document.activeElement === controls[controls.length - 1]) { event.preventDefault(); controls[0].focus(); }
+});
 
 async function confirmModal() {
   if (state.modalMode === 'scan') {
@@ -2013,7 +2086,8 @@ $('refreshBtn').addEventListener('click', loadAll);
 $('addCloudSourceBtn').addEventListener('click', async () => {
   const name = $('cloudName').value.trim();
   const secret = $('cloudSecret').value.trim();
-  if (!name || !secret) { toast('Name and secret are required.', true); return; }
+  if (!cloudFeedback.begin()) return;
+  if (!name || !secret) { cloudFeedback.fail(!name ? 'cloudName' : 'cloudSecret', !name ? 'Enter a name.' : 'Enter credentials.'); cloudFeedback.end(); return; }
   const rootId = $('cloudRootId').value.trim();
   try {
     await api('/api/v1/cloud/sources', { method: 'POST', body: JSON.stringify({
@@ -2022,8 +2096,8 @@ $('addCloudSourceBtn').addEventListener('click', async () => {
     }) });
     $('cloudName').value = ''; $('cloudSecret').value = ''; $('cloudRootId').value = '';
     await loadAll();
-    toast('Cloud source added.');
-  } catch (error) { toast(String(error), true); }
+    cloudFeedback.success('Cloud source added.');
+  } catch (error) { validation(error, [[/secret:/i, 'cloudSecret', 'Check the credentials and token URL for the selected authentication type.'], [rootError, 'cloudRootId', 'Enter a valid Google folder ID without slashes or dot segments.']], cloudFeedback); } finally { cloudFeedback.end(); }
 });
 $('browseCloudBtn').addEventListener('click', browseCloud);
 $('addCloudRootBtn').addEventListener('click', addCloudRoot);
@@ -2156,6 +2230,7 @@ $('saveOverrideBtn').addEventListener('click', async () => {
   } catch (error) { toast(String(error), true); }
 });
 $('saveLanguageBtn').addEventListener('click', async () => {
+  if (!languageFeedback.begin()) return;
   try {
     state.language = await api('/api/v1/settings/language', { method: 'PUT', body: JSON.stringify({
       audio_language: $('setAudioLanguage').value.trim() || null,
@@ -2163,8 +2238,8 @@ $('saveLanguageBtn').addEventListener('click', async () => {
       subtitle_language: $('setSubtitleLanguage').value.trim() || null
     }) });
     renderSettings(); renderStream();
-    toast('Language defaults saved. Channel producers were restarted.');
-  } catch (error) { toast(String(error), true); }
+    languageFeedback.success('Language defaults saved. Channel producers were restarted.');
+  } catch (error) { validation(error, [[/audio_language:/, 'setAudioLanguage', 'Use at most 16 characters without control characters.'], [/subtitle_language:/, 'setSubtitleLanguage', 'Use at most 16 characters without control characters.'], [/subtitle_mode:/, 'setSubtitleMode', 'Choose a supported subtitle mode.']], languageFeedback); } finally { languageFeedback.end(); }
 });
 $('saveGraphicsBtn').addEventListener('click', async () => {
   if (!state.programChannel) { toast('Choose a channel first.', true); return; }
@@ -2188,7 +2263,8 @@ $('saveGraphicsBtn').addEventListener('click', async () => {
   } catch (error) { toast(String(error), true); }
 });
 $('saveStreamBtn').addEventListener('click', async () => {
-  if (!state.programChannel) { toast('Choose a channel first.', true); return; }
+  if (!streamFeedback.begin()) return;
+  if (!state.programChannel) { streamFeedback.fail(null); streamFeedback.end(); return; }
   const [width, height] = $('streamResolution').value.split('x').map(Number);
   const payload = {
     width, height,
@@ -2209,8 +2285,8 @@ $('saveStreamBtn').addEventListener('click', async () => {
   try {
     state.stream = await api(`/api/v1/channels/${encodeURIComponent(state.programChannel)}/stream`, { method: 'PUT', body: JSON.stringify(payload) });
     renderStream();
-    toast('Stream profile saved. The channel restarts at the current position.');
-  } catch (error) { toast(String(error), true); }
+    streamFeedback.success('Stream profile saved. The channel restarts at the current position.');
+  } catch (error) { validation(error, [[/language codes are limited to 16 characters/, null, 'Check both audio and subtitle language codes; each must be at most 16 characters.'], [/stream crf/, 'streamCrf', 'Enter a CRF from 16 to 32.'], [/stream max_kbps/, 'streamMaxKbps', 'Enter a bitrate from 0 to 20000.'], [/stream audio_kbps/, 'streamAudio', 'Enter a bitrate from 64 to 512.'], [/stream segment_seconds/, 'streamSegment', 'Enter 2 to 10 seconds.'], [/stream prebuffer_seconds/, 'streamPrebuffer', 'Enter 0 to 30 seconds.'], [/stream cache_segments/, 'streamCache', 'Enter 4 to 60 segments.'], [/stream width/, 'streamResolution', 'Choose a supported resolution.'], [/preset/, 'streamPreset', 'Choose a supported preset.'], [/subtitle mode/, 'streamSubtitleMode', 'Choose a supported subtitle mode.'], [/hdr mode/, 'streamHdrMode', 'Choose a supported HDR mode.'], [/encoder|VAAPI/, 'streamEncoder', 'Choose an available encoder.']], streamFeedback); } finally { streamFeedback.end(); }
 });
 async function loadExternalJson() {
   if (!state.programChannel) { toast('Choose a channel first.', true); return; }

@@ -1,0 +1,7 @@
+# Private source transition evidence
+
+The private runtime queues bounded generations for resolved media (local files and URL inputs), schedule gaps, catalog slate, and unresolved or missing inputs. Gaps and unresolved inputs use a generated slate. Watermark paths use the existing media command composition. FFmpeg output for URL inputs and subtitle extraction is suppressed to avoid logging signed URLs. Legacy slate no longer deletes public segment files.
+
+`cargo test -p awesometv-server engine:: -- --test-threads=1` passed 30 tests, including the wired Engine local/gap/local FFmpeg test, the ahead-of-deadline test, audio-marker test, and remote-image/watermark command test. The wired test checks discontinuities, monotonic playlist sequence and PDT, and readability of listed segments. It does not decode the tail/head to prove source identity. The remote/watermark test inspects command arguments; it is not a network playback test.
+
+Limits: the queue holds two generations, each at most 10 seconds. A URL that resolves but subsequently fails in FFmpeg still terminates the runtime; fallback is implemented for resolution failures and missing local paths, not decoder/network failure after launch. Runtime restart currently initializes a new publisher rather than reconstructing the prior playlist state. Slate has its own command builder rather than sharing the legacy slate builder. These gaps mean uninterrupted recovery and full restart continuity remain unproven.
