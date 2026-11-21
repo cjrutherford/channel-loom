@@ -18,6 +18,7 @@ const DEADLINE: Duration = Duration::from_secs(30 * 60);
 static JELLYFIN: OnceLock<Arc<Mutex<()>>> = OnceLock::new();
 static EMBY: OnceLock<Arc<Mutex<()>>> = OnceLock::new();
 
+#[allow(clippy::too_many_arguments)]
 pub async fn sync_library(
     pool: &SqlitePool,
     kind: &str,
@@ -31,6 +32,7 @@ pub async fn sync_library(
     sync_library_until(pool, kind, url, key, movies, tv, music, limit, None).await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn sync_library_until(
     pool: &SqlitePool,
     kind: &str,

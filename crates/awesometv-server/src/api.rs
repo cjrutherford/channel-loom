@@ -1580,7 +1580,7 @@ async fn create_cloud_source(
     state
         .cloud
         .validate_source(&input)
-        .map_err(|error| ApiError::bad_request(&error.to_string()))?;
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
     Ok(Json(state.cloud.create_source(&input).await?))
 }
 
@@ -1627,7 +1627,7 @@ async fn add_cloud_root(
         .await?
         .ok_or_else(|| ApiError::not_found("cloud source not found"))?;
     crate::cloud::manager::CloudManager::validate_root(&source.provider, &root)
-        .map_err(|error| ApiError::bad_request(&error.to_string()))?;
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
     Ok(Json(state.cloud.add_root(&id, &root).await?))
 }
 
@@ -1650,7 +1650,7 @@ async fn update_cloud_root(
             display_path: update.display_path.clone().unwrap_or(root.display_path),
         },
     )
-    .map_err(|error| ApiError::bad_request(&error.to_string()))?;
+    .map_err(|error| ApiError::bad_request(error.to_string()))?;
     Ok(Json(
         db::update_cloud_root(&state.pool, &id, &update).await?,
     ))

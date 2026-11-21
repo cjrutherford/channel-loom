@@ -10,6 +10,7 @@ const CHUNK: i64 = 300_000;
 
 #[derive(Clone, Debug)]
 pub struct Airing {
+    #[allow(dead_code)]
     pub airing_id: String,
     pub channel_id: String,
     pub media_id: String,
@@ -109,10 +110,9 @@ pub fn targets(rows: &[Airing], now: i64) -> Vec<Target> {
             selected.push((*next, 1));
             if current.end_ms.saturating_sub(current.start_ms) < SHORT
                 && next.end_ms.saturating_sub(next.start_ms) < SHORT
+                && let Some(third) = items.get(i + 2)
             {
-                if let Some(third) = items.get(i + 2) {
-                    selected.push((*third, 2));
-                }
+                selected.push((*third, 2));
             }
         }
         for (a, tier) in selected {
@@ -139,10 +139,12 @@ pub fn targets(rows: &[Airing], now: i64) -> Vec<Target> {
 
 /// First current chunk for every channel precedes all extensions; overlapping
 /// requests are deduplicated without advancing another channel's first chunk.
+#[allow(dead_code)]
 pub fn requests(targets: &[Target]) -> Vec<Request> {
     requests_with_chunk(targets, CHUNK)
 }
 
+#[allow(dead_code)]
 fn requests_with_chunk(targets: &[Target], chunk: i64) -> Vec<Request> {
     let mut pending: Vec<(u8, usize, &Target)> = Vec::new();
     for t in targets {
@@ -390,6 +392,7 @@ impl ChunkIndex {
             .collect()
     }
     /// Rejects gaps and stale identities; does not imply that the range is leased.
+    #[allow(dead_code)]
     pub fn covers(&self, identity: &SourceIdentity, mut start: i64, end: i64) -> bool {
         if end <= start {
             return false;
@@ -434,6 +437,7 @@ impl ChunkIndex {
     }
     /// Startup requires the first five minutes (or the shorter assigned range).
     /// Rolling readiness requires continuous coverage of the entire required range.
+    #[allow(dead_code)]
     pub fn readiness(&self, identity: &SourceIdentity, start: i64, end: i64) -> (bool, bool) {
         if end <= start {
             return (false, false);
@@ -445,6 +449,7 @@ impl ChunkIndex {
         )
     }
     /// Delete only indexed files, keeping failed removals unavailable for retry.
+    #[allow(dead_code)]
     pub fn evict(&self, manifest_path: &Path) -> std::io::Result<bool> {
         self.remove_one(manifest_path, &|_, _| {})
     }
@@ -729,9 +734,7 @@ pub trait ChunkBudget {
 #[cfg(unix)]
 fn limit_child_file_size(command: &mut std::process::Command, bytes: u64) -> std::io::Result<()> {
     use std::os::unix::process::CommandExt;
-    let limit: libc::rlim_t = bytes.try_into().map_err(|_| {
-        std::io::Error::new(std::io::ErrorKind::InvalidInput, "file limit too large")
-    })?;
+    let limit: libc::rlim_t = bytes;
     unsafe {
         command.pre_exec(move || {
             let limits = libc::rlimit {
@@ -757,6 +760,7 @@ fn limit_child_file_size(_: &mut std::process::Command, _: u64) -> std::io::Resu
 
 /// Returns None for unsupported inputs or unprovable timestamps. The caller may
 /// use the existing full-copy/source resolver in that case. No production wiring.
+#[allow(dead_code)]
 pub fn write_chunk<B: ChunkBudget>(
     request: &Request,
     directory: &Path,
@@ -1478,7 +1482,7 @@ mod tests {
             manifest.payload_bytes,
             std::fs::metadata(&path).unwrap().len()
         );
-        assert!(seek >= 900 && seek <= 1_100);
+        assert!((900..=1_100).contains(&seek));
         assert!(manifest.resolve(&identity, 5_999, 6_001, &dir).is_none());
         assert!(
             manifest

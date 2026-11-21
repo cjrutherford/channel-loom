@@ -43,10 +43,11 @@ fn mandatory_targets(rows: &[db::UpcomingMedia], now: i64) -> Vec<Vec<String>> {
             continue;
         }
         tiers[1].push(next.media_id.clone());
-        if current.end_ms - current.start_ms < 900_000 && next.end_ms - next.start_ms < 900_000 {
-            if let Some(third) = items.get(i + 2) {
-                tiers[2].push(third.media_id.clone());
-            }
+        if current.end_ms - current.start_ms < 900_000
+            && next.end_ms - next.start_ms < 900_000
+            && let Some(third) = items.get(i + 2)
+        {
+            tiers[2].push(third.media_id.clone());
         }
     }
     tiers
@@ -128,7 +129,7 @@ fn available_space(path: &std::path::Path) -> Result<u64> {
         return Err(std::io::Error::last_os_error().into());
     }
     let stats = unsafe { stats.assume_init() };
-    Ok((stats.f_bavail as u64).saturating_mul(stats.f_frsize as u64))
+    Ok(stats.f_bavail.saturating_mul(stats.f_frsize))
 }
 
 #[cfg(not(unix))]
@@ -528,10 +529,10 @@ impl CacheIndex {
                 .min_by_key(|(_, e)| e.unused)
                 .map(|(id, _)| id.clone())?;
             let entry = state.ready.get(&victim).unwrap();
-            if let Err(error) = std::fs::remove_file(&entry.path) {
-                if error.kind() != std::io::ErrorKind::NotFound {
-                    return None;
-                }
+            if let Err(error) = std::fs::remove_file(&entry.path)
+                && error.kind() != std::io::ErrorKind::NotFound
+            {
+                return None;
             }
             state.ready.remove(&victim);
         }
@@ -951,7 +952,7 @@ impl Precache {
         }
         let service = self.clone();
         tokio::spawn(async move {
-            if let Err(error) = service.initialize_index().await.and_then(|_| Ok(())) {
+            if let Err(error) = service.initialize_index().await.map(|_| ()) {
                 tracing::warn!(%error, "precache: index initialization failed");
                 return;
             }
@@ -1265,22 +1266,22 @@ impl Precache {
                     &identity,
                 )
                 .is_ok();
-            if valid {
-                if let Some(mut reservation) = self.index.reserve(
+            if valid
+                && let Some(mut reservation) = self.index.reserve(
                     &entry.media_id,
                     SourceIdentity::new(&entry.source_path, entry.source_size, entry.source_mtime),
                     path.to_path_buf(),
                     entry.source_size,
-                ) {
-                    let updated = sqlx::query("UPDATE precache_entries SET status='queued', error=NULL WHERE media_id=? AND generation=? AND status=? AND source_path=? AND source_size=? AND source_mtime=? AND cache_path IS ?")
+                )
+            {
+                let updated = sqlx::query("UPDATE precache_entries SET status='queued', error=NULL WHERE media_id=? AND generation=? AND status=? AND source_path=? AND source_size=? AND source_mtime=? AND cache_path IS ?")
                         .bind(&entry.media_id).bind(&entry.generation).bind(&entry.status).bind(&entry.source_path).bind(entry.source_size).bind(entry.source_mtime).bind(&entry.cache_path).execute(&self.pool).await?;
-                    if updated.rows_affected() == 1 {
-                        reservation.active = false;
-                        continue;
-                    }
-                    reservation.release_without_deleting_partial();
+                if updated.rows_affected() == 1 {
+                    reservation.active = false;
                     continue;
                 }
+                reservation.release_without_deleting_partial();
+                continue;
             }
             let unchanged = sqlx::query("UPDATE precache_entries SET bytes=0 WHERE media_id=? AND generation=? AND status=? AND source_path=? AND source_size=? AND source_mtime=? AND cache_path IS ?")
                 .bind(&entry.media_id).bind(&entry.generation).bind(&entry.status).bind(&entry.source_path).bind(entry.source_size).bind(entry.source_mtime).bind(&entry.cache_path).execute(&self.pool).await?;
@@ -1440,10 +1441,9 @@ impl Precache {
             if statuses
                 .get(&first.media_id)
                 .is_some_and(|(status, _)| status == "ready")
+                && !self.revalidate_ready(&first.media_id, &first.path).await?
             {
-                if !self.revalidate_ready(&first.media_id, &first.path).await? {
-                    continue;
-                }
+                continue;
             }
             if started >= 8 {
                 continue;
@@ -1747,10 +1747,10 @@ impl Precache {
                     Ok(ProcessOutcome::Yielded)
                 }
                 Ok(ProcessOutcome::Complete(bytes)) => reservation.publish(bytes).map(|()| {
-                    if entry.mode == "copy" {
-                        if let Some(path) = &entry.cache_path {
-                            let _ = std::fs::remove_file(format!("{path}.part.resume"));
-                        }
+                    if entry.mode == "copy"
+                        && let Some(path) = &entry.cache_path
+                    {
+                        let _ = std::fs::remove_file(format!("{path}.part.resume"));
                     }
                     ProcessOutcome::Complete(bytes)
                 }),
@@ -1761,10 +1761,12 @@ impl Precache {
                     Err(error)
                 }
             };
-            if result.is_err() && entry.mode == "copy" && !self.shutdown.load(Ordering::Relaxed) {
-                if let Some(path) = &entry.cache_path {
-                    let _ = std::fs::remove_file(format!("{path}.part.resume"));
-                }
+            if result.is_err()
+                && entry.mode == "copy"
+                && !self.shutdown.load(Ordering::Relaxed)
+                && let Some(path) = &entry.cache_path
+            {
+                let _ = std::fs::remove_file(format!("{path}.part.resume"));
             }
             match result {
                 Ok(ProcessOutcome::Yielded) => {
@@ -5855,12 +5857,13 @@ impl AdmissionAccounting {
             }
         }
         let mut optional_bytes = 0;
-        if let Some(d) = optional {
-            if !unique.contains_key(d.media_id.as_str()) && !satisfied(d) {
-                match d.bytes {
-                    Some(n) => optional_bytes = add(0, n)?,
-                    None => unknown = true,
-                }
+        if let Some(d) = optional
+            && !unique.contains_key(d.media_id.as_str())
+            && !satisfied(d)
+        {
+            match d.bytes {
+                Some(n) => optional_bytes = add(0, n)?,
+                None => unknown = true,
             }
         }
         let projected = add(add(occupied, pending)?, optional_bytes)?;
@@ -6139,7 +6142,9 @@ mod extra_accounting_tests {
             end_ms: 1,
         };
         let path = root.join("residual");
-        let guard = budget.reserve(&request, &[path.clone()], 50).unwrap();
+        let guard = budget
+            .reserve(&request, std::slice::from_ref(&path), 50)
+            .unwrap();
         std::fs::create_dir(&path).unwrap();
         drop(guard);
         assert_eq!(index.0.state.lock().unwrap().occupied_bytes(), 50);

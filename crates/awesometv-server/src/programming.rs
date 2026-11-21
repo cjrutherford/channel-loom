@@ -1009,13 +1009,12 @@ async fn renew_blocks(
         {
             Ok(()) => return Ok(RenewalOutcome::Appended),
             Err(error) => {
-                if let Some(current) = db::generated_timeline_state(pool, &channel.id).await? {
-                    if current.boundary_ms != old.boundary_ms
+                if let Some(current) = db::generated_timeline_state(pool, &channel.id).await?
+                    && (current.boundary_ms != old.boundary_ms
                         || current.definition_version != old.definition_version
-                        || current.continuation_json != old.continuation_json
-                    {
-                        continue;
-                    }
+                        || current.continuation_json != old.continuation_json)
+                {
+                    continue;
                 }
                 return Err(error);
             }
@@ -1503,9 +1502,16 @@ mod tests {
             .await
             .unwrap();
         assert!(
-            persist_timeline(&pool, &channel.id, &[part.clone()], 0, None, stale)
-                .await
-                .is_err()
+            persist_timeline(
+                &pool,
+                &channel.id,
+                std::slice::from_ref(&part),
+                0,
+                None,
+                stale
+            )
+            .await
+            .is_err()
         );
         assert_eq!(
             sqlx::query_scalar::<_, String>("SELECT title FROM channel_items WHERE channel_id = ?")
@@ -1522,16 +1528,30 @@ mod tests {
                 .is_none()
         );
         let snapshot = db::rebuild_revision(&pool).await.unwrap();
-        persist_timeline(&pool, &channel.id, &[part.clone()], 0, None, snapshot)
-            .await
-            .unwrap();
+        persist_timeline(
+            &pool,
+            &channel.id,
+            std::slice::from_ref(&part),
+            0,
+            None,
+            snapshot,
+        )
+        .await
+        .unwrap();
         let saved = db::generated_timeline_state(&pool, &channel.id)
             .await
             .unwrap();
         assert!(
-            persist_timeline(&pool, &channel.id, &[part.clone()], 0, None, snapshot)
-                .await
-                .is_err()
+            persist_timeline(
+                &pool,
+                &channel.id,
+                std::slice::from_ref(&part),
+                0,
+                None,
+                snapshot
+            )
+            .await
+            .is_err()
         );
         assert_eq!(
             db::generated_timeline_state(&pool, &channel.id)
@@ -1943,7 +1963,7 @@ mod tests {
             break_markers: vec![],
             order: "sequential".into(),
         };
-        db::set_classic_items(&pool, &channel.id, &[item.clone()])
+        db::set_classic_items(&pool, &channel.id, std::slice::from_ref(&item))
             .await
             .unwrap();
         rebuild_channel(&pool, &channel.id).await.unwrap();
@@ -2133,7 +2153,7 @@ mod tests {
                 &pool,
                 &channel.id,
                 &state,
-                &[item.clone()],
+                std::slice::from_ref(&item),
                 &next,
                 None,
                 Some(revision),
@@ -2161,7 +2181,7 @@ mod tests {
                 &pool,
                 &channel.id,
                 &state,
-                &[item.clone()],
+                std::slice::from_ref(&item),
                 &next
             )
             .await
@@ -2184,9 +2204,15 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        db::compare_append_generated_timeline(&pool, &channel.id, &state, &[item.clone()], &next)
-            .await
-            .unwrap();
+        db::compare_append_generated_timeline(
+            &pool,
+            &channel.id,
+            &state,
+            std::slice::from_ref(&item),
+            &next,
+        )
+        .await
+        .unwrap();
         assert!(
             db::compare_append_generated_timeline(&pool, &channel.id, &state, &[item], &next)
                 .await

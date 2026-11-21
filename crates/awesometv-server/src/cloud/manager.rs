@@ -666,11 +666,11 @@ impl CloudManager {
                 if next.is_none() {
                     break;
                 }
-                if let Some(ref token) = next {
-                    if !seen_pages.insert(token.clone()) {
-                        complete = false;
-                        break;
-                    }
+                if let Some(ref token) = next
+                    && !seen_pages.insert(token.clone())
+                {
+                    complete = false;
+                    break;
                 }
                 page = next;
             }

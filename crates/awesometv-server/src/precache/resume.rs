@@ -119,6 +119,7 @@ pub(super) fn load(
 // Copy a bounded prefix only after the caller has verified the source identity,
 // acquired its conditional job claim, and retained the full-size reservation.
 // The caller must recheck identity before publication and never expose this file.
+#[allow(dead_code)]
 pub(super) fn copy_slice(
     input: &mut File,
     output: &mut File,

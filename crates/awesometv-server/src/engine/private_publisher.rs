@@ -454,7 +454,7 @@ impl PrivateSpool {
                 .stdin(std::process::Stdio::null());
             let item = PrivateItem::start_fifo(dir, command, lease)?;
             self.items.push(item);
-            return Ok(());
+            Ok(())
         }
         #[cfg(not(unix))]
         {
@@ -742,7 +742,7 @@ fn normalize_segment(path: &Path, counters: &mut TransportCounters) -> Result<()
     if bytes.is_empty() || bytes.len() % 188 != 0 {
         bail!("invalid TS segment length");
     }
-    for packet in bytes.chunks_exact_mut(188) {
+    for packet in bytes.as_chunks_mut::<188>().0 {
         counters.normalize(packet)?;
     }
     std::fs::write(path, bytes)?;
@@ -1202,6 +1202,7 @@ where
             }
         }
     }
+    #[allow(clippy::drop_non_drop)]
     drop(future);
     ticket.cancel();
     None
@@ -1218,11 +1219,11 @@ async fn resolve_scheduled_input(
     Option<crate::precache::CacheLease>,
 )> {
     if let Some(cache) = precache
-        && let Some(entry) = crate::db::precache_entry(&pool, media_id).await?
+        && let Some(entry) = crate::db::precache_entry(pool, media_id).await?
         && entry.status == "ready"
         && entry.mode == "copy"
         && entry.bytes == entry.source_size
-        && crate::db::media_path(&pool, media_id).await?.as_deref()
+        && crate::db::media_path(pool, media_id).await?.as_deref()
             == Some(entry.source_path.as_str())
     {
         let identity = crate::precache::SourceIdentity::new(
@@ -1231,7 +1232,7 @@ async fn resolve_scheduled_input(
             entry.source_mtime,
         );
         if let Some(lease) = cache.acquire_ready(media_id, &identity).await? {
-            let kind = crate::db::media_kind(&pool, media_id)
+            let kind = crate::db::media_kind(pool, media_id)
                 .await?
                 .unwrap_or_else(|| "other".into());
             let location = lease.path().to_string_lossy().into_owned();
@@ -1463,6 +1464,7 @@ impl ScheduledChunkResolver {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn run_channel(
     pool: sqlx::SqlitePool,
     cloud: std::sync::Arc<crate::cloud::CloudManager>,
@@ -1484,6 +1486,7 @@ pub(super) async fn run_channel(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_channel_with_chunks(
     pool: sqlx::SqlitePool,
     cloud: std::sync::Arc<crate::cloud::CloudManager>,
@@ -1529,6 +1532,7 @@ async fn run_channel_with_chunks(
     // airing; a vanished file still fails the encoder and falls back to slate.
     let mut airing_input: Option<(String, i64, crate::cloud::manager::ResolvedMedia)> = None;
     type Resolution = Option<ResolvedInput>;
+    #[allow(clippy::type_complexity)]
     let mut pending_resolution: Option<(
         i64,
         String,
@@ -1567,11 +1571,11 @@ async fn run_channel_with_chunks(
             let mut lookup_ms = cursor;
             let mut item = crate::db::current_item(&pool, &channel.id, lookup_ms).await?;
             // Skip only a remainder which maps to no output frame.
-            if let Some(current) = &item {
-                if frame_grid_end(start_ms, current.end_ms) <= frame_grid_end(start_ms, cursor) {
-                    lookup_ms = current.end_ms;
-                    item = crate::db::current_item(&pool, &channel.id, lookup_ms).await?;
-                }
+            if let Some(current) = &item
+                && frame_grid_end(start_ms, current.end_ms) <= frame_grid_end(start_ms, cursor)
+            {
+                lookup_ms = current.end_ms;
+                item = crate::db::current_item(&pool, &channel.id, lookup_ms).await?;
             }
             let (duration, command, identity, lease) = if let Some(item) = item {
                 let duration = item.end_ms - cursor;
@@ -2672,7 +2676,7 @@ mod tests {
             boundary,
             boundary + 180180,
             &next,
-            &[previous.clone()]
+            std::slice::from_ref(&previous)
         ));
         assert!(!gate_interval_matches(
             0,
@@ -2680,7 +2684,7 @@ mod tests {
             boundary - 1,
             boundary + 180180,
             &next,
-            &[previous.clone()]
+            std::slice::from_ref(&previous)
         ));
         assert!(!gate_interval_matches(
             0,
@@ -2744,7 +2748,7 @@ mod tests {
             edge - 1,
             edge + 3003,
             &media(1),
-            &[neighbour.clone()]
+            std::slice::from_ref(&neighbour)
         ));
         assert!(!gate_interval_matches(
             0,
@@ -2752,7 +2756,7 @@ mod tests {
             edge - 3004,
             edge + 3003,
             &media(1),
-            &[neighbour.clone()]
+            std::slice::from_ref(&neighbour)
         ));
         assert!(!gate_interval_matches(
             0,
@@ -2760,7 +2764,7 @@ mod tests {
             edge - 9630,
             edge + 9000,
             &media(1),
-            &[neighbour.clone()]
+            std::slice::from_ref(&neighbour)
         ));
         assert!(!gate_interval_matches(
             0,
@@ -4195,10 +4199,10 @@ seg_bd145537-78ac-5c2c-a645-dd4e34164bd0_1795093393190_e9d2735be5884cc79e8b88aed
         let begun = Instant::now();
         let segment = tokio::time::timeout(Duration::from_secs(12), async {
             loop {
-                if let Ok(playlist) = tokio::fs::read_to_string(out.join("index.m3u8")).await {
-                    if let Some(name) = playlist.lines().find(|line| line.starts_with("segment_")) {
-                        break out.join(name);
-                    }
+                if let Ok(playlist) = tokio::fs::read_to_string(out.join("index.m3u8")).await
+                    && let Some(name) = playlist.lines().find(|line| line.starts_with("segment_"))
+                {
+                    break out.join(name);
                 }
                 tokio::time::sleep(Duration::from_millis(25)).await;
             }
@@ -4851,7 +4855,9 @@ seg_bd145537-78ac-5c2c-a645-dd4e34164bd0_1795093393190_e9d2735be5884cc79e8b88aed
                     );
                     if decoded
                         .stdout
-                        .chunks_exact(2)
+                        .as_chunks::<2>()
+                        .0
+                        .iter()
                         .any(|s| i16::from_le_bytes([s[0], s[1]]).unsigned_abs() > 100)
                     {
                         tone_segments += 1;
@@ -5415,7 +5421,9 @@ seg_bd145537-78ac-5c2c-a645-dd4e34164bd0_1795093393190_e9d2735be5884cc79e8b88aed
                 samples.extend(
                     decoded
                         .stdout
-                        .chunks_exact(2)
+                        .as_chunks::<2>()
+                        .0
+                        .iter()
                         .map(|b| i16::from_le_bytes([b[0], b[1]])),
                 );
                 assert!(
@@ -5659,7 +5667,12 @@ seg_bd145537-78ac-5c2c-a645-dd4e34164bd0_1795093393190_e9d2735be5884cc79e8b88aed
                 let published =
                     std::fs::read(public.join(&publisher.entries.last().unwrap().name)).unwrap();
                 assert_eq!(original.len(), published.len());
-                for (before, after) in original.chunks_exact(188).zip(published.chunks_exact(188)) {
+                for (before, after) in original
+                    .as_chunks::<188>()
+                    .0
+                    .iter()
+                    .zip(published.as_chunks::<188>().0.iter())
+                {
                     assert_eq!(&before[..3], &after[..3]);
                     assert_eq!(before[3] & 0xf0, after[3] & 0xf0);
                     assert_eq!(&before[4..], &after[4..]);
@@ -5709,7 +5722,12 @@ seg_bd145537-78ac-5c2c-a645-dd4e34164bd0_1795093393190_e9d2735be5884cc79e8b88aed
                 "{}",
                 String::from_utf8_lossy(&video.stderr)
             );
-            let frames: Vec<_> = video.stdout.chunks_exact(64 * 64 * 3).collect();
+            let frames: Vec<_> = video
+                .stdout
+                .as_chunks::<{ 64 * 64 * 3 }>()
+                .0
+                .iter()
+                .collect();
             assert_eq!(frames.len(), 300, "{color} frames");
             for frame in &frames {
                 let px = &frame[..3];
@@ -5733,7 +5751,9 @@ seg_bd145537-78ac-5c2c-a645-dd4e34164bd0_1795093393190_e9d2735be5884cc79e8b88aed
             assert!(audio.status.success());
             let samples: Vec<i16> = audio
                 .stdout
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .map(|b| i16::from_le_bytes([b[0], b[1]]))
                 .collect();
             assert!(
@@ -5842,7 +5862,12 @@ seg_bd145537-78ac-5c2c-a645-dd4e34164bd0_1795093393190_e9d2735be5884cc79e8b88aed
             String::from_utf8_lossy(&decoded.stderr)
         );
         assert!(decoded.status.success());
-        let frames: Vec<_> = decoded.stdout.chunks_exact(64 * 64 * 3).collect();
+        let frames: Vec<_> = decoded
+            .stdout
+            .as_chunks::<{ 64 * 64 * 3 }>()
+            .0
+            .iter()
+            .collect();
         assert_eq!(frames.len(), 600, "whole HLS video frames");
         for (i, frame) in frames.iter().enumerate() {
             let p = &frame[..3];
@@ -5870,7 +5895,9 @@ seg_bd145537-78ac-5c2c-a645-dd4e34164bd0_1795093393190_e9d2735be5884cc79e8b88aed
         assert!(decoded.status.success());
         let samples: Vec<i16> = decoded
             .stdout
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|b| i16::from_le_bytes([b[0], b[1]]))
             .collect();
         eprintln!("whole HLS samples: {}", samples.len());

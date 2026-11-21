@@ -52,11 +52,11 @@ pub struct Segment {
 }
 impl Drop for Segment {
     fn drop(&mut self) {
-        if let Err(e) = fs::remove_file(&self.path) {
-            if e.kind() != io::ErrorKind::NotFound {
-                self._permit.0.cancelled.store(true, Ordering::Release);
-                self._permit.0.wake.notify_all();
-            }
+        if let Err(e) = fs::remove_file(&self.path)
+            && e.kind() != io::ErrorKind::NotFound
+        {
+            self._permit.0.cancelled.store(true, Ordering::Release);
+            self._permit.0.wake.notify_all();
         }
     }
 }
@@ -674,7 +674,7 @@ mod tests {
             .trim()
             .parse()
             .unwrap();
-        assert!(duration >= 11.5 && duration <= 12.5, "duration {duration}");
+        assert!((11.5..=12.5).contains(&duration), "duration {duration}");
         fs::remove_file(output).unwrap();
     }
     #[test]

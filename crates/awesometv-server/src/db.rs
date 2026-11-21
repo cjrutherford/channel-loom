@@ -1947,7 +1947,9 @@ pub async fn upcoming_media(
 /// One SQLite read transaction supplies revisions, channels, schedule, and cache entries.
 #[derive(Debug)]
 pub(crate) struct PrecacheSnapshot {
+    #[allow(dead_code)]
     pub now_ms: i64,
+    #[allow(dead_code)]
     pub revisions: (i64, i64),
     pub channels: Vec<Channel>,
     pub schedule: Vec<PrecacheScheduleRow>,
@@ -1964,6 +1966,7 @@ pub(crate) struct PrecacheScheduleRow {
     pub media_id: String,
     pub start_ms: i64,
     pub end_ms: i64,
+    #[allow(dead_code)]
     pub kind: String,
     pub title: String,
     pub path: Option<String>,
@@ -2251,6 +2254,7 @@ pub(crate) async fn defer_queued_precache(
     Ok(())
 }
 
+#[allow(dead_code)]
 pub async fn next_queued_precache(
     pool: &SqlitePool,
     not_before_ms: i64,

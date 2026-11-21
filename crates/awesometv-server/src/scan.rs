@@ -630,7 +630,7 @@ mod local_scan_tests {
         let initial = scan_path(&root, 0, "music").unwrap();
         assert!(initial.complete);
         assert!(persist(&pool, &root, &initial).await.is_empty());
-        std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0)).unwrap();
+        std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o0)).unwrap();
         let denial_enforced = std::fs::read_dir(&blocked).is_err();
         let report = scan_path(&root, 0, "music").unwrap();
         std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o700)).unwrap();

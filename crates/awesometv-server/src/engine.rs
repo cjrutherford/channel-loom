@@ -216,13 +216,12 @@ impl Engine {
         // Private publication drains ordered segments; restarting it would discard
         // the old tail. Report lag while allowing the queue to drain instead.
         for runtime in self.private_runtimes.lock().await.values() {
-            if now - runtime.last_access_ms <= 120_000 {
-                if let Some(lag) = playlist_lag_ms(&runtime.playlist) {
-                    if lag > max_lag_ms {
-                        tracing::warn!(channel = %runtime.channel_number, lag_ms = lag,
+            if now - runtime.last_access_ms <= 120_000
+                && let Some(lag) = playlist_lag_ms(&runtime.playlist)
+                && lag > max_lag_ms
+            {
+                tracing::warn!(channel = %runtime.channel_number, lag_ms = lag,
                             "private producer lag guard: preserving queued segments");
-                    }
-                }
             }
         }
         restarted
@@ -266,14 +265,14 @@ impl Engine {
         for runtime in self.private_runtimes.lock().await.values() {
             let mut segments = 0;
             let mut bytes = 0;
-            if let Some(dir) = runtime.playlist.parent() {
-                if let Ok(entries) = std::fs::read_dir(dir) {
-                    for entry in entries.flatten() {
-                        let path = entry.path();
-                        if path.extension().and_then(|ext| ext.to_str()) == Some("ts") {
-                            segments += 1;
-                            bytes += std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
-                        }
+            if let Some(dir) = runtime.playlist.parent()
+                && let Ok(entries) = std::fs::read_dir(dir)
+            {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.extension().and_then(|ext| ext.to_str()) == Some("ts") {
+                        segments += 1;
+                        bytes += std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
                     }
                 }
             }
@@ -1118,10 +1117,13 @@ fn build_producer_command(
 #[allow(clippy::too_many_arguments)]
 #[derive(Clone)]
 enum InputLease {
+    #[allow(dead_code)]
     Full(crate::precache::CacheLease),
+    #[allow(dead_code)]
     Chunk(std::sync::Arc<crate::precache::chunks::ChunkLease>),
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_producer_command_leased(
     channel: &Channel,
     item_key: &str,
@@ -1563,35 +1565,35 @@ fn observe_publication(
         let mut previous = String::new();
         let mut seen = HashSet::new();
         while !stop.load(Ordering::Relaxed) {
-            if let Ok(body) = tokio::fs::read_to_string(&playlist).await {
-                if body != previous {
-                    let wall_ms = telemetry_wall_ms();
-                    let monotonic_ms = origin.elapsed().as_millis() as u64;
-                    tracing::info!(event = "playlist_observed", %channel_id, %item, pid, wall_ms, monotonic_ms);
-                    for line in body
-                        .lines()
-                        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+            if let Ok(body) = tokio::fs::read_to_string(&playlist).await
+                && body != previous
+            {
+                let wall_ms = telemetry_wall_ms();
+                let monotonic_ms = origin.elapsed().as_millis() as u64;
+                tracing::info!(event = "playlist_observed", %channel_id, %item, pid, wall_ms, monotonic_ms);
+                for line in body
+                    .lines()
+                    .filter(|line| !line.is_empty() && !line.starts_with('#'))
+                {
+                    // Only log safe local segment names, never paths or URLs.
+                    if line.contains('/')
+                        || line.contains('\\')
+                        || line.contains('?')
+                        || line.contains(':')
                     {
-                        // Only log safe local segment names, never paths or URLs.
-                        if line.contains('/')
-                            || line.contains('\\')
-                            || line.contains('?')
-                            || line.contains(':')
-                        {
-                            continue;
-                        }
-                        if seen.insert(line.to_owned()) {
-                            let modified_ms = playlist
-                                .parent()
-                                .and_then(|dir| std::fs::metadata(dir.join(line)).ok())
-                                .and_then(|m| m.modified().ok())
-                                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                                .map(|d| d.as_millis() as u64);
-                            tracing::info!(event = "segment_published", %channel_id, observer_item = %item, observer_pid = pid, segment = line, modified_ms, wall_ms, monotonic_ms);
-                        }
+                        continue;
                     }
-                    previous = body;
+                    if seen.insert(line.to_owned()) {
+                        let modified_ms = playlist
+                            .parent()
+                            .and_then(|dir| std::fs::metadata(dir.join(line)).ok())
+                            .and_then(|m| m.modified().ok())
+                            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                            .map(|d| d.as_millis() as u64);
+                        tracing::info!(event = "segment_published", %channel_id, observer_item = %item, observer_pid = pid, segment = line, modified_ms, wall_ms, monotonic_ms);
+                    }
                 }
+                previous = body;
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
@@ -2277,7 +2279,9 @@ mod tests {
             assert!(audio.status.success() && audio.stdout.len() > 40000);
             let samples: Vec<i16> = audio
                 .stdout
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .map(|b| i16::from_le_bytes([b[0], b[1]]))
                 .collect();
             frequencies.push(samples.windows(2).filter(|w| w[0] <= 0 && w[1] > 0).count());
@@ -2459,7 +2463,9 @@ mod tests {
             assert!(audio.status.success());
             let samples: Vec<i16> = audio
                 .stdout
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .map(|b| i16::from_le_bytes([b[0], b[1]]))
                 .collect();
             assert!(samples.len() > 20000);
@@ -2705,7 +2711,9 @@ mod tests {
             assert!(audio.status.success());
             let samples: Vec<i16> = audio
                 .stdout
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .map(|b| i16::from_le_bytes([b[0], b[1]]))
                 .collect();
             assert!(samples.len() > 20000);
@@ -2920,7 +2928,9 @@ mod tests {
             assert!(audio.status.success());
             let samples: Vec<i16> = audio
                 .stdout
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .map(|b| i16::from_le_bytes([b[0], b[1]]))
                 .collect();
             assert!(samples.len() > 20000);
@@ -3157,7 +3167,9 @@ mod tests {
             assert!(audio.status.success());
             let samples: Vec<i16> = audio
                 .stdout
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .map(|b| i16::from_le_bytes([b[0], b[1]]))
                 .collect();
             assert!(samples.len() > 20000);
@@ -3303,13 +3315,12 @@ mod tests {
                         let Ok(pid) = entry.file_name().to_string_lossy().parse::<u32>() else {
                             continue;
                         };
-                        if let Ok(args) = std::fs::read(entry.path().join("cmdline")) {
-                            if args
+                        if let Ok(args) = std::fs::read(entry.path().join("cmdline"))
+                            && args
                                 .split(|b| *b == 0)
                                 .any(|a| a == target.as_os_str().as_encoded_bytes())
-                            {
-                                return pid;
-                            }
+                        {
+                            return pid;
                         }
                     }
                 }
@@ -3429,7 +3440,9 @@ mod tests {
             assert!(audio.status.success());
             let samples: Vec<i16> = audio
                 .stdout
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .map(|b| i16::from_le_bytes([b[0], b[1]]))
                 .collect();
             assert!(samples.len() > 20000);
@@ -3568,10 +3581,10 @@ mod tests {
                     let Ok(pid) = entry.file_name().to_string_lossy().parse::<u32>() else {
                         continue;
                     };
-                    if let Ok(args) = std::fs::read(entry.path().join("cmdline")) {
-                        if args.split(|b| *b == 0).any(|arg| arg == target.as_bytes()) {
-                            return pid;
-                        }
+                    if let Ok(args) = std::fs::read(entry.path().join("cmdline"))
+                        && args.split(|b| *b == 0).any(|arg| arg == target.as_bytes())
+                    {
+                        return pid;
                     }
                 }
                 tokio::time::sleep(Duration::from_millis(20)).await;
@@ -3719,7 +3732,9 @@ mod tests {
             assert!(audio.status.success());
             let samples: Vec<i16> = audio
                 .stdout
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .map(|b| i16::from_le_bytes([b[0], b[1]]))
                 .collect();
             assert!(samples.len() > 20000);
