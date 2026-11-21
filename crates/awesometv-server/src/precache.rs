@@ -6002,8 +6002,10 @@ mod extra_accounting_tests {
                 .extra
                 .contains_key(&ExtraKey::OrphanPath(dir.join("unknown")))
         );
+        // Root ignores directory permissions, so a read-only directory cannot
+        // simulate a failed deletion there.
         #[cfg(unix)]
-        {
+        if unsafe { libc::geteuid() } != 0 {
             use std::os::unix::fs::PermissionsExt;
             let held = cache.0.state.lock().unwrap().occupied_bytes();
             std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();

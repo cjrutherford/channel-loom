@@ -36,7 +36,7 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Test
         # Engine tests drive real encoders on wall-clock deadlines.
-        run: cargo test --workspace -- --test-threads=2
+        run: cargo test --workspace -- --test-threads=1
       - name: Release build
         run: cargo build --release -p awesometv-server
       - name: Upload server binary
