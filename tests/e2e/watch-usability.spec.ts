@@ -26,7 +26,7 @@ for (const width of [320, 375, 768, 1440]) {
     await expect(channel).toBeFocused();
     expect(await channel.evaluate(el => getComputedStyle(el).outlineStyle)).not.toBe('none');
     await page.keyboard.press('Enter');
-    await expect(page.locator('#nextTitle')).toContainText('Scheduled: Program 2');
+    await expect(page.locator('#nowTitle')).toHaveText('Program 2');
     await expect(channel).toBeFocused();
     await expect(channel).toHaveAttribute('aria-pressed', 'true');
     await page.locator('#player').focus();
@@ -38,7 +38,7 @@ for (const width of [320, 375, 768, 1440]) {
     const guideButton = page.locator('#guideBody').getByRole('button', { name: 'Watch Channel 1' });
     await guideButton.focus();
     await page.keyboard.press('Enter');
-    await expect(page.locator('#nextTitle')).toContainText('Scheduled: Program 1');
+    await expect(page.locator('#nowTitle')).toHaveText('Program 1');
     await page.screenshot({ path: `tests/e2e/watch-evidence/populated-${width}.png`, fullPage: true });
   });
 }
@@ -69,7 +69,7 @@ test('empty and failure states offer recovery, including touch input', async ({ 
   await page.locator('#retryGuide').tap();
   await expect(page.locator('#channelStatus')).toHaveText('2 channels available');
   await page.locator('#rail').getByRole('button', { name: 'Watch Channel 2' }).tap();
-  await expect(page.locator('#nextTitle')).toContainText('Scheduled: Program 2');
+  await expect(page.locator('#nowTitle')).toHaveText('Program 2');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
   await context.close();
 });

@@ -2,7 +2,7 @@ const fs = require('fs');
 const vm = require('vm');
 const assert = require('assert');
 const html = fs.readFileSync('crates/awesometv-server/web/public.html', 'utf8');
-const code = html.match(/function playoutLabel\(\) \{[\s\S]*?\n\}/)[0];
+const code = ['playoutAir', 'playoutLabel'].map((name) => html.match(new RegExp(`function ${name}\\(\\) \\{[\\s\\S]*?\\n\\}`))[0]).join('\n');
 const segment = { sequence: '1', start_ms: 0, end_ms: 100, source: 'slate', fallback_reason: 'encoder_stall', scheduled_programme: { title: 'Example' } };
 const context = { state: { playout: { state: 'ready', generation: 'g', segments: [segment] } }, playheadFragment: () => ({ frag: { sn: 1 }, pdt: 0, timestamp: 1 }) };
 vm.createContext(context); vm.runInContext(code, context);
