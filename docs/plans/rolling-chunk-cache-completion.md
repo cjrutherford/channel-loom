@@ -73,3 +73,27 @@ Baseline commit: `425867d`. The feature is behind `AWESOMETV_PRECACHE_ROLLING_CH
 - Remux reads from the NAS ran at roughly 0.7–4 MB/s. One serial worker cannot keep all ten video channels ahead, even with the 10-minute window. In the last 10-minute run only 2 chunks were written.
 - While the worker ran, the private publisher put out scheduled slate twice ("source unavailable", plus "source resolution slow"). Playback comes first, so the flag is back off in production.
 - The gate is not met. Next step: the worker must yield to playback. It should not remux while a live source resolution is slow, and its own reads should be throttled. This is needed before any further fill attempt.
+
+## Handoff (2026-11-20, late): yield change and a cold-join slate bug
+
+**Uncommitted, on top of `1361a0b`:**
+- `PlaybackPressure` lives in `precache/chunks.rs` and is wired through `Precache::note_playback_pressure`.
+  - The private publisher calls it on "source resolution slow" and on scheduled slate.
+  - After a signal the worker stays idle for 120 s, and kills an in-flight remux.
+  - After each chunk it rests as long as the chunk took.
+- The publisher now prepares the continuation while a chunk input is playing. The old `!InputLease::Chunk` gate meant the source was opened only at the coverage edge, with no lead time.
+- Precache tests: 70 of 70 pass. Engine tests pass, except the known load-flaky `delayed_successor_resolution_does_not_block_publication`.
+
+**Production:** the flag is off (`deploy/rolling-chunks.yml`), image `awesometv:rolling-handoff-20261120`.
+
+**The real blocker found, which happens with the flag off too:**
+- Join channels 3, 4 and 8 at once (cold start). Each resolver hits its 2 s deadline, with cursor equal to wall time and so no margin. The publisher then commits scheduled slate for the rest of the programme.
+- The watch UI keeps showing the programme title while Standby airs.
+- Control run, flag off: all 3 channels were on slate for the whole 60 s.
+
+**Next slice:**
+1. After a failed resolve, slate only a short interval (about 10–20 s), then retry, rather than committing the rest of the programme.
+2. Give the first resolve of a cold channel start a longer deadline.
+3. The watch UI should show Standby when the playout segment source is slate.
+
+Only then retry the rolling cache with the flag on.

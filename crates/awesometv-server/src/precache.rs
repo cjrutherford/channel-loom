@@ -381,6 +381,7 @@ pub struct Precache {
     hydrating: AtomicBool,
     paused: AtomicBool,
     shutdown: Arc<AtomicBool>,
+    playback_pressure: Arc<chunks::PlaybackPressure>,
     scan_cursor: AtomicUsize,
     index: CacheIndex,
     index_initialized: tokio::sync::OnceCell<()>,
@@ -413,6 +414,7 @@ impl Precache {
             hydrating: AtomicBool::new(false),
             paused: AtomicBool::new(false),
             shutdown: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            playback_pressure: Default::default(),
             scan_cursor: AtomicUsize::new(0),
             index: CacheIndex::new(config.precache_max_gb.max(0) * 1_000_000_000, false),
             index_initialized: tokio::sync::OnceCell::new(),
@@ -605,6 +607,9 @@ impl Precache {
         });
     }
 
+    /// Live playback struggled to open a source; the chunk worker backs off.
+    pub fn note_playback_pressure(&self) { self.playback_pressure.note(db::now_ms()); }
+
     async fn rolling_loop(self: Arc<Self>) {
         // Fail closed until chunk allocations and whole-copy allocations share accounting.
         if let Err(error) = self.initialize_index().await { tracing::warn!(%error, "chunk accounting unavailable"); return; }
@@ -612,7 +617,9 @@ impl Precache {
         let index = match self.shared_chunk_index().await { Ok(Some(index)) => index, Ok(None) => return, Err(error) => { tracing::warn!(%error, "chunk index unavailable"); return; } };
         self.seed_verified_sources(&index).await;
         let budget = SharedChunkBudget { index: self.index.clone(), admission: self.eviction_lock.clone(), directory: directory.clone(), floor: self.free_space_floor };
-        let control = Arc::new(chunks::WorkerControl::new(budget, directory, 1_000_000_000, Duration::from_secs(120), self.shutdown.clone()));
+        let mut control = chunks::WorkerControl::new(budget, directory, 1_000_000_000, Duration::from_secs(120), self.shutdown.clone());
+        control.pressure = self.playback_pressure.clone();
+        let control = Arc::new(control);
         while !self.shutdown.load(Ordering::Relaxed) {
             let now = db::now_ms();
             match self.rolling_snapshot(now).await {
@@ -620,10 +627,12 @@ impl Precache {
                     self.publish_verified_sources(&snapshot);
                     let index = index.clone();
                     let control = control.clone();
+                    let started = std::time::Instant::now();
                     match tokio::time::timeout(Duration::from_secs(125), tokio::task::spawn_blocking(move || chunks::rolling_worker_tick(&snapshot, now, &index, &control))).await {
                         Err(_) => { tracing::warn!("chunk worker did not retire; stopping rolling loop"); return; }
-                        // More coverage may be missing: plan again without idling.
-                        Ok(Ok(chunks::TickOutcome::Completed)) => continue,
+                        // More coverage may be missing. Rest as long as the chunk took,
+                        // so the worker holds the share at most half the time.
+                        Ok(Ok(chunks::TickOutcome::Completed)) => { tokio::time::sleep(started.elapsed()).await; continue; }
                         Ok(_) => {}
                     }
                 }

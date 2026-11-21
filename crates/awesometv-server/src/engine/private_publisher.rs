@@ -1094,9 +1094,9 @@ async fn run_channel_with_chunks(
 
         // Prepare the next scheduled airing while the current child is alive.
         let mut can_prepare = queue.is_empty();
-        if queue.len() == 1 && !spool.items.first().is_some_and(|item| matches!(item._cache_lease, Some(super::InputLease::Chunk(_)))) {
-            can_prepare = true;
-        }
+        // A chunk input ends at its coverage edge, mid-programme. Preparing the
+        // continuation only after it ends leaves no time to open the source.
+        if queue.len() == 1 { can_prepare = true; }
         while can_prepare && preparation_allowed(cursor, crate::db::now_ms(), channel.stream.prebuffer_seconds) {
             can_prepare = false;
             let mut lookup_ms = cursor;
@@ -1157,6 +1157,7 @@ async fn run_channel_with_chunks(
                 // tick instead of committing the interval to slate.
                 if resolved.is_none() && cursor - crate::db::now_ms() > SLATE_COMMIT_MARGIN_MS {
                     tracing::info!(media_id = %item.media_id, "source resolution slow; retrying before air time");
+                    if let Some(cache) = &precache { cache.note_playback_pressure(); }
                     break;
                 }
                 airing_input = match &resolved {
@@ -1183,6 +1184,7 @@ async fn run_channel_with_chunks(
                     }
                     _ => {
                         tracing::warn!(media_id = %item.media_id, "source unavailable; publishing scheduled slate");
+                        if let Some(cache) = &precache { cache.note_playback_pressure(); }
                         (duration, slate_command(&channel), SegmentSource::fallback("source_unavailable", Some(programme)), None)
                     }
                 }

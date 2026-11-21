@@ -36,6 +36,30 @@ const LOOKAHEAD_MS: i64 = 10 * 60_000;
 /// A source that keeps failing (usually a remux timeout on a high-bitrate file)
 /// is retried with halved chunks, down to this floor.
 const MIN_RETRY_CHUNK_MS: i64 = 60_000;
+/// After live playback struggles to open a source, the worker stays off the
+/// share for this long. Playback always wins over cache fill.
+const YIELD_MS: i64 = 120_000;
+
+/// Signals from live playback that the shared media source is struggling.
+/// The chunk worker refuses to start while a recent signal stands, and kills
+/// an in-flight remux when a new one arrives.
+#[derive(Debug)]
+pub struct PlaybackPressure { last_ms: std::sync::atomic::AtomicI64, events: std::sync::atomic::AtomicU64 }
+impl Default for PlaybackPressure {
+    fn default() -> Self { Self { last_ms: std::sync::atomic::AtomicI64::new(i64::MIN), events: Default::default() } }
+}
+impl PlaybackPressure {
+    pub fn note(&self, now: i64) {
+        use std::sync::atomic::Ordering::Relaxed;
+        self.last_ms.fetch_max(now, Relaxed);
+        self.events.fetch_add(1, Relaxed);
+    }
+    fn recent(&self, now: i64) -> bool {
+        let last = self.last_ms.load(std::sync::atomic::Ordering::Relaxed);
+        last != i64::MIN && last > now.saturating_sub(YIELD_MS)
+    }
+    fn events(&self) -> u64 { self.events.load(std::sync::atomic::Ordering::Relaxed) }
+}
 
 /// Current, next, and conditional third targets; each interval is capped to its airing.
 pub fn targets(rows: &[Airing], now: i64) -> Vec<Target> {
@@ -281,11 +305,12 @@ pub struct WorkerControl<B> {
     pub chunk_ms: i64,
     failures: std::sync::Mutex<Vec<(Request, i64)>>,
     strikes: std::sync::Mutex<std::collections::HashMap<String, u32>>,
+    pub pressure: std::sync::Arc<PlaybackPressure>,
     active: std::sync::Mutex<()>,
 }
 impl<B> WorkerControl<B> {
     pub fn new(budget: B, directory: PathBuf, max_bytes: u64, timeout: std::time::Duration, cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>) -> Self {
-        Self { budget, directory, max_bytes, timeout, cancelled, chunk_ms: CHUNK, failures: Default::default(), strikes: Default::default(), active: Default::default() }
+        Self { budget, directory, max_bytes, timeout, cancelled, chunk_ms: CHUNK, failures: Default::default(), strikes: Default::default(), pressure: Default::default(), active: Default::default() }
     }
 }
 #[derive(Debug, PartialEq, Eq)]
@@ -331,6 +356,7 @@ fn missing_requests(targets: &[Target], index: &ChunkIndex, chunk: i64, now: i64
 pub fn rolling_worker_tick<B: ChunkBudget>(schedule_snapshot: &[Airing], now: i64, index: &ChunkIndex, control: &WorkerControl<B>) -> TickOutcome {
     let Ok(_active) = control.active.try_lock() else { return TickOutcome::Idle };
     if control.cancelled.load(std::sync::atomic::Ordering::Relaxed) || control.chunk_ms <= 0 || control.chunk_ms > CHUNK { return TickOutcome::Idle; }
+    if control.pressure.recent(now) { return TickOutcome::Idle; }
     let required = targets(schedule_snapshot, now);
     index.expire(&required, &control.budget);
     let mut failures = control.failures.lock().unwrap();
@@ -346,12 +372,19 @@ pub fn rolling_worker_tick<B: ChunkBudget>(schedule_snapshot: &[Airing], now: i6
         request.end_ms = request.end_ms.min(request.start_ms.saturating_add(shrunk));
     }
     let started = std::time::Instant::now();
-    if let Some(manifest) = write_chunk_controlled(&request, index, &control.directory, &control.budget, control.max_bytes, control.timeout, &control.cancelled) {
+    let baseline = control.pressure.events();
+    let yielded = || control.pressure.events() != baseline;
+    let stop = || control.cancelled.load(std::sync::atomic::Ordering::Relaxed) || yielded();
+    if let Some(manifest) = write_chunk_controlled(&request, index, &control.directory, &control.budget, control.max_bytes, control.timeout, &stop) {
         control.strikes.lock().unwrap().remove(&request.source.path);
         tracing::info!(source = %request.source.path, start_ms = manifest.source_start_ms, end_ms = manifest.source_end_ms, bytes = manifest.payload_bytes, elapsed_ms = started.elapsed().as_millis() as u64, "rolling chunk written");
         TickOutcome::Completed
     }
     else {
+        if yielded() {
+            tracing::info!(source = %request.source.path, start_ms = request.start_ms, "rolling chunk abandoned; yielding to live playback");
+            return TickOutcome::Idle;
+        }
         if !control.cancelled.load(std::sync::atomic::Ordering::Relaxed) {
             let strikes = { let mut m = control.strikes.lock().unwrap(); let n = m.entry(request.source.path.clone()).or_insert(0); *n = n.saturating_add(1); *n };
             let backoff = 60_000i64.saturating_mul(1i64 << strikes.saturating_sub(1).min(5)).min(MAX_BACKOFF_MS);
@@ -390,7 +423,7 @@ fn limit_child_file_size(_: &mut std::process::Command, _: u64) -> std::io::Resu
 /// use the existing full-copy/source resolver in that case. No production wiring.
 pub fn write_chunk<B: ChunkBudget>(request: &Request, directory: &Path, budget: &B, max_bytes: u64, timeout: std::time::Duration) -> Option<Manifest> {
     let index = ChunkIndex::open(directory).ok()?;
-    write_chunk_controlled(request, &index, directory, budget, max_bytes, timeout, &std::sync::atomic::AtomicBool::new(false))
+    write_chunk_controlled(request, &index, directory, budget, max_bytes, timeout, &|| false)
 }
 /// Log a failed remux with exit status/signal and a bounded (~2KB) tail of ffmpeg stderr.
 fn warn_remux_failure(request: &Request, status: &std::process::ExitStatus, stderr_path: &Path) {
@@ -407,7 +440,7 @@ fn warn_remux_failure(request: &Request, status: &std::process::ExitStatus, stde
     }
     tracing::warn!(source=%request.source.path, start_ms=request.start_ms, end_ms=request.end_ms, status=%status, signal=?signal, stderr_tail=%tail.trim(), "chunk remux failed");
 }
-fn write_chunk_controlled<B: ChunkBudget>(request: &Request, index: &ChunkIndex, directory: &Path, budget: &B, max_bytes: u64, timeout: std::time::Duration, cancelled: &std::sync::atomic::AtomicBool) -> Option<Manifest> {
+fn write_chunk_controlled<B: ChunkBudget>(request: &Request, index: &ChunkIndex, directory: &Path, budget: &B, max_bytes: u64, timeout: std::time::Duration, cancelled: &dyn Fn() -> bool) -> Option<Manifest> {
     use std::process::{Command, Stdio};
     use std::time::Instant;
     if request.start_ms < 0 || request.end_ms <= request.start_ms || request.end_ms - request.start_ms > CHUNK || max_bytes == 0 { return None; }
@@ -420,9 +453,13 @@ fn write_chunk_controlled<B: ChunkBudget>(request: &Request, index: &ChunkIndex,
     let metadata_final = directory.join(format!("{id}.json"));
     let paths = vec![temporary.clone(), directory.join(&published), metadata_tmp.clone(), metadata_final.clone(), directory.join(format!(".{id}.probe")), directory.join(format!(".{id}.source")), directory.join(format!(".{id}.format"))];
     let total_cap = max_bytes.checked_add(8_000_000 + 65_536 + 1_024 + 65_536)?;
-    let mut guard = budget.reserve(request, &paths, total_cap)?;
+    let Some(mut guard) = budget.reserve(request, &paths, total_cap) else {
+        tracing::warn!(source=%request.source.path, start_ms=request.start_ms, end_ms=request.end_ms, stage="budget_admission", max_bytes, total_cap, "chunk writer failed");
+        return None;
+    };
     let stderr_path = directory.join(format!(".{id}.stderr"));
     macro_rules! bail { ($($a:tt)*) => {{ tracing::warn!(source=%request.source.path, start_ms=request.start_ms, end_ms=request.end_ms, "chunk validation failed: {}", format!($($a)*)); return None; }} }
+    let stage = std::cell::Cell::new("remux");
     let mut run = || -> Option<Manifest> {
         // All streams are mapped: unsupported container/codec combinations fail.
         // ffmpeg's file size limit bounds output; timeout kills and reaps child.
@@ -433,9 +470,10 @@ fn write_chunk_controlled<B: ChunkBudget>(request: &Request, index: &ChunkIndex,
         limit_child_file_size(&mut command, max_bytes).ok()?;
         let mut child = command.spawn().ok()?;
         let deadline = Instant::now().checked_add(timeout)?;
-        loop { match child.try_wait() { Ok(Some(status)) => { if !status.success() { warn_remux_failure(request, &status, &stderr_path); return None; } break; }, Ok(None) if !cancelled.load(std::sync::atomic::Ordering::Relaxed) && Instant::now() < deadline => std::thread::sleep(std::time::Duration::from_millis(20)), _ => { let _ = child.kill(); let _ = child.wait(); tracing::warn!(source=%request.source.path, start_ms=request.start_ms, "chunk remux cancelled or timed out"); return None; } } }
+        loop { match child.try_wait() { Ok(Some(status)) => { if !status.success() { warn_remux_failure(request, &status, &stderr_path); return None; } break; }, Ok(None) if !cancelled() && Instant::now() < deadline => std::thread::sleep(std::time::Duration::from_millis(20)), _ => { let _ = child.kill(); let _ = child.wait(); tracing::warn!(source=%request.source.path, start_ms=request.start_ms, "chunk remux cancelled or timed out"); return None; } } }
         if std::fs::metadata(&temporary).ok()?.len() >= max_bytes { bail!("remux output reached max_bytes {max_bytes}"); }
         // ffprobe output is redirected to a bounded local file, never an unbounded pipe.
+        stage.set("packet_probe");
         let probe = directory.join(format!(".{id}.probe"));
         let result = (|| -> Option<Manifest> {
             let output = std::fs::File::create(&probe).ok()?;
@@ -443,7 +481,7 @@ fn write_chunk_controlled<B: ChunkBudget>(request: &Request, index: &ChunkIndex,
                 command.args(["-v", "error", "-select_streams", "v:0", "-show_entries", "packet=pts_time,duration_time,flags", "-of", "csv=p=0"]).arg(&temporary).stdout(Stdio::from(output)).stderr(Stdio::null());
                 limit_child_file_size(&mut command, 8_000_000).ok()?;
                 let mut child = command.spawn().ok()?;
-            loop { match child.try_wait() { Ok(Some(status)) => { if !status.success() { return None; } break; }, Ok(None) if !cancelled.load(std::sync::atomic::Ordering::Relaxed) && Instant::now() < deadline && std::fs::metadata(&probe).is_ok_and(|m| m.len() < 8_000_000) => std::thread::sleep(std::time::Duration::from_millis(20)), _ => { let _ = child.kill(); let _ = child.wait(); return None; } } }
+            loop { match child.try_wait() { Ok(Some(status)) => { if !status.success() { return None; } break; }, Ok(None) if !cancelled() && Instant::now() < deadline && std::fs::metadata(&probe).is_ok_and(|m| m.len() < 8_000_000) => std::thread::sleep(std::time::Duration::from_millis(20)), _ => { let _ = child.kill(); let _ = child.wait(); return None; } } }
             if std::fs::metadata(&probe).ok()?.len() >= 8_000_000 { return None; }
             let data = std::fs::read_to_string(&probe).ok()?;
             let mut packets = Vec::new();
@@ -457,6 +495,7 @@ fn write_chunk_controlled<B: ChunkBudget>(request: &Request, index: &ChunkIndex,
             }
             // Audio-only and missing timing explicitly fall back. Require the first
             // packet to be a keyframe and contiguous presentation timestamps.
+            stage.set("packet_validation");
             let first = *packets.first()?;
             if !first.2 || first.0 < 0 || first.0 > request.start_ms { bail!("first packet pts={} keyframe={} requested_start={}", first.0, first.2, request.start_ms); }
             packets.sort_by_key(|p| p.0);
@@ -466,6 +505,7 @@ fn write_chunk_controlled<B: ChunkBudget>(request: &Request, index: &ChunkIndex,
             let end = end.min(request.end_ms);
             // Confirm the retained keyframe matches the source, rather than assuming
             // a remuxer preserved timestamps for every input/container combination.
+            stage.set("source_keyframe_probe");
             let source_probe = directory.join(format!(".{id}.source"));
             let source_result = (|| -> Option<i64> {
                 let output = std::fs::File::create(&source_probe).ok()?;
@@ -475,7 +515,7 @@ fn write_chunk_controlled<B: ChunkBudget>(request: &Request, index: &ChunkIndex,
                 command.args(["-v","error","-select_streams","v:0","-read_intervals",&interval,"-show_entries","packet=pts_time,flags","-of","csv=p=0"]).arg(&request.source.path).stdout(Stdio::from(output)).stderr(Stdio::null());
                 limit_child_file_size(&mut command, 65_536).ok()?;
                 let mut child = command.spawn().ok()?;
-                loop { match child.try_wait() { Ok(Some(status)) => { if !status.success() { return None; } break; }, Ok(None) if !cancelled.load(std::sync::atomic::Ordering::Relaxed) && Instant::now() < deadline && std::fs::metadata(&source_probe).is_ok_and(|m| m.len() < 65_536) => std::thread::sleep(std::time::Duration::from_millis(20)), _ => { let _ = child.kill(); let _ = child.wait(); return None; } } }
+                loop { match child.try_wait() { Ok(Some(status)) => { if !status.success() { return None; } break; }, Ok(None) if !cancelled() && Instant::now() < deadline && std::fs::metadata(&source_probe).is_ok_and(|m| m.len() < 65_536) => std::thread::sleep(std::time::Duration::from_millis(20)), _ => { let _ = child.kill(); let _ = child.wait(); return None; } } }
                 if std::fs::metadata(&source_probe).ok()?.len() >= 65_536 { return None; }
                 let content = std::fs::read_to_string(&source_probe).ok()?;
                 let mut fields = content.lines().next()?.split(',');
@@ -486,6 +526,7 @@ fn write_chunk_controlled<B: ChunkBudget>(request: &Request, index: &ChunkIndex,
             let _ = std::fs::remove_file(source_probe);
             let source_pts = source_result; if source_pts != Some(first.0) { bail!("source keyframe {:?} != chunk first pts {}", source_pts, first.0); }
             // The output container's start time defines FFmpeg's default relative seek origin.
+            stage.set("format_probe");
             let format_probe = directory.join(format!(".{id}.format"));
             let format_result = (|| -> Option<i64> {
                 let output = std::fs::File::create(&format_probe).ok()?;
@@ -493,7 +534,7 @@ fn write_chunk_controlled<B: ChunkBudget>(request: &Request, index: &ChunkIndex,
                 command.args(["-v","error","-show_entries","format=start_time","-of","default=nw=1:nk=1"]).arg(&temporary).stdout(Stdio::from(output)).stderr(Stdio::null());
                 limit_child_file_size(&mut command, 1024).ok()?;
                 let mut child = command.spawn().ok()?;
-                loop { match child.try_wait() { Ok(Some(status)) => { if !status.success() { return None; } break; }, Ok(None) if !cancelled.load(std::sync::atomic::Ordering::Relaxed) && Instant::now() < deadline => std::thread::sleep(std::time::Duration::from_millis(20)), _ => { let _ = child.kill(); let _ = child.wait(); return None; } } }
+                loop { match child.try_wait() { Ok(Some(status)) => { if !status.success() { return None; } break; }, Ok(None) if !cancelled() && Instant::now() < deadline => std::thread::sleep(std::time::Duration::from_millis(20)), _ => { let _ = child.kill(); let _ = child.wait(); return None; } } }
                 if std::fs::metadata(&format_probe).ok()?.len() > 1024 { return None; }
                 let start: f64 = std::fs::read_to_string(&format_probe).ok()?.trim().parse().ok()?;
                 if !start.is_finite() { return None; } Some((start*1000.0).round() as i64)
@@ -501,7 +542,8 @@ fn write_chunk_controlled<B: ChunkBudget>(request: &Request, index: &ChunkIndex,
             let _ = std::fs::remove_file(format_probe);
             let format_start = format_result?;
             if format_start > first.0 { bail!("format start {format_start} > first pts {}", first.0); }
-            if cancelled.load(std::sync::atomic::Ordering::Relaxed) || !matches_source() { return None; }
+            stage.set("publication");
+            if cancelled() || !matches_source() { return None; }
             let payload = std::fs::symlink_metadata(&temporary).ok()?;
             if !payload.file_type().is_file() || payload.len() == 0 || payload.len() >= max_bytes { return None; }
             let manifest = Manifest { version:2, payload_bytes:payload.len(), source_path:request.source.path.clone(), source_size:request.source.size, source_mtime:request.source.mtime, chunk_file:published.clone(), source_start_ms:first.0, source_end_ms:end, local_start_ms:first.0.checked_sub(format_start)? };
@@ -521,6 +563,7 @@ fn write_chunk_controlled<B: ChunkBudget>(request: &Request, index: &ChunkIndex,
         result
     };
     let result = run();
+    if result.is_none() { tracing::warn!(source=%request.source.path, start_ms=request.start_ms, end_ms=request.end_ms, stage=stage.get(), max_bytes, "chunk writer failed"); }
     let _ = std::fs::remove_file(stderr_path);
     let _ = std::fs::remove_file(temporary);
     let _ = std::fs::remove_file(metadata_tmp);
@@ -559,6 +602,20 @@ mod tests {
     struct Budget;
     impl ChunkCharge for () { fn commit(&mut self, _: &[PathBuf]) {} }
     impl ChunkBudget for Budget { type Guard = (); fn reserve(&self, _: &Request, _: &[PathBuf], _:u64)->Option<()> { Some(()) } }
+    #[test] fn worker_yields_to_recent_playback_pressure() {
+        use std::sync::{Arc, atomic::AtomicBool};
+        let dir=std::env::temp_dir().join(format!("atv-yield-{}",uuid::Uuid::new_v4()));
+        std::fs::create_dir(&dir).unwrap();
+        let index=ChunkIndex::open(&dir).unwrap();
+        let rows=vec![a("1","missing",0,600_000,0)];
+        let control=WorkerControl::new(Budget, dir.clone(), 1_000_000, std::time::Duration::from_secs(5), Arc::new(AtomicBool::new(false)));
+        control.pressure.note(1_000);
+        assert_eq!(rolling_worker_tick(&rows, 1_000 + YIELD_MS - 1, &index, &control), TickOutcome::Idle, "no share access while playback struggles");
+        assert!(control.strikes.lock().unwrap().is_empty());
+        // Once the window passes, the worker resumes (and this missing source fails).
+        assert_eq!(rolling_worker_tick(&rows, 1_000 + YIELD_MS, &index, &control), TickOutcome::Failed);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
     #[test] fn rolling_tick_prioritizes_channels_skips_coverage_and_replenishes() {
         use std::process::Command;
         use std::sync::{Arc, atomic::AtomicBool};
