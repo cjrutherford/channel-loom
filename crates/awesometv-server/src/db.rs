@@ -219,13 +219,23 @@ pub async fn init(data_dir: &Path) -> Result<SqlitePool> {
     let db_path = data_dir.join("awesometv.db");
     let pending = data_dir.join("restore.pending");
     if pending.is_file() {
-        crate::backup::validate(&pending).await.context("validate pending restore")?;
+        crate::backup::validate(&pending)
+            .await
+            .context("validate pending restore")?;
         // Fold any committed WAL into the old database before preserving it.
         if db_path.is_file() {
             let options = sqlx::sqlite::SqliteConnectOptions::new().filename(&db_path);
-            let old = SqlitePoolOptions::new().max_connections(1).connect_with(options).await?;
-            let checkpoint: (i64, i64, i64) = sqlx::query_as("PRAGMA wal_checkpoint(TRUNCATE)").fetch_one(&old).await?;
-            anyhow::ensure!(checkpoint.0 == 0, "cannot checkpoint existing database before restore");
+            let old = SqlitePoolOptions::new()
+                .max_connections(1)
+                .connect_with(options)
+                .await?;
+            let checkpoint: (i64, i64, i64) = sqlx::query_as("PRAGMA wal_checkpoint(TRUNCATE)")
+                .fetch_one(&old)
+                .await?;
+            anyhow::ensure!(
+                checkpoint.0 == 0,
+                "cannot checkpoint existing database before restore"
+            );
             old.close().await;
             // Remove checkpointed sidecars before replacing the database.
             for suffix in ["awesometv.db-wal", "awesometv.db-shm"] {
@@ -235,7 +245,8 @@ pub async fn init(data_dir: &Path) -> Result<SqlitePool> {
                     Err(error) => return Err(error).context("remove old SQLite sidecar"),
                 }
             }
-            let previous = data_dir.join(format!("awesometv.pre-restore.{}.db", uuid::Uuid::new_v4()));
+            let previous =
+                data_dir.join(format!("awesometv.pre-restore.{}.db", uuid::Uuid::new_v4()));
             std::fs::rename(&db_path, &previous).context("preserve database before restore")?;
             if let Err(error) = std::fs::rename(&pending, &db_path) {
                 std::fs::rename(&previous, &db_path).context("roll back failed restore")?;
@@ -243,12 +254,12 @@ pub async fn init(data_dir: &Path) -> Result<SqlitePool> {
             }
         } else {
             anyhow::ensure!(
-                !data_dir.join("awesometv.db-wal").exists() && !data_dir.join("awesometv.db-shm").exists(),
+                !data_dir.join("awesometv.db-wal").exists()
+                    && !data_dir.join("awesometv.db-shm").exists(),
                 "orphaned SQLite sidecars require operator inspection before restore"
             );
             std::fs::rename(&pending, &db_path).context("apply restore")?;
         }
-
     }
     let url = format!("sqlite://{}?mode=rwc", db_path.display());
     let pool = SqlitePoolOptions::new()
@@ -839,21 +850,51 @@ pub async fn init(data_dir: &Path) -> Result<SqlitePool> {
         .execute(&pool)
         .await?;
     }
-    if !precache_columns.iter().any(|row| row.get::<String, _>("name") == "identity_known") {
-        sqlx::query("ALTER TABLE precache_entries ADD COLUMN identity_known INTEGER NOT NULL DEFAULT 1").execute(&pool).await?;
+    if !precache_columns
+        .iter()
+        .any(|row| row.get::<String, _>("name") == "identity_known")
+    {
+        sqlx::query(
+            "ALTER TABLE precache_entries ADD COLUMN identity_known INTEGER NOT NULL DEFAULT 1",
+        )
+        .execute(&pool)
+        .await?;
         // Rows produced by the previous planner carry these explicit diagnostics.
         sqlx::query("UPDATE precache_entries SET identity_known = 0 WHERE status = 'queued' AND error IN ('source mtime unavailable', 'source size and mtime unavailable')").execute(&pool).await?;
     }
-    if !precache_columns.iter().any(|row| row.get::<String, _>("name") == "retry_count") {
-        sqlx::query("ALTER TABLE precache_entries ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0").execute(&pool).await?;
+    if !precache_columns
+        .iter()
+        .any(|row| row.get::<String, _>("name") == "retry_count")
+    {
+        sqlx::query(
+            "ALTER TABLE precache_entries ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0",
+        )
+        .execute(&pool)
+        .await?;
     }
-    if !precache_columns.iter().any(|row| row.get::<String, _>("name") == "generation") {
-        sqlx::query("ALTER TABLE precache_entries ADD COLUMN generation TEXT NOT NULL DEFAULT ''").execute(&pool).await?;
+    if !precache_columns
+        .iter()
+        .any(|row| row.get::<String, _>("name") == "generation")
+    {
+        sqlx::query("ALTER TABLE precache_entries ADD COLUMN generation TEXT NOT NULL DEFAULT ''")
+            .execute(&pool)
+            .await?;
     }
-    if !precache_columns.iter().any(|row| row.get::<String, _>("name") == "last_attempt_order") {
-        sqlx::query("ALTER TABLE precache_entries ADD COLUMN last_attempt_order INTEGER NOT NULL DEFAULT 0").execute(&pool).await?;
+    if !precache_columns
+        .iter()
+        .any(|row| row.get::<String, _>("name") == "last_attempt_order")
+    {
+        sqlx::query(
+            "ALTER TABLE precache_entries ADD COLUMN last_attempt_order INTEGER NOT NULL DEFAULT 0",
+        )
+        .execute(&pool)
+        .await?;
     }
-    sqlx::query("UPDATE precache_entries SET generation = lower(hex(randomblob(16))) WHERE generation = ''").execute(&pool).await?;
+    sqlx::query(
+        "UPDATE precache_entries SET generation = lower(hex(randomblob(16))) WHERE generation = ''",
+    )
+    .execute(&pool)
+    .await?;
     // Existing databases retain their original column default; repair any legacy writer atomically.
     sqlx::query("CREATE TRIGGER IF NOT EXISTS precache_generation_insert AFTER INSERT ON precache_entries WHEN NEW.generation = '' BEGIN UPDATE precache_entries SET generation=lower(hex(randomblob(16))) WHERE media_id=NEW.media_id AND generation=''; END").execute(&pool).await?;
     sqlx::query("CREATE TRIGGER IF NOT EXISTS precache_generation_update AFTER UPDATE OF generation ON precache_entries WHEN NEW.generation = '' BEGIN UPDATE precache_entries SET generation=lower(hex(randomblob(16))) WHERE media_id=NEW.media_id AND generation=''; END").execute(&pool).await?;
@@ -1930,14 +1971,22 @@ pub(crate) struct PrecacheScheduleRow {
     pub size_bytes: Option<i64>,
 }
 
-pub(crate) async fn precache_snapshot(pool: &SqlitePool, now: i64, horizon: i64) -> Result<PrecacheSnapshot> {
+pub(crate) async fn precache_snapshot(
+    pool: &SqlitePool,
+    now: i64,
+    horizon: i64,
+) -> Result<PrecacheSnapshot> {
     let mut tx = pool.begin().await?;
     let snapshot = precache_snapshot_on(&mut tx, now, horizon).await?;
     tx.commit().await?;
     Ok(snapshot)
 }
 
-async fn precache_snapshot_on(conn: &mut sqlx::SqliteConnection, now: i64, horizon: i64) -> Result<PrecacheSnapshot> {
+async fn precache_snapshot_on(
+    conn: &mut sqlx::SqliteConnection,
+    now: i64,
+    horizon: i64,
+) -> Result<PrecacheSnapshot> {
     let revisions = sqlx::query_as("SELECT (SELECT revision FROM renewal_input_revision WHERE id = 1), revision FROM rebuild_timeline_revision WHERE id = 1")
         .fetch_one(&mut *conn).await?;
     let channels = list_channels_on(&mut *conn).await?;
@@ -1948,15 +1997,44 @@ async fn precache_snapshot_on(conn: &mut sqlx::SqliteConnection, now: i64, horiz
     let mut channel = String::new();
     let mut after_current = None::<usize>;
     for row in rows {
-        let item = PrecacheScheduleRow { in_ms: row.get("in_ms"), video_codec: row.get("video_codec"), audio_codec: row.get("audio_codec"), media_kind: row.get("media_kind"), channel_id: row.get("channel_id"), end_ms: row.get("end_ms"), media_id: row.get("media_id"), kind: row.get("kind"), title: row.get("title"), path: row.get("path"), duration_ms: row.get("duration_ms"), size_bytes: row.get("size_bytes"), start_ms: row.get("start_ms") };
-        if item.channel_id != channel { channel = item.channel_id.clone(); after_current = None; }
-        if after_current.is_none() && item.start_ms <= now && item.end_ms > now { after_current = Some(0); }
+        let item = PrecacheScheduleRow {
+            in_ms: row.get("in_ms"),
+            video_codec: row.get("video_codec"),
+            audio_codec: row.get("audio_codec"),
+            media_kind: row.get("media_kind"),
+            channel_id: row.get("channel_id"),
+            end_ms: row.get("end_ms"),
+            media_id: row.get("media_id"),
+            kind: row.get("kind"),
+            title: row.get("title"),
+            path: row.get("path"),
+            duration_ms: row.get("duration_ms"),
+            size_bytes: row.get("size_bytes"),
+            start_ms: row.get("start_ms"),
+        };
+        if item.channel_id != channel {
+            channel = item.channel_id.clone();
+            after_current = None;
+        }
+        if after_current.is_none() && item.start_ms <= now && item.end_ms > now {
+            after_current = Some(0);
+        }
         let required = after_current.is_some_and(|n| n < 3);
-        if item.start_ms <= horizon || required { schedule.push(item); }
-        if let Some(n) = after_current.as_mut() { *n += 1; }
+        if item.start_ms <= horizon || required {
+            schedule.push(item);
+        }
+        if let Some(n) = after_current.as_mut() {
+            *n += 1;
+        }
     }
     let rows = sqlx::query("SELECT p.*, COALESCE(m.title, p.media_id) AS title FROM precache_entries p LEFT JOIN media_items m ON m.id = p.media_id ORDER BY p.start_ms").fetch_all(&mut *conn).await?;
-    Ok(PrecacheSnapshot { now_ms: now, revisions, channels, schedule, entries: rows.iter().map(precache_row).collect() })
+    Ok(PrecacheSnapshot {
+        now_ms: now,
+        revisions,
+        channels,
+        schedule,
+        entries: rows.iter().map(precache_row).collect(),
+    })
 }
 
 pub async fn precache_entry(pool: &SqlitePool, media_id: &str) -> Result<Option<PrecacheEntry>> {
@@ -2035,7 +2113,12 @@ pub async fn invalidate_ready_precache(pool: &SqlitePool, media_id: &str) -> Res
     Ok(result.rows_affected() == 1)
 }
 
-pub async fn set_precache_progress(pool: &SqlitePool, media_id: &str, generation: &str, bytes: i64) -> Result<()> {
+pub async fn set_precache_progress(
+    pool: &SqlitePool,
+    media_id: &str,
+    generation: &str,
+    bytes: i64,
+) -> Result<()> {
     let result = sqlx::query("UPDATE precache_entries SET bytes = ?, updated_ms = ? WHERE media_id = ? AND generation = ? AND status = 'running'")
         .bind(bytes)
         .bind(now_ms())
@@ -2078,25 +2161,44 @@ pub async fn precache_statuses(
         .collect())
 }
 
-pub async fn prune_precache_queue(pool: &SqlitePool, cutoff_ms: i64, protected: &std::collections::HashSet<String>) -> Result<u64> {
+pub async fn prune_precache_queue(
+    pool: &SqlitePool,
+    cutoff_ms: i64,
+    protected: &std::collections::HashSet<String>,
+) -> Result<u64> {
     let rows = sqlx::query("SELECT media_id, generation, updated_ms FROM precache_entries WHERE status = 'queued' AND NOT EXISTS (SELECT 1 FROM channel_items ci WHERE ci.media_id = precache_entries.media_id AND ci.end_ms > ?)")
         .bind(cutoff_ms).fetch_all(pool).await?;
     let mut removed = 0;
     for row in rows {
         let id: String = row.get("media_id");
-        if protected.contains(&id) { continue; }
+        if protected.contains(&id) {
+            continue;
+        }
         removed += sqlx::query("DELETE FROM precache_entries WHERE media_id = ? AND status = 'queued' AND generation = ? AND updated_ms = ? AND NOT EXISTS (SELECT 1 FROM channel_items ci WHERE ci.media_id = precache_entries.media_id AND ci.end_ms > ?)")
             .bind(id).bind(row.get::<String, _>("generation")).bind(row.get::<i64, _>("updated_ms")).bind(cutoff_ms).execute(pool).await?.rows_affected();
     }
     Ok(removed)
 }
 
-pub async fn trim_precache_queue(pool: &SqlitePool, keep: i64, protected: &std::collections::HashSet<String>) -> Result<u64> {
+pub async fn trim_precache_queue(
+    pool: &SqlitePool,
+    keep: i64,
+    protected: &std::collections::HashSet<String>,
+) -> Result<u64> {
     let rows = sqlx::query("SELECT media_id, generation, updated_ms FROM precache_entries WHERE status = 'queued' ORDER BY deadline_ms, start_ms")
         .fetch_all(pool).await?;
-    let optional_slots = (keep - rows.iter().filter(|row| protected.contains(&row.get::<String, _>("media_id"))).count() as i64).max(0) as usize;
+    let optional_slots = (keep
+        - rows
+            .iter()
+            .filter(|row| protected.contains(&row.get::<String, _>("media_id")))
+            .count() as i64)
+        .max(0) as usize;
     let mut removed = 0;
-    for row in rows.iter().filter(|row| !protected.contains(&row.get::<String, _>("media_id"))).skip(optional_slots) {
+    for row in rows
+        .iter()
+        .filter(|row| !protected.contains(&row.get::<String, _>("media_id")))
+        .skip(optional_slots)
+    {
         removed += sqlx::query("DELETE FROM precache_entries WHERE media_id = ? AND status = 'queued' AND generation = ? AND updated_ms = ?")
             .bind(row.get::<String, _>("media_id")).bind(row.get::<String, _>("generation")).bind(row.get::<i64, _>("updated_ms")).execute(pool).await?.rows_affected();
     }
@@ -2104,20 +2206,32 @@ pub async fn trim_precache_queue(pool: &SqlitePool, keep: i64, protected: &std::
 }
 
 /// Hydrate only the exact queued generation observed by the worker.
-pub async fn hydrate_precache_identity(pool: &SqlitePool, entry: &PrecacheEntry, size: i64, mtime: i64) -> Result<bool> {
+pub async fn hydrate_precache_identity(
+    pool: &SqlitePool,
+    entry: &PrecacheEntry,
+    size: i64,
+    mtime: i64,
+) -> Result<bool> {
     let result = sqlx::query("UPDATE precache_entries SET generation = CASE WHEN source_mtime != 0 AND (source_size != ? OR source_mtime != ?) THEN lower(hex(randomblob(16))) ELSE generation END, source_size = ?, source_mtime = ?, identity_known = 1, error = NULL, updated_ms = ? WHERE media_id = ? AND status = 'queued' AND identity_known = 0 AND source_path = ? AND source_size = ? AND source_mtime = ? AND updated_ms = ? AND cache_path IS ? AND generation = ?")
         .bind(size).bind(mtime).bind(size).bind(mtime).bind(now_ms()).bind(&entry.media_id).bind(&entry.source_path)
         .bind(entry.source_size).bind(entry.source_mtime).bind(entry.updated_ms).bind(&entry.cache_path).bind(&entry.generation).execute(pool).await?;
     Ok(result.rows_affected() == 1)
 }
 
-pub async fn fail_precache_identity(pool: &SqlitePool, entry: &PrecacheEntry, error: &str) -> Result<()> {
+pub async fn fail_precache_identity(
+    pool: &SqlitePool,
+    entry: &PrecacheEntry,
+    error: &str,
+) -> Result<()> {
     sqlx::query("UPDATE precache_entries SET status = 'failed', error = ?, updated_ms = ?, retry_count = MIN(retry_count + 1, 5) WHERE media_id = ? AND status = 'queued' AND identity_known = 0 AND source_path = ? AND source_size = ? AND source_mtime = ? AND updated_ms = ? AND cache_path IS ?")
         .bind(error).bind(now_ms()).bind(&entry.media_id).bind(&entry.source_path).bind(entry.source_size).bind(entry.source_mtime).bind(entry.updated_ms).bind(&entry.cache_path).execute(pool).await?;
     Ok(())
 }
 
-pub(crate) async fn claim_queued_precache(pool: &SqlitePool, entry: &PrecacheEntry) -> Result<bool> {
+pub(crate) async fn claim_queued_precache(
+    pool: &SqlitePool,
+    entry: &PrecacheEntry,
+) -> Result<bool> {
     let result = sqlx::query("UPDATE precache_entries SET status = 'running', error = NULL, updated_ms = ?, last_attempt_order = (SELECT COALESCE(MAX(last_attempt_order), 0) + 1 FROM precache_entries) WHERE media_id = ? AND status = 'queued' AND identity_known = 1 AND source_path = ? AND source_size = ? AND source_mtime = ? AND cache_path IS ? AND mode = ? AND updated_ms = ? AND generation = ?")
         .bind(now_ms()).bind(&entry.media_id).bind(&entry.source_path).bind(entry.source_size)
         .bind(entry.source_mtime).bind(&entry.cache_path).bind(&entry.mode).bind(entry.updated_ms).bind(&entry.generation)
@@ -2125,7 +2239,11 @@ pub(crate) async fn claim_queued_precache(pool: &SqlitePool, entry: &PrecacheEnt
     Ok(result.rows_affected() == 1)
 }
 
-pub(crate) async fn defer_queued_precache(pool: &SqlitePool, entry: &PrecacheEntry, reason: &str) -> Result<()> {
+pub(crate) async fn defer_queued_precache(
+    pool: &SqlitePool,
+    entry: &PrecacheEntry,
+    reason: &str,
+) -> Result<()> {
     sqlx::query("UPDATE precache_entries SET error = ? WHERE media_id = ? AND status = 'queued' AND identity_known = 1 AND source_path = ? AND source_size = ? AND source_mtime = ? AND cache_path IS ? AND mode = ? AND updated_ms = ?")
         .bind(reason).bind(&entry.media_id).bind(&entry.source_path).bind(entry.source_size)
         .bind(entry.source_mtime).bind(&entry.cache_path).bind(&entry.mode).bind(entry.updated_ms)
@@ -2153,10 +2271,17 @@ pub async fn next_queued_precache(
 }
 
 /// Select a queued entry in a mandatory tier, preserving queue order.
-pub async fn next_queued_precache_in(pool: &SqlitePool, ids: &[String], allow_proxy: bool) -> Result<Option<PrecacheEntry>> {
+pub async fn next_queued_precache_in(
+    pool: &SqlitePool,
+    ids: &[String],
+    allow_proxy: bool,
+) -> Result<Option<PrecacheEntry>> {
     let rows = sqlx::query("SELECT * FROM precache_entries WHERE status = 'queued' ORDER BY last_attempt_order, start_ms, deadline_ms, media_id")
         .fetch_all(pool).await?;
-    Ok(rows.iter().map(precache_row).find(|entry| ids.contains(&entry.media_id) && (allow_proxy || entry.mode != "proxy")))
+    Ok(rows
+        .iter()
+        .map(precache_row)
+        .find(|entry| ids.contains(&entry.media_id) && (allow_proxy || entry.mode != "proxy")))
 }
 
 pub async fn reset_running_precache(pool: &SqlitePool) -> Result<()> {
@@ -3855,9 +3980,14 @@ mod tests {
     async fn precache_claim_rejects_changed_queued_generation() {
         let dir = std::env::temp_dir().join(format!("awesometv-claim-{}", Uuid::new_v4()));
         let pool = init(&dir).await.unwrap();
-        upsert_precache(&pool, "m", "/source", 4, 1, "/cache/m", "copy", 1, 1).await.unwrap();
+        upsert_precache(&pool, "m", "/source", 4, 1, "/cache/m", "copy", 1, 1)
+            .await
+            .unwrap();
         let old = precache_entry(&pool, "m").await.unwrap().unwrap();
-        sqlx::query("UPDATE precache_entries SET source_mtime = 2 WHERE media_id = 'm'").execute(&pool).await.unwrap();
+        sqlx::query("UPDATE precache_entries SET source_mtime = 2 WHERE media_id = 'm'")
+            .execute(&pool)
+            .await
+            .unwrap();
         assert!(!claim_queued_precache(&pool, &old).await.unwrap());
         let current = precache_entry(&pool, "m").await.unwrap().unwrap();
         assert_eq!(current.status, "queued");
@@ -3874,20 +4004,41 @@ mod tests {
         sqlx::query("INSERT INTO media_items (id,path,title,kind,duration_ms,created_at) VALUES ('m','/m','m','movie',100,0)").execute(&pool).await.unwrap();
         let channel = create_channel_shell(&pool, "99", "test").await.unwrap();
         let _gap = create_channel_shell(&pool, "98", "gap").await.unwrap();
-        for (position, start, end) in [(0,0,100),(1,100,200),(2,200,300)] {
+        for (position, start, end) in [(0, 0, 100), (1, 100, 200), (2, 200, 300)] {
             sqlx::query("INSERT INTO channel_items (channel_id,position,media_id,title,start_ms,end_ms,in_ms,out_ms,kind) VALUES (?,?,'m','m',?,?,0,100,'program')").bind(&channel.id).bind(position).bind(start).bind(end).execute(&pool).await.unwrap();
         }
-        sqlx::query("PRAGMA journal_mode=WAL").execute(&pool).await.unwrap();
+        sqlx::query("PRAGMA journal_mode=WAL")
+            .execute(&pool)
+            .await
+            .unwrap();
         let mut tx = pool.begin().await.unwrap();
-        let before: i64 = sqlx::query_scalar("SELECT revision FROM renewal_input_revision WHERE id = 1").fetch_one(&mut *tx).await.unwrap();
-        sqlx::query("UPDATE renewal_input_revision SET revision = revision + 1 WHERE id = 1").execute(&pool).await.unwrap();
-        sqlx::query("DELETE FROM channel_items WHERE channel_id = ?").bind(&channel.id).execute(&pool).await.unwrap();
+        let before: i64 =
+            sqlx::query_scalar("SELECT revision FROM renewal_input_revision WHERE id = 1")
+                .fetch_one(&mut *tx)
+                .await
+                .unwrap();
+        sqlx::query("UPDATE renewal_input_revision SET revision = revision + 1 WHERE id = 1")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM channel_items WHERE channel_id = ?")
+            .bind(&channel.id)
+            .execute(&pool)
+            .await
+            .unwrap();
         let snapshot = precache_snapshot_on(&mut tx, 50, 50).await.unwrap();
         assert_eq!(snapshot.revisions.0, before);
         tx.commit().await.unwrap();
         assert_eq!(snapshot.now_ms, 50);
         assert_eq!(snapshot.channels.len(), 2);
-        assert_eq!(snapshot.schedule.iter().map(|r| r.start_ms).collect::<Vec<_>>(), vec![0,100,200]);
+        assert_eq!(
+            snapshot
+                .schedule
+                .iter()
+                .map(|r| r.start_ms)
+                .collect::<Vec<_>>(),
+            vec![0, 100, 200]
+        );
         assert!(snapshot.entries.is_empty());
         let fresh = precache_snapshot(&pool, 50, 50).await.unwrap();
         assert!(fresh.schedule.is_empty());
@@ -3908,7 +4059,10 @@ mod tests {
                 .bind(&channel.id).bind(position).bind(start).bind(end).execute(&pool).await.unwrap();
         }
         let rows = upcoming_media(&pool, 100, 200).await.unwrap();
-        assert_eq!(rows.iter().map(|r| r.start_ms).collect::<Vec<_>>(), vec![100, 200]);
+        assert_eq!(
+            rows.iter().map(|r| r.start_ms).collect::<Vec<_>>(),
+            vec![100, 200]
+        );
         pool.close().await;
         let _ = std::fs::remove_dir_all(dir);
     }

@@ -60,7 +60,11 @@ pub struct GoogleClient {
 impl GoogleClient {
     #[cfg(test)]
     pub(crate) fn for_test(base: String, timeout: Duration) -> Self {
-        Self { agent: ureq::AgentBuilder::new().timeout(timeout).build(), api_base: base.clone(), token_url: base }
+        Self {
+            agent: ureq::AgentBuilder::new().timeout(timeout).build(),
+            api_base: base.clone(),
+            token_url: base,
+        }
     }
 
     pub fn new() -> Result<Self> {
@@ -292,7 +296,9 @@ impl GoogleClient {
             .set("Authorization", &format!("Bearer {token}"))
             .call()
             .map_err(|error| match error {
-                ureq::Error::Status(401, _) | ureq::Error::Status(403, _) => anyhow::anyhow!(crate::cloud::provider::AuthenticationError),
+                ureq::Error::Status(401, _) | ureq::Error::Status(403, _) => {
+                    anyhow::anyhow!(crate::cloud::provider::AuthenticationError)
+                }
                 _ => anyhow::anyhow!("Google Drive request failed"),
             })?;
         response.into_json().context("parse Google Drive response")
@@ -366,7 +372,10 @@ fn validate_google_secret(auth_type: &str, secret: &str) -> Result<()> {
 }
 
 fn credential_field<'a>(value: &'a Value, key: &str) -> Result<&'a str> {
-    value.get(key).and_then(Value::as_str).filter(|v| !v.trim().is_empty())
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .filter(|v| !v.trim().is_empty())
         .with_context(|| format!("credential {key} is required"))
 }
 

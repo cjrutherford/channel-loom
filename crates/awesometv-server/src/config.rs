@@ -104,7 +104,9 @@ impl Config {
         let precache_enabled = env::var("AWESOMETV_PRECACHE_ENABLED")
             .map(|value| !matches!(value.trim(), "0" | "false" | "no"))
             .unwrap_or(true);
-        let precache_rolling_chunks = env::var("AWESOMETV_PRECACHE_ROLLING_CHUNKS").map(|v| matches!(v.trim(), "1" | "true" | "yes")).unwrap_or(false);
+        let precache_rolling_chunks = env::var("AWESOMETV_PRECACHE_ROLLING_CHUNKS")
+            .map(|v| matches!(v.trim(), "1" | "true" | "yes"))
+            .unwrap_or(false);
         let precache_dir = env::var("AWESOMETV_PRECACHE_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|_| data_dir.join("precache"));

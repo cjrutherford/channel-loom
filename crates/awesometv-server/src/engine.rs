@@ -135,7 +135,9 @@ struct Runner {
 struct TelemetryStop(Arc<AtomicBool>);
 
 impl Drop for TelemetryStop {
-    fn drop(&mut self) { self.0.store(true, Ordering::Relaxed); }
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -276,8 +278,16 @@ impl Engine {
                 }
             }
             snapshots.push(ProducerSnapshot {
-                channel: runtime.channel_number.clone(), name: runtime.channel_name.clone(),
-                item: if runtime.task.is_finished() { "private publisher failed" } else { "private publisher" }.into(), segments, bytes,
+                channel: runtime.channel_number.clone(),
+                name: runtime.channel_name.clone(),
+                item: if runtime.task.is_finished() {
+                    "private publisher failed"
+                } else {
+                    "private publisher"
+                }
+                .into(),
+                segments,
+                bytes,
                 startup_ms: 0, // unavailable for the asynchronous private runtime
             });
         }
@@ -635,9 +645,14 @@ impl Engine {
                 if !channel.stream.prewarm {
                     let runtime = {
                         let mut runtimes = engine.private_runtimes.lock().await;
-                        if runtimes.get(&channel.id).is_some_and(|r| now_ms() - r.last_access_ms > 120_000) {
+                        if runtimes
+                            .get(&channel.id)
+                            .is_some_and(|r| now_ms() - r.last_access_ms > 120_000)
+                        {
                             runtimes.remove(&channel.id)
-                        } else { None }
+                        } else {
+                            None
+                        }
                     };
                     if let Some(runtime) = runtime {
                         runtime.stop.store(true, Ordering::Relaxed);
@@ -674,37 +689,113 @@ impl Engine {
     pub(crate) async fn install_playout_fixture(&self, channel_id: &str) {
         use private_publisher::{SegmentIdentity, SegmentSource};
         let snapshot: SnapshotHandle = Default::default();
-        snapshot.lock().unwrap().segments = [SegmentSource::Unknown, SegmentSource::Media("m".into()), SegmentSource::Slate, SegmentSource::Media("iso".into())]
-            .into_iter().enumerate().map(|(i, source)| SegmentIdentity { sequence: i as u64, start_pdt_ns: (10000 + i as i128 * 1000) * 1_000_000, end_pdt_ns: (11000 + i as i128 * 1000) * 1_000_000, start_90k: (10000 + i as i128 * 1000) * 90, end_90k: (11000 + i as i128 * 1000) * 90, source }).collect();
+        snapshot.lock().unwrap().segments = [
+            SegmentSource::Unknown,
+            SegmentSource::Media("m".into()),
+            SegmentSource::Slate,
+            SegmentSource::Media("iso".into()),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, source)| SegmentIdentity {
+            sequence: i as u64,
+            start_pdt_ns: (10000 + i as i128 * 1000) * 1_000_000,
+            end_pdt_ns: (11000 + i as i128 * 1000) * 1_000_000,
+            start_90k: (10000 + i as i128 * 1000) * 90,
+            end_90k: (11000 + i as i128 * 1000) * 90,
+            source,
+        })
+        .collect();
         snapshot.lock().unwrap().new_published_seconds = 3.0;
-        self.private_runtimes.lock().await.insert(channel_id.into(), PrivateRuntime {
-            generation: "fixture-generation".into(), snapshot, ready: Arc::new(AtomicBool::new(true)),
-            failed_at_ms: Arc::new(AtomicI64::new(0)), stop: Arc::new(AtomicBool::new(false)),
-            task: tokio::spawn(std::future::pending()), last_access_ms: 0,
-            channel_number: "fixture".into(), channel_name: "fixture".into(), playlist: self.data_dir.join("secret-token"),
-        });
+        self.private_runtimes.lock().await.insert(
+            channel_id.into(),
+            PrivateRuntime {
+                generation: "fixture-generation".into(),
+                snapshot,
+                ready: Arc::new(AtomicBool::new(true)),
+                failed_at_ms: Arc::new(AtomicI64::new(0)),
+                stop: Arc::new(AtomicBool::new(false)),
+                task: tokio::spawn(std::future::pending()),
+                last_access_ms: 0,
+                channel_number: "fixture".into(),
+                channel_name: "fixture".into(),
+                playlist: self.data_dir.join("secret-token"),
+            },
+        );
     }
 
     pub async fn playout_status(&self, channel_id: &str) -> PlayoutStatus {
         let runtimes = self.private_runtimes.lock().await;
         let Some(runtime) = runtimes.get(channel_id) else {
-            return PlayoutStatus { channel_id: channel_id.into(), generation: None, state: "preparing", new_published_seconds: 0.0, segments: vec![] };
-        };
-        let state = if runtime.task.is_finished() { "failed" } else if runtime.ready.load(Ordering::Acquire) { "ready" } else { "preparing" };
-        let snapshot = runtime.snapshot.lock().unwrap();
-        let segments = snapshot.segments.iter().filter_map(|segment| {
-            const MAX_SAFE: i64 = 9_007_199_254_740_991;
-            let start_ms = i64::try_from(segment.start_pdt_ns.div_euclid(1_000_000)).ok()?;
-            let end_ms = i64::try_from(segment.end_pdt_ns.div_euclid(1_000_000)).ok()?;
-            if !(-MAX_SAFE..=MAX_SAFE).contains(&start_ms) || !(-MAX_SAFE..=MAX_SAFE).contains(&end_ms) { return None; }
-            let (source, media_id) = match &segment.source {
-                private_publisher::SegmentSource::Media(id) | private_publisher::SegmentSource::ScheduledMedia { id, .. } => ("media", Some(id.clone())),
-                private_publisher::SegmentSource::Slate | private_publisher::SegmentSource::Fallback { .. } => ("slate", None),
-                private_publisher::SegmentSource::Unknown => ("unknown", None),
+            return PlayoutStatus {
+                channel_id: channel_id.into(),
+                generation: None,
+                state: "preparing",
+                new_published_seconds: 0.0,
+                segments: vec![],
             };
-            Some(PlayoutSegment { sequence: segment.sequence.to_string(), start_ms, end_ms, start_90k: segment.start_90k.to_string(), end_90k: segment.end_90k.to_string(), source, media_id, title: None, fallback_reason: match &segment.source { private_publisher::SegmentSource::Fallback { fallback_reason, .. } => fallback_reason.clone(), _ => None }, scheduled_programme: match &segment.source { private_publisher::SegmentSource::Fallback { scheduled_programme, .. } => scheduled_programme.clone(), _ => None } })
-        }).collect();
-        PlayoutStatus { channel_id: channel_id.into(), generation: Some(runtime.generation.clone()), state, new_published_seconds: snapshot.new_published_seconds, segments }
+        };
+        let state = if runtime.task.is_finished() {
+            "failed"
+        } else if runtime.ready.load(Ordering::Acquire) {
+            "ready"
+        } else {
+            "preparing"
+        };
+        let snapshot = runtime.snapshot.lock().unwrap();
+        let segments = snapshot
+            .segments
+            .iter()
+            .filter_map(|segment| {
+                const MAX_SAFE: i64 = 9_007_199_254_740_991;
+                let start_ms = i64::try_from(segment.start_pdt_ns.div_euclid(1_000_000)).ok()?;
+                let end_ms = i64::try_from(segment.end_pdt_ns.div_euclid(1_000_000)).ok()?;
+                if !(-MAX_SAFE..=MAX_SAFE).contains(&start_ms)
+                    || !(-MAX_SAFE..=MAX_SAFE).contains(&end_ms)
+                {
+                    return None;
+                }
+                let (source, media_id) = match &segment.source {
+                    private_publisher::SegmentSource::Media(id)
+                    | private_publisher::SegmentSource::ScheduledMedia { id, .. } => {
+                        ("media", Some(id.clone()))
+                    }
+                    private_publisher::SegmentSource::Slate
+                    | private_publisher::SegmentSource::Fallback { .. } => ("slate", None),
+                    private_publisher::SegmentSource::Unknown => ("unknown", None),
+                };
+                Some(PlayoutSegment {
+                    sequence: segment.sequence.to_string(),
+                    start_ms,
+                    end_ms,
+                    start_90k: segment.start_90k.to_string(),
+                    end_90k: segment.end_90k.to_string(),
+                    source,
+                    media_id,
+                    title: None,
+                    fallback_reason: match &segment.source {
+                        private_publisher::SegmentSource::Fallback {
+                            fallback_reason, ..
+                        } => fallback_reason.clone(),
+                        _ => None,
+                    },
+                    scheduled_programme: match &segment.source {
+                        private_publisher::SegmentSource::Fallback {
+                            scheduled_programme,
+                            ..
+                        } => scheduled_programme.clone(),
+                        _ => None,
+                    },
+                })
+            })
+            .collect();
+        PlayoutStatus {
+            channel_id: channel_id.into(),
+            generation: Some(runtime.generation.clone()),
+            state,
+            new_published_seconds: snapshot.new_published_seconds,
+            segments,
+        }
     }
 
     pub async fn ensure(self: &Arc<Self>, channel: &Channel) -> Result<PathBuf> {
@@ -723,7 +814,10 @@ impl Engine {
 
     async fn ensure_inner(&self, channel: &Channel) -> Result<PathBuf> {
         let channel = self.resolved_channel(channel).await?;
-        let out_dir = self.data_dir.join("hls").join(channel.number.replace('.', "_"));
+        let out_dir = self
+            .data_dir
+            .join("hls")
+            .join(channel.number.replace('.', "_"));
         {
             let mut runtimes = self.private_runtimes.lock().await;
             if let Some(runtime) = runtimes.get(&channel.id).filter(|r| r.task.is_finished()) {
@@ -735,41 +829,78 @@ impl Engine {
             if let Some(runtime) = runtimes.get(&channel.id) {
                 let ready = runtime.ready.clone();
                 drop(runtimes);
-                wait_for_private_ready(&out_dir.join("index.m3u8"), &ready, Duration::from_secs(45)).await?;
+                wait_for_private_ready(
+                    &out_dir.join("index.m3u8"),
+                    &ready,
+                    Duration::from_secs(45),
+                )
+                .await?;
                 return Ok(out_dir.join("index.m3u8"));
             }
             let now = now_ms();
             if !self.runners.lock().await.contains_key(&channel.id) {
-                    tokio::fs::create_dir_all(&out_dir).await?;
-                    let stop = Arc::new(AtomicBool::new(false));
-                    let task_stop = stop.clone();
-                    let ready = Arc::new(AtomicBool::new(false));
-                    let task_ready = ready.clone();
-                    let failed_at_ms = Arc::new(AtomicI64::new(0));
-                    let task_failed_at = failed_at_ms.clone();
-                    let pool = self.pool.clone();
-                    let cloud = self.cloud.clone();
-                    let precache = self.precache.clone();
-                    let task_channel = channel.clone();
-                    let data_dir = self.data_dir.clone();
-                    let task_out = out_dir.clone();
-                    let max_kbps = self.max_kbps;
-                    let generation = uuid::Uuid::new_v4().to_string();
-                    let snapshot: SnapshotHandle = Arc::new(std::sync::Mutex::new(PublishedSnapshot::default()));
-                    let task_snapshot = snapshot.clone();
-                    let task = tokio::spawn(async move {
-                        if let Err(error) = private_publisher::run_channel(pool, cloud, precache, task_channel, data_dir, task_out, max_kbps, task_stop, task_ready.clone(), now, task_snapshot).await {
-                            tracing::warn!(%error, "private channel runtime failed");
-                            task_failed_at.store(now_ms(), Ordering::Release);
-                        }
-                        task_ready.store(false, Ordering::Release);
-                    });
-                    runtimes.insert(channel.id.clone(), PrivateRuntime { generation, snapshot, ready: ready.clone(), failed_at_ms, stop, task, last_access_ms: now,
-                        channel_number: channel.number.clone(), channel_name: channel.name.clone(),
-                        playlist: out_dir.join("index.m3u8") });
-                    drop(runtimes);
-                    wait_for_private_ready(&out_dir.join("index.m3u8"), &ready, Duration::from_secs(45)).await?;
-                    return Ok(out_dir.join("index.m3u8"));
+                tokio::fs::create_dir_all(&out_dir).await?;
+                let stop = Arc::new(AtomicBool::new(false));
+                let task_stop = stop.clone();
+                let ready = Arc::new(AtomicBool::new(false));
+                let task_ready = ready.clone();
+                let failed_at_ms = Arc::new(AtomicI64::new(0));
+                let task_failed_at = failed_at_ms.clone();
+                let pool = self.pool.clone();
+                let cloud = self.cloud.clone();
+                let precache = self.precache.clone();
+                let task_channel = channel.clone();
+                let data_dir = self.data_dir.clone();
+                let task_out = out_dir.clone();
+                let max_kbps = self.max_kbps;
+                let generation = uuid::Uuid::new_v4().to_string();
+                let snapshot: SnapshotHandle =
+                    Arc::new(std::sync::Mutex::new(PublishedSnapshot::default()));
+                let task_snapshot = snapshot.clone();
+                let task = tokio::spawn(async move {
+                    if let Err(error) = private_publisher::run_channel(
+                        pool,
+                        cloud,
+                        precache,
+                        task_channel,
+                        data_dir,
+                        task_out,
+                        max_kbps,
+                        task_stop,
+                        task_ready.clone(),
+                        now,
+                        task_snapshot,
+                    )
+                    .await
+                    {
+                        tracing::warn!(%error, "private channel runtime failed");
+                        task_failed_at.store(now_ms(), Ordering::Release);
+                    }
+                    task_ready.store(false, Ordering::Release);
+                });
+                runtimes.insert(
+                    channel.id.clone(),
+                    PrivateRuntime {
+                        generation,
+                        snapshot,
+                        ready: ready.clone(),
+                        failed_at_ms,
+                        stop,
+                        task,
+                        last_access_ms: now,
+                        channel_number: channel.number.clone(),
+                        channel_name: channel.name.clone(),
+                        playlist: out_dir.join("index.m3u8"),
+                    },
+                );
+                drop(runtimes);
+                wait_for_private_ready(
+                    &out_dir.join("index.m3u8"),
+                    &ready,
+                    Duration::from_secs(45),
+                )
+                .await?;
+                return Ok(out_dir.join("index.m3u8"));
             }
         }
         let mut runners = self.runners.lock().await;
@@ -855,7 +986,14 @@ impl Engine {
         };
         let telemetry_stop = TelemetryStop(Arc::new(AtomicBool::new(false)));
         tracing::info!(event = "producer_spawn", channel_id = %channel.id, item = %item_key, pid = child.id(), scheduled_start_ms = boundary.map(|b| b.0), scheduled_end_ms = boundary.map(|b| b.1), wall_ms = telemetry_wall_ms(), monotonic_ms = self.started_at.elapsed().as_millis() as u64);
-        observe_publication(playlist.clone(), channel.id.clone(), item_key.clone(), child.id(), self.started_at, telemetry_stop.0.clone());
+        observe_publication(
+            playlist.clone(),
+            channel.id.clone(),
+            item_key.clone(),
+            child.id(),
+            self.started_at,
+            telemetry_stop.0.clone(),
+        );
         let segment_seconds = channel.stream.segment_seconds.clamp(2, 10);
         let min_segments = prebuffer_segments(channel.stream.prebuffer_seconds, segment_seconds);
         wait_for_ready(&playlist, Duration::from_secs(20), min_segments).await?;
@@ -918,10 +1056,24 @@ fn start_producer(
     preserve_playlist: bool,
 ) -> Result<(PathBuf, Child)> {
     let playlist = out_dir.join("index.m3u8");
-    let mut command = build_producer_command(channel, item_key, media_id, media, offset_ms,
-        duration_ms, out_dir, data_dir, initial_burst, media_kind, watermark, max_kbps,
-        preserve_playlist, false)?;
-    let child = command.spawn()
+    let mut command = build_producer_command(
+        channel,
+        item_key,
+        media_id,
+        media,
+        offset_ms,
+        duration_ms,
+        out_dir,
+        data_dir,
+        initial_burst,
+        media_kind,
+        watermark,
+        max_kbps,
+        preserve_playlist,
+        false,
+    )?;
+    let child = command
+        .spawn()
         .with_context(|| format!("spawn ffmpeg for channel {}", channel.number))?;
     tracing::debug!(channel = %channel.number, offset_ms, "started producer");
     Ok((playlist, child))
@@ -929,12 +1081,38 @@ fn start_producer(
 
 #[allow(clippy::too_many_arguments)]
 fn build_producer_command(
-    channel: &Channel, item_key: &str, media_id: &str, media: &Path,
-    offset_ms: i64, duration_ms: i64, out_dir: &Path, data_dir: &Path,
-    initial_burst: bool, media_kind: &str, watermark: Option<&Path>, max_kbps: i64,
-    preserve_playlist: bool, private: bool,
+    channel: &Channel,
+    item_key: &str,
+    media_id: &str,
+    media: &Path,
+    offset_ms: i64,
+    duration_ms: i64,
+    out_dir: &Path,
+    data_dir: &Path,
+    initial_burst: bool,
+    media_kind: &str,
+    watermark: Option<&Path>,
+    max_kbps: i64,
+    preserve_playlist: bool,
+    private: bool,
 ) -> Result<Command> {
-    build_producer_command_leased(channel, item_key, media_id, media, offset_ms, duration_ms, out_dir, data_dir, initial_burst, media_kind, watermark, max_kbps, preserve_playlist, private, None)
+    build_producer_command_leased(
+        channel,
+        item_key,
+        media_id,
+        media,
+        offset_ms,
+        duration_ms,
+        out_dir,
+        data_dir,
+        initial_burst,
+        media_kind,
+        watermark,
+        max_kbps,
+        preserve_playlist,
+        private,
+        None,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -945,10 +1123,21 @@ enum InputLease {
 }
 
 fn build_producer_command_leased(
-    channel: &Channel, item_key: &str, media_id: &str, media: &Path,
-    offset_ms: i64, duration_ms: i64, out_dir: &Path, data_dir: &Path,
-    initial_burst: bool, media_kind: &str, watermark: Option<&Path>, max_kbps: i64,
-    preserve_playlist: bool, private: bool, lease: Option<&InputLease>,
+    channel: &Channel,
+    item_key: &str,
+    media_id: &str,
+    media: &Path,
+    offset_ms: i64,
+    duration_ms: i64,
+    out_dir: &Path,
+    data_dir: &Path,
+    initial_burst: bool,
+    media_kind: &str,
+    watermark: Option<&Path>,
+    max_kbps: i64,
+    preserve_playlist: bool,
+    private: bool,
+    lease: Option<&InputLease>,
 ) -> Result<Command> {
     let playlist = out_dir.join("index.m3u8");
     // On an item transition keep the existing playlist so the next producer can
@@ -960,8 +1149,14 @@ fn build_producer_command_leased(
     std::fs::create_dir_all(&log_dir)?;
     let log_path = log_dir.join(format!("channel-{}.log", channel.number));
     let log = if private {
-        std::fs::OpenOptions::new().create(true).append(true).open(&log_path)
-    } else { File::create(&log_path) }.with_context(|| format!("create {}", log_path.display()))?;
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+    } else {
+        File::create(&log_path)
+    }
+    .with_context(|| format!("create {}", log_path.display()))?;
     // A fresh run id keeps segment URLs unique across producer restarts, so a
     // client or service-worker cache can never serve a stale segment.
     let run_id = uuid::Uuid::new_v4().simple().to_string();
@@ -976,9 +1171,9 @@ fn build_producer_command_leased(
         && !matches!(media_kind, "image" | "music" | "slate")
     {
         probe.subtitle_ordinal.and_then(|ordinal| {
-            ensure_subtitle_file(media, media_id, ordinal, data_dir, lease.cloned()).and_then(|path| {
-                shifted_subtitle_file(&path, offset_ms, data_dir, media_id, ordinal)
-            })
+            ensure_subtitle_file(media, media_id, ordinal, data_dir, lease.cloned()).and_then(
+                |path| shifted_subtitle_file(&path, offset_ms, data_dir, media_id, ordinal),
+            )
         })
     } else {
         None
@@ -1000,9 +1195,13 @@ fn build_producer_command_leased(
     }
     // Private generations are bounded and publication is paced separately.
     // Reading them in real time adds encoder startup latency to every segment.
-    if !private { command.arg("-readrate").arg("1.0"); }
+    if !private {
+        command.arg("-readrate").arg("1.0");
+    }
     #[cfg(test)]
-    if private && data_dir.join("slow-private-input").exists() { command.arg("-readrate").arg("1.0"); }
+    if private && data_dir.join("slow-private-input").exists() {
+        command.arg("-readrate").arg("1.0");
+    }
     if !private && initial_burst && channel.stream.prebuffer_seconds > 0 {
         command
             .arg("-readrate_initial_burst")
@@ -1140,7 +1339,13 @@ fn build_producer_command_leased(
             .arg("2");
     }
     if private {
-        command.stdout(Stdio::null()).stderr(if media.to_string_lossy().contains("://") { Stdio::null() } else { Stdio::from(log) });
+        command
+            .stdout(Stdio::null())
+            .stderr(if media.to_string_lossy().contains("://") {
+                Stdio::null()
+            } else {
+                Stdio::from(log)
+            });
         return Ok(command);
     }
     command
@@ -1286,14 +1491,23 @@ fn private_restart_backoff(failed_at: &AtomicI64, now: i64) -> bool {
     now.saturating_sub(failed_at.load(Ordering::Acquire)) < 5_000
 }
 
-async fn wait_for_private_ready(playlist: &Path, ready: &AtomicBool, timeout: Duration) -> Result<()> {
+async fn wait_for_private_ready(
+    playlist: &Path,
+    ready: &AtomicBool,
+    timeout: Duration,
+) -> Result<()> {
     let started = Instant::now();
     loop {
         if ready.load(Ordering::Acquire) {
             let remaining = timeout.saturating_sub(started.elapsed());
             return wait_for_ready(playlist, remaining, 1).await;
         }
-        if started.elapsed() >= timeout { bail!("timed out waiting for private prebuffer at {}", playlist.display()); }
+        if started.elapsed() >= timeout {
+            bail!(
+                "timed out waiting for private prebuffer at {}",
+                playlist.display()
+            );
+        }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
@@ -1329,12 +1543,22 @@ fn stop(runner: &mut Runner) {
 }
 
 fn telemetry_wall_ms() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
 }
 
 // Observation only: FFmpeg owns the files. The segment mtime is its last write,
 // while observation time bounds when the playlist replacement became visible.
-fn observe_publication(playlist: PathBuf, channel_id: String, item: String, pid: u32, origin: Instant, stop: Arc<AtomicBool>) {
+fn observe_publication(
+    playlist: PathBuf,
+    channel_id: String,
+    item: String,
+    pid: u32,
+    origin: Instant,
+    stop: Arc<AtomicBool>,
+) {
     tokio::spawn(async move {
         let mut previous = String::new();
         let mut seen = HashSet::new();
@@ -1344,11 +1568,25 @@ fn observe_publication(playlist: PathBuf, channel_id: String, item: String, pid:
                     let wall_ms = telemetry_wall_ms();
                     let monotonic_ms = origin.elapsed().as_millis() as u64;
                     tracing::info!(event = "playlist_observed", %channel_id, %item, pid, wall_ms, monotonic_ms);
-                    for line in body.lines().filter(|line| !line.is_empty() && !line.starts_with('#')) {
+                    for line in body
+                        .lines()
+                        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+                    {
                         // Only log safe local segment names, never paths or URLs.
-                        if line.contains('/') || line.contains('\\') || line.contains('?') || line.contains(':') { continue; }
+                        if line.contains('/')
+                            || line.contains('\\')
+                            || line.contains('?')
+                            || line.contains(':')
+                        {
+                            continue;
+                        }
                         if seen.insert(line.to_owned()) {
-                            let modified_ms = playlist.parent().and_then(|dir| std::fs::metadata(dir.join(line)).ok()).and_then(|m| m.modified().ok()).and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_millis() as u64);
+                            let modified_ms = playlist
+                                .parent()
+                                .and_then(|dir| std::fs::metadata(dir.join(line)).ok())
+                                .and_then(|m| m.modified().ok())
+                                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                                .map(|d| d.as_millis() as u64);
                             tracing::info!(event = "segment_published", %channel_id, observer_item = %item, observer_pid = pid, segment = line, modified_ms, wall_ms, monotonic_ms);
                         }
                     }
@@ -1642,7 +1880,8 @@ mod tests {
         use private_publisher::{SegmentIdentity, SegmentSource};
         let root = std::env::temp_dir().join(format!("playout-status-{}", uuid::Uuid::new_v4()));
         let pool = crate::db::init(&root).await.unwrap();
-        let cloud = Arc::new(CloudManager::new(pool.clone(), root.clone(), "127.0.0.1", 0).unwrap());
+        let cloud =
+            Arc::new(CloudManager::new(pool.clone(), root.clone(), "127.0.0.1", 0).unwrap());
         let engine = Engine::new(pool, root.clone(), cloud, 0);
         let none = serde_json::to_value(engine.playout_status("channel").await).unwrap();
         assert_eq!(none["generation"], serde_json::Value::Null);
@@ -1650,19 +1889,48 @@ mod tests {
         assert_eq!(none["segments"], serde_json::json!([]));
         let old: SnapshotHandle = Default::default();
         let current: SnapshotHandle = Default::default();
-        let sources = [SegmentSource::Unknown, SegmentSource::Media("A".into()), SegmentSource::Slate, SegmentSource::Media("B".into())];
-        current.lock().unwrap().segments = sources.into_iter().enumerate().map(|(i, source)| SegmentIdentity {
-            sequence: i as u64, start_pdt_ns: (10_000 + i as i128 * 1000) * 1_000_000,
-            end_pdt_ns: (11_000 + i as i128 * 1000) * 1_000_000, start_90k: (10_000 + i as i128 * 1000) * 90, end_90k: (11_000 + i as i128 * 1000) * 90, source,
-        }).collect();
+        let sources = [
+            SegmentSource::Unknown,
+            SegmentSource::Media("A".into()),
+            SegmentSource::Slate,
+            SegmentSource::Media("B".into()),
+        ];
+        current.lock().unwrap().segments = sources
+            .into_iter()
+            .enumerate()
+            .map(|(i, source)| SegmentIdentity {
+                sequence: i as u64,
+                start_pdt_ns: (10_000 + i as i128 * 1000) * 1_000_000,
+                end_pdt_ns: (11_000 + i as i128 * 1000) * 1_000_000,
+                start_90k: (10_000 + i as i128 * 1000) * 90,
+                end_90k: (11_000 + i as i128 * 1000) * 90,
+                source,
+            })
+            .collect();
         current.lock().unwrap().new_published_seconds = 3.0;
-        engine.private_runtimes.lock().await.insert("channel".into(), PrivateRuntime {
-            generation: "new".into(), snapshot: current, ready: Arc::new(AtomicBool::new(true)),
-            failed_at_ms: Arc::new(AtomicI64::new(0)), stop: Arc::new(AtomicBool::new(false)),
-            task: tokio::spawn(std::future::pending()), last_access_ms: 0,
-            channel_number: "1".into(), channel_name: "test".into(), playlist: root.join("secret-token"),
+        engine.private_runtimes.lock().await.insert(
+            "channel".into(),
+            PrivateRuntime {
+                generation: "new".into(),
+                snapshot: current,
+                ready: Arc::new(AtomicBool::new(true)),
+                failed_at_ms: Arc::new(AtomicI64::new(0)),
+                stop: Arc::new(AtomicBool::new(false)),
+                task: tokio::spawn(std::future::pending()),
+                last_access_ms: 0,
+                channel_number: "1".into(),
+                channel_name: "test".into(),
+                playlist: root.join("secret-token"),
+            },
+        );
+        old.lock().unwrap().segments.push(SegmentIdentity {
+            sequence: 99,
+            start_pdt_ns: 0,
+            end_pdt_ns: 1,
+            start_90k: 0,
+            end_90k: 1,
+            source: SegmentSource::Slate,
         });
-        old.lock().unwrap().segments.push(SegmentIdentity { sequence: 99, start_pdt_ns: 0, end_pdt_ns: 1, start_90k: 0, end_90k: 1, source: SegmentSource::Slate });
         let value = serde_json::to_value(engine.playout_status("channel").await).unwrap();
         assert_eq!(value["generation"], "new");
         assert_eq!(value["state"], "ready");
@@ -1675,7 +1943,14 @@ mod tests {
         assert_eq!(value["segments"][1]["sequence"], "1");
         assert_eq!(value["segments"][1]["start_ms"], 11000);
         assert!(!value.to_string().contains("secret-token"));
-        engine.private_runtimes.lock().await.remove("channel").unwrap().task.abort();
+        engine
+            .private_runtimes
+            .lock()
+            .await
+            .remove("channel")
+            .unwrap()
+            .task
+            .abort();
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -1686,16 +1961,36 @@ mod tests {
         let root = std::env::temp_dir().join(format!("cache-subtitle-{}", uuid::Uuid::new_v4()));
         let cache = crate::precache::LeaseTestCache::new(root.join("cache"), &["one"]);
         let fifo = root.join("input.fifo");
-        assert!(std::process::Command::new("mkfifo").arg(&fifo).status().unwrap().success());
-        assert!(super::ensure_subtitle_file(&fifo, "item", 0, &root, Some(InputLease::Full(cache.lease("one")))).is_none());
+        assert!(
+            std::process::Command::new("mkfifo")
+                .arg(&fifo)
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(
+            super::ensure_subtitle_file(
+                &fifo,
+                "item",
+                0,
+                &root,
+                Some(InputLease::Full(cache.lease("one")))
+            )
+            .is_none()
+        );
         assert!(!cache.pressure());
-        std::thread::spawn(move || { let _ = std::fs::write(fifo, b"not media"); });
+        std::thread::spawn(move || {
+            let _ = std::fs::write(fifo, b"not media");
+        });
         let deadline = Instant::now() + Duration::from_secs(5);
         while root.join("subtitles/item-0.lock").exists() {
             assert!(Instant::now() < deadline);
             std::thread::yield_now();
         }
-        while !cache.pressure() { assert!(Instant::now() < deadline); std::thread::yield_now(); }
+        while !cache.pressure() {
+            assert!(Instant::now() < deadline);
+            std::thread::yield_now();
+        }
         assert!(!root.join("cache/one").exists());
         let _ = std::fs::remove_dir_all(root);
     }
@@ -1707,25 +2002,44 @@ mod tests {
         let root = std::env::temp_dir().join(format!("cache-probe-{}", uuid::Uuid::new_v4()));
         let cache = crate::precache::LeaseTestCache::new(root.join("cache"), &["one"]);
         let fifo = root.join("input.fifo");
-        assert!(std::process::Command::new("mkfifo").arg(&fifo).status().unwrap().success());
+        assert!(
+            std::process::Command::new("mkfifo")
+                .arg(&fifo)
+                .status()
+                .unwrap()
+                .success()
+        );
         let (started_tx, started_rx) = std::sync::mpsc::channel();
         let (done_tx, done_rx) = std::sync::mpsc::channel();
         let input = fifo.clone();
         let lease = cache.lease("one");
-        super::probe_with_deadline(Some(InputLease::Full(lease)), Duration::from_millis(150), move || {
-            let mut child = std::process::Command::new("ffprobe").args(["-v", "quiet", "-i"]).arg(input).spawn().unwrap();
-            started_tx.send(()).unwrap();
-            let _ = child.wait();
-            done_tx.send(()).unwrap();
-            super::StreamProbe::default()
-        });
+        super::probe_with_deadline(
+            Some(InputLease::Full(lease)),
+            Duration::from_millis(150),
+            move || {
+                let mut child = std::process::Command::new("ffprobe")
+                    .args(["-v", "quiet", "-i"])
+                    .arg(input)
+                    .spawn()
+                    .unwrap();
+                started_tx.send(()).unwrap();
+                let _ = child.wait();
+                done_tx.send(()).unwrap();
+                super::StreamProbe::default()
+            },
+        );
         started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
         assert!(!cache.pressure());
-        std::thread::spawn(move || { let _ = std::fs::write(fifo, b"not media"); });
+        std::thread::spawn(move || {
+            let _ = std::fs::write(fifo, b"not media");
+        });
         done_rx.recv_timeout(Duration::from_secs(5)).unwrap();
         // The worker may still be returning after signalling process completion.
         let deadline = std::time::Instant::now() + Duration::from_secs(2);
-        while !cache.pressure() { assert!(std::time::Instant::now() < deadline); std::thread::yield_now(); }
+        while !cache.pressure() {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
         assert!(!root.join("cache/one").exists());
         let _ = std::fs::remove_dir_all(root);
     }
@@ -1748,9 +2062,17 @@ mod tests {
         let playlist = dir.join("index.m3u8");
         std::fs::write(&playlist, "#EXTM3U\n#EXTINF:2,\nseg.ts\n").unwrap();
         let ready = AtomicBool::new(false);
-        assert!(wait_for_private_ready(&playlist, &ready, Duration::from_millis(120)).await.is_err());
+        assert!(
+            wait_for_private_ready(&playlist, &ready, Duration::from_millis(120))
+                .await
+                .is_err()
+        );
         ready.store(true, Ordering::Release);
-        assert!(wait_for_private_ready(&playlist, &ready, Duration::from_secs(1)).await.is_ok());
+        assert!(
+            wait_for_private_ready(&playlist, &ready, Duration::from_secs(1))
+                .await
+                .is_ok()
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -1759,7 +2081,9 @@ mod tests {
         let root = std::env::temp_dir().join(format!("cache-playback-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         let pool = crate::db::init(&root).await.unwrap();
-        let mut channel = crate::db::create_channel_shell(&pool, "991", "cache proof").await.unwrap();
+        let mut channel = crate::db::create_channel_shell(&pool, "991", "cache proof")
+            .await
+            .unwrap();
         channel.stream.segment_seconds = 2;
         channel.stream.cache_segments = 20;
         channel.stream.prebuffer_seconds = 0;
@@ -1767,13 +2091,35 @@ mod tests {
         channel.stream.width = 160;
         channel.stream.height = 90;
         let future = now_ms() + 60_000;
-        for (position, id, color, frequency) in [(0_i64, "first", "red", 440), (1, "second", "blue", 880)] {
+        for (position, id, color, frequency) in
+            [(0_i64, "first", "red", 440), (1, "second", "blue", 880)]
+        {
             let path = root.join(format!("{id}.mp4"));
-            assert!(Command::new("ffmpeg").args(["-v", "error", "-f", "lavfi", "-i"])
-                .arg(format!("color=c={color}:s=160x90:r=30:d=20"))
-                .args(["-f", "lavfi", "-i"]).arg(format!("sine=frequency={frequency}:sample_rate=48000:duration=20"))
-                .args(["-c:v", "libx264", "-threads", "1", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", "-y"])
-                .arg(&path).status().unwrap().success());
+            assert!(
+                Command::new("ffmpeg")
+                    .args(["-v", "error", "-f", "lavfi", "-i"])
+                    .arg(format!("color=c={color}:s=160x90:r=30:d=20"))
+                    .args(["-f", "lavfi", "-i"])
+                    .arg(format!(
+                        "sine=frequency={frequency}:sample_rate=48000:duration=20"
+                    ))
+                    .args([
+                        "-c:v",
+                        "libx264",
+                        "-threads",
+                        "1",
+                        "-pix_fmt",
+                        "yuv420p",
+                        "-c:a",
+                        "aac",
+                        "-shortest",
+                        "-y"
+                    ])
+                    .arg(&path)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
             sqlx::query("INSERT INTO media_items (id,path,title,kind,duration_ms,created_at) VALUES (?,?,?,'movie',20000,0)")
                 .bind(id).bind(path.to_str().unwrap()).bind(id).execute(&pool).await.unwrap();
             sqlx::query("INSERT INTO channel_items (channel_id,position,media_id,title,start_ms,end_ms,in_ms,out_ms,kind) VALUES (?,?,?,?,?,?,0,20000,'program')")
@@ -1785,73 +2131,179 @@ mod tests {
         config.precache_dir = root.join("cache");
         config.precache_enabled = true;
         config.precache_max_gb = 1;
-        let cache = Arc::new(crate::precache::Precache::new(&config, pool.clone()).isolated_from_host_readers());
+        let cache = Arc::new(
+            crate::precache::Precache::new(&config, pool.clone()).isolated_from_host_readers(),
+        );
         cache.start();
         tokio::time::timeout(Duration::from_secs(20), async {
             loop {
                 let one = crate::db::precache_entry(&pool, "first").await.unwrap();
                 let two = crate::db::precache_entry(&pool, "second").await.unwrap();
-                if [one, two].iter().all(|e| e.as_ref().is_some_and(|e| e.status == "ready")) { break; }
-                tokio::time::sleep(Duration::from_millis(100)).await;
-            }
-        }).await.expect("actual precache worker did not finish");
-        // Simulate persisted legacy rows, then let the actual restarted worker migrate them
-        // while a reader holds a lease. The sources are generated disposable fixtures.
-        sqlx::query("UPDATE precache_entries SET source_mtime = 0 WHERE media_id IN ('first','second')")
-            .execute(&pool).await.unwrap();
-        let restarted = Arc::new(crate::precache::Precache::new(&config, pool.clone()).isolated_from_host_readers());
-        let row = crate::db::precache_entry(&pool, "first").await.unwrap().unwrap();
-        let old = crate::precache::SourceIdentity::new(&row.source_path, row.source_size, 0);
-        let lease = restarted.acquire_ready("first", &old).await.unwrap().expect("legacy lease");
-        restarted.start();
-        tokio::time::timeout(Duration::from_secs(25), async {
-            loop {
-                let first = crate::db::precache_entry(&pool, "first").await.unwrap().unwrap();
-                let second = crate::db::precache_entry(&pool, "second").await.unwrap().unwrap();
-                if first.source_mtime > 0 && second.source_mtime > 0 {
-                    let identity = crate::precache::SourceIdentity::new(&first.source_path, first.source_size, first.source_mtime);
-                    assert!(lease.path().exists());
-                    assert!(restarted.acquire_ready("first", &identity).await.unwrap().is_some(), "new lease after legacy migration");
+                if [one, two]
+                    .iter()
+                    .all(|e| e.as_ref().is_some_and(|e| e.status == "ready"))
+                {
                     break;
                 }
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
-        }).await.expect("worker did not migrate legacy metadata");
-        for id in ["first", "second"] { std::fs::remove_file(root.join(format!("{id}.mp4"))).unwrap(); }
+        })
+        .await
+        .expect("actual precache worker did not finish");
+        // Simulate persisted legacy rows, then let the actual restarted worker migrate them
+        // while a reader holds a lease. The sources are generated disposable fixtures.
+        sqlx::query(
+            "UPDATE precache_entries SET source_mtime = 0 WHERE media_id IN ('first','second')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let restarted = Arc::new(
+            crate::precache::Precache::new(&config, pool.clone()).isolated_from_host_readers(),
+        );
+        let row = crate::db::precache_entry(&pool, "first")
+            .await
+            .unwrap()
+            .unwrap();
+        let old = crate::precache::SourceIdentity::new(&row.source_path, row.source_size, 0);
+        let lease = restarted
+            .acquire_ready("first", &old)
+            .await
+            .unwrap()
+            .expect("legacy lease");
+        restarted.start();
+        tokio::time::timeout(Duration::from_secs(25), async {
+            loop {
+                let first = crate::db::precache_entry(&pool, "first")
+                    .await
+                    .unwrap()
+                    .unwrap();
+                let second = crate::db::precache_entry(&pool, "second")
+                    .await
+                    .unwrap()
+                    .unwrap();
+                if first.source_mtime > 0 && second.source_mtime > 0 {
+                    let identity = crate::precache::SourceIdentity::new(
+                        &first.source_path,
+                        first.source_size,
+                        first.source_mtime,
+                    );
+                    assert!(lease.path().exists());
+                    assert!(
+                        restarted
+                            .acquire_ready("first", &identity)
+                            .await
+                            .unwrap()
+                            .is_some(),
+                        "new lease after legacy migration"
+                    );
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .expect("worker did not migrate legacy metadata");
+        for id in ["first", "second"] {
+            std::fs::remove_file(root.join(format!("{id}.mp4"))).unwrap();
+        }
         let start = now_ms();
         sqlx::query("UPDATE channel_items SET start_ms = ? + position * 20000, end_ms = ? + (position + 1) * 20000 WHERE channel_id = ?")
             .bind(start).bind(start).bind(&channel.id).execute(&pool).await.unwrap();
-        let cloud = Arc::new(CloudManager::new(pool.clone(), root.clone(), "127.0.0.1", 0).unwrap());
-        let engine = Arc::new(Engine::new(pool.clone(), root.clone(), cloud, 0).with_precache(restarted));
+        let cloud =
+            Arc::new(CloudManager::new(pool.clone(), root.clone(), "127.0.0.1", 0).unwrap());
+        let engine =
+            Arc::new(Engine::new(pool.clone(), root.clone(), cloud, 0).with_precache(restarted));
         let playlist = engine.ensure(&channel).await.unwrap();
         let text = tokio::time::timeout(Duration::from_secs(45), async {
             loop {
                 let text = std::fs::read_to_string(&playlist).unwrap_or_default();
-                let duration: f64 = text.lines().filter_map(|line| line.strip_prefix("#EXTINF:").and_then(|v| v.split(',').next()).and_then(|v| v.parse::<f64>().ok())).sum();
-                if duration >= 30.0 && text.contains("#EXT-X-DISCONTINUITY") { break text; }
+                let duration: f64 = text
+                    .lines()
+                    .filter_map(|line| {
+                        line.strip_prefix("#EXTINF:")
+                            .and_then(|v| v.split(',').next())
+                            .and_then(|v| v.parse::<f64>().ok())
+                    })
+                    .sum();
+                if duration >= 30.0 && text.contains("#EXT-X-DISCONTINUITY") {
+                    break text;
+                }
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
-        }).await.expect("cached playlist did not progress");
-        let duration: f64 = text.lines().filter_map(|line| line.strip_prefix("#EXTINF:").and_then(|v| v.split(',').next()).and_then(|v| v.parse::<f64>().ok())).sum();
+        })
+        .await
+        .expect("cached playlist did not progress");
+        let duration: f64 = text
+            .lines()
+            .filter_map(|line| {
+                line.strip_prefix("#EXTINF:")
+                    .and_then(|v| v.split(',').next())
+                    .and_then(|v| v.parse::<f64>().ok())
+            })
+            .sum();
         assert!(duration >= 30.0, "playlist duration: {duration}");
         let mut colors = Vec::new();
         let mut frequencies = Vec::new();
-        for name in text.lines().filter(|l| l.starts_with("segment_") && l.ends_with(".ts")) {
+        for name in text
+            .lines()
+            .filter(|l| l.starts_with("segment_") && l.ends_with(".ts"))
+        {
             let segment = playlist.parent().unwrap().join(name);
-            let video = Command::new("ffmpeg").args(["-v", "error", "-i"]).arg(&segment)
-                .args(["-frames:v", "1", "-vf", "scale=1:1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]).output().unwrap();
+            let video = Command::new("ffmpeg")
+                .args(["-v", "error", "-i"])
+                .arg(&segment)
+                .args([
+                    "-frames:v",
+                    "1",
+                    "-vf",
+                    "scale=1:1",
+                    "-f",
+                    "rawvideo",
+                    "-pix_fmt",
+                    "rgb24",
+                    "-",
+                ])
+                .output()
+                .unwrap();
             assert!(video.status.success() && video.stdout.len() == 3);
             colors.push(video.stdout);
-            let audio = Command::new("ffmpeg").args(["-v", "error", "-i"]).arg(&segment)
-                .args(["-t", "1", "-ac", "1", "-ar", "48000", "-f", "s16le", "-"]).output().unwrap();
+            let audio = Command::new("ffmpeg")
+                .args(["-v", "error", "-i"])
+                .arg(&segment)
+                .args(["-t", "1", "-ac", "1", "-ar", "48000", "-f", "s16le", "-"])
+                .output()
+                .unwrap();
             assert!(audio.status.success() && audio.stdout.len() > 40000);
-            let samples: Vec<i16> = audio.stdout.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]])).collect();
+            let samples: Vec<i16> = audio
+                .stdout
+                .chunks_exact(2)
+                .map(|b| i16::from_le_bytes([b[0], b[1]]))
+                .collect();
             frequencies.push(samples.windows(2).filter(|w| w[0] <= 0 && w[1] > 0).count());
         }
-        assert!(colors.iter().any(|c| c[0] > c[2].saturating_add(50)) && colors.iter().any(|c| c[2] > c[0].saturating_add(50)), "colors: {colors:?}");
-        assert!(colors.iter().all(|c| c[0] > c[2].saturating_add(50) || c[2] > c[0].saturating_add(50)), "unexpected slate/video: {colors:?}");
-        assert!(frequencies.iter().all(|f| (350..530).contains(f) || (750..1000).contains(f)), "unexpected slate/audio: {frequencies:?}");
-        assert!(frequencies.iter().any(|f| (350..530).contains(f)) && frequencies.iter().any(|f| (750..1000).contains(f)), "frequencies: {frequencies:?}");
+        assert!(
+            colors.iter().any(|c| c[0] > c[2].saturating_add(50))
+                && colors.iter().any(|c| c[2] > c[0].saturating_add(50)),
+            "colors: {colors:?}"
+        );
+        assert!(
+            colors
+                .iter()
+                .all(|c| c[0] > c[2].saturating_add(50) || c[2] > c[0].saturating_add(50)),
+            "unexpected slate/video: {colors:?}"
+        );
+        assert!(
+            frequencies
+                .iter()
+                .all(|f| (350..530).contains(f) || (750..1000).contains(f)),
+            "unexpected slate/audio: {frequencies:?}"
+        );
+        assert!(
+            frequencies.iter().any(|f| (350..530).contains(f))
+                && frequencies.iter().any(|f| (750..1000).contains(f)),
+            "frequencies: {frequencies:?}"
+        );
         engine.stop_all().await;
         pool.close().await;
         let _ = std::fs::remove_dir_all(root);
@@ -1864,15 +2316,37 @@ mod tests {
         let pool = crate::db::init(&root).await.unwrap();
         for (id, color, frequency) in [("first", "red", 440), ("second", "blue", 880)] {
             let path = root.join(format!("{id}.mp4"));
-            assert!(Command::new("ffmpeg").args(["-v", "error", "-f", "lavfi", "-i"])
-                .arg(format!("color=c={color}:s=160x90:r=30000/1001:d=4.2"))
-                .args(["-f", "lavfi", "-i"]).arg(format!("sine=frequency={frequency}:sample_rate=48000:duration=4.2"))
-                .args(["-c:v", "libx264", "-threads", "1", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", "-y"])
-                .arg(&path).status().unwrap().success());
+            assert!(
+                Command::new("ffmpeg")
+                    .args(["-v", "error", "-f", "lavfi", "-i"])
+                    .arg(format!("color=c={color}:s=160x90:r=30000/1001:d=4.2"))
+                    .args(["-f", "lavfi", "-i"])
+                    .arg(format!(
+                        "sine=frequency={frequency}:sample_rate=48000:duration=4.2"
+                    ))
+                    .args([
+                        "-c:v",
+                        "libx264",
+                        "-threads",
+                        "1",
+                        "-pix_fmt",
+                        "yuv420p",
+                        "-c:a",
+                        "aac",
+                        "-shortest",
+                        "-y"
+                    ])
+                    .arg(&path)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
             sqlx::query("INSERT INTO media_items (id,path,title,kind,duration_ms,created_at) VALUES (?,?,?,'movie',4000,0)")
                 .bind(id).bind(path.to_str().unwrap()).bind(id).execute(&pool).await.unwrap();
         }
-        let mut channel = crate::db::create_channel_shell(&pool, "991", "test").await.unwrap();
+        let mut channel = crate::db::create_channel_shell(&pool, "991", "test")
+            .await
+            .unwrap();
         channel.stream.segment_seconds = 2;
         channel.stream.cache_segments = 12;
         channel.stream.preset = "ultrafast".into();
@@ -1884,7 +2358,8 @@ mod tests {
                 .bind(&channel.id).bind(position).bind(id).bind(id).bind(start + position * 8000)
                 .bind(start + (position * 2 + 1) * 4000).execute(&pool).await.unwrap();
         }
-        let cloud = Arc::new(CloudManager::new(pool.clone(), root.clone(), "127.0.0.1", 0).unwrap());
+        let cloud =
+            Arc::new(CloudManager::new(pool.clone(), root.clone(), "127.0.0.1", 0).unwrap());
         let engine = Arc::new(Engine::new(pool, root.clone(), cloud, 0));
         let playlist = engine.ensure(&channel).await.unwrap();
         let mut previous = 0_u64;
@@ -1892,59 +2367,152 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(20), async {
             loop {
                 if let Ok(text) = tokio::fs::read_to_string(&playlist).await {
-                    let sequence = text.lines().find_map(|l| l.strip_prefix("#EXT-X-MEDIA-SEQUENCE:")).unwrap().parse::<u64>().unwrap();
+                    let sequence = text
+                        .lines()
+                        .find_map(|l| l.strip_prefix("#EXT-X-MEDIA-SEQUENCE:"))
+                        .unwrap()
+                        .parse::<u64>()
+                        .unwrap();
                     assert!(sequence >= previous);
                     previous = sequence;
-                    if text.contains("#EXT-X-DISCONTINUITY-SEQUENCE:") && text.matches("#EXT-X-DISCONTINUITY\n").count() >= 2 && text.matches("#EXTINF:").count() >= 5 {
-                        observed = text; break;
+                    if text.contains("#EXT-X-DISCONTINUITY-SEQUENCE:")
+                        && text.matches("#EXT-X-DISCONTINUITY\n").count() >= 2
+                        && text.matches("#EXTINF:").count() >= 5
+                    {
+                        observed = text;
+                        break;
                     }
                 }
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
-        }).await.unwrap();
+        })
+        .await
+        .unwrap();
         let before = observed.split("#EXT-X-DISCONTINUITY\n").next().unwrap();
-        assert!(before.matches("#EXTINF:").count() >= 2, "first item tail missing: {observed}");
-        let dates: Vec<_> = observed.lines().filter_map(|line| line.strip_prefix("#EXT-X-PROGRAM-DATE-TIME:")).collect();
+        assert!(
+            before.matches("#EXTINF:").count() >= 2,
+            "first item tail missing: {observed}"
+        );
+        let dates: Vec<_> = observed
+            .lines()
+            .filter_map(|line| line.strip_prefix("#EXT-X-PROGRAM-DATE-TIME:"))
+            .collect();
         assert!(dates.len() >= 5 && dates.windows(2).all(|pair| pair[0] < pair[1]));
-        for segment in observed.lines().filter(|line| !line.starts_with('#') && !line.is_empty()) {
-            assert!(std::fs::metadata(playlist.parent().unwrap().join(segment)).unwrap().len() > 0);
+        for segment in observed
+            .lines()
+            .filter(|line| !line.starts_with('#') && !line.is_empty())
+        {
+            assert!(
+                std::fs::metadata(playlist.parent().unwrap().join(segment))
+                    .unwrap()
+                    .len()
+                    > 0
+            );
         }
         // Decode the last segment before each boundary and the first after it.
-        let groups: Vec<Vec<&str>> = observed.split("#EXT-X-DISCONTINUITY\n")
-            .map(|group| group.lines().filter(|l| !l.starts_with('#') && !l.is_empty()).collect()).collect();
+        let groups: Vec<Vec<&str>> = observed
+            .split("#EXT-X-DISCONTINUITY\n")
+            .map(|group| {
+                group
+                    .lines()
+                    .filter(|l| !l.starts_with('#') && !l.is_empty())
+                    .collect()
+            })
+            .collect();
         assert!(groups.len() >= 3 && groups.iter().take(3).all(|g| !g.is_empty()));
-        for (name, expected) in [(groups[0].last().unwrap(), 0), (&groups[1][0], 1), (groups[1].last().unwrap(), 1), (&groups[2][0], 2)] {
+        for (name, expected) in [
+            (groups[0].last().unwrap(), 0),
+            (&groups[1][0], 1),
+            (groups[1].last().unwrap(), 1),
+            (&groups[2][0], 2),
+        ] {
             let path = playlist.parent().unwrap().join(name);
-            let video = Command::new("ffmpeg").args(["-v", "error", "-i"]).arg(&path)
-                .args(["-frames:v", "1", "-vf", "scale=1:1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]).output().unwrap();
+            let video = Command::new("ffmpeg")
+                .args(["-v", "error", "-i"])
+                .arg(&path)
+                .args([
+                    "-frames:v",
+                    "1",
+                    "-vf",
+                    "scale=1:1",
+                    "-f",
+                    "rawvideo",
+                    "-pix_fmt",
+                    "rgb24",
+                    "-",
+                ])
+                .output()
+                .unwrap();
             assert!(video.status.success() && video.stdout.len() == 3);
             let rgb = &video.stdout;
-            match expected { 0 => assert!(rgb[0] > rgb[2] + 50, "red: {rgb:?}"), 2 => assert!(rgb[2] > rgb[0] + 50, "blue: {rgb:?}"), _ => assert!(rgb[0] < 80 && rgb[2] < 80, "slate: {rgb:?}") }
-            let audio = Command::new("ffmpeg").args(["-v", "error", "-i"]).arg(&path)
-                .args(["-t", "1", "-ac", "1", "-ar", "48000", "-f", "s16le", "-"]).output().unwrap();
+            match expected {
+                0 => assert!(rgb[0] > rgb[2] + 50, "red: {rgb:?}"),
+                2 => assert!(rgb[2] > rgb[0] + 50, "blue: {rgb:?}"),
+                _ => assert!(rgb[0] < 80 && rgb[2] < 80, "slate: {rgb:?}"),
+            }
+            let audio = Command::new("ffmpeg")
+                .args(["-v", "error", "-i"])
+                .arg(&path)
+                .args(["-t", "1", "-ac", "1", "-ar", "48000", "-f", "s16le", "-"])
+                .output()
+                .unwrap();
             assert!(audio.status.success());
-            let samples: Vec<i16> = audio.stdout.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]])).collect();
+            let samples: Vec<i16> = audio
+                .stdout
+                .chunks_exact(2)
+                .map(|b| i16::from_le_bytes([b[0], b[1]]))
+                .collect();
             assert!(samples.len() > 20000);
             let crossings = samples.windows(2).filter(|w| w[0] <= 0 && w[1] > 0).count();
             let peak = samples.iter().map(|v| (*v as i32).abs()).max().unwrap();
-            match expected { 0 => assert!((350..530).contains(&crossings), "440 Hz: {crossings}"), 2 => assert!((750..1000).contains(&crossings), "880 Hz: {crossings}"), _ => assert!(peak < 100, "slate audio: {peak}") }
+            match expected {
+                0 => assert!((350..530).contains(&crossings), "440 Hz: {crossings}"),
+                2 => assert!((750..1000).contains(&crossings), "880 Hz: {crossings}"),
+                _ => assert!(peak < 100, "slate audio: {peak}"),
+            }
         }
-        let retained: Vec<_> = observed.lines().filter(|line| !line.starts_with('#') && !line.is_empty())
-            .map(|name| (name.to_owned(), std::fs::read(playlist.parent().unwrap().join(name)).unwrap())).collect();
+        let retained: Vec<_> = observed
+            .lines()
+            .filter(|line| !line.starts_with('#') && !line.is_empty())
+            .map(|name| {
+                (
+                    name.to_owned(),
+                    std::fs::read(playlist.parent().unwrap().join(name)).unwrap(),
+                )
+            })
+            .collect();
         engine.refresh(&channel.id).await;
         let stopped_playlist = std::fs::read_to_string(&playlist).unwrap();
-        for (name, _) in &retained { assert!(stopped_playlist.contains(name)); }
+        for (name, _) in &retained {
+            assert!(stopped_playlist.contains(name));
+        }
         for (name, bytes) in &retained {
-            assert_eq!(&std::fs::read(playlist.parent().unwrap().join(name)).unwrap(), bytes);
+            assert_eq!(
+                &std::fs::read(playlist.parent().unwrap().join(name)).unwrap(),
+                bytes
+            );
         }
         let restarted = engine.ensure(&channel).await.unwrap();
         assert_eq!(restarted, playlist);
         let after = std::fs::read_to_string(&playlist).unwrap();
-        let before_sequence = observed.lines().find(|l| l.starts_with("#EXT-X-MEDIA-SEQUENCE:")).unwrap();
+        let before_sequence = observed
+            .lines()
+            .find(|l| l.starts_with("#EXT-X-MEDIA-SEQUENCE:"))
+            .unwrap();
         let sequence = |line: &str| line.split_once(':').unwrap().1.parse::<u64>().unwrap();
-        assert!(sequence(after.lines().find(|l| l.starts_with("#EXT-X-MEDIA-SEQUENCE:")).unwrap()) >= sequence(before_sequence));
+        assert!(
+            sequence(
+                after
+                    .lines()
+                    .find(|l| l.starts_with("#EXT-X-MEDIA-SEQUENCE:"))
+                    .unwrap()
+            ) >= sequence(before_sequence)
+        );
         for (name, bytes) in &retained {
-            assert_eq!(&std::fs::read(playlist.parent().unwrap().join(name)).unwrap(), bytes);
+            assert_eq!(
+                &std::fs::read(playlist.parent().unwrap().join(name)).unwrap(),
+                bytes
+            );
         }
         engine.stop_all().await;
         let _ = std::fs::remove_dir_all(root);
@@ -1957,15 +2525,37 @@ mod tests {
         let pool = crate::db::init(&root).await.unwrap();
         for (id, color, frequency) in [("first", "red", 440), ("second", "blue", 880)] {
             let path = root.join(format!("{id}.mp4"));
-            assert!(Command::new("ffmpeg").args(["-v", "error", "-f", "lavfi", "-i"])
-                .arg(format!("color=c={color}:s=160x90:r=30000/1001:d=4.2"))
-                .args(["-f", "lavfi", "-i"]).arg(format!("sine=frequency={frequency}:sample_rate=48000:duration=4.2"))
-                .args(["-c:v", "libx264", "-threads", "1", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", "-y"])
-                .arg(&path).status().unwrap().success());
+            assert!(
+                Command::new("ffmpeg")
+                    .args(["-v", "error", "-f", "lavfi", "-i"])
+                    .arg(format!("color=c={color}:s=160x90:r=30000/1001:d=4.2"))
+                    .args(["-f", "lavfi", "-i"])
+                    .arg(format!(
+                        "sine=frequency={frequency}:sample_rate=48000:duration=4.2"
+                    ))
+                    .args([
+                        "-c:v",
+                        "libx264",
+                        "-threads",
+                        "1",
+                        "-pix_fmt",
+                        "yuv420p",
+                        "-c:a",
+                        "aac",
+                        "-shortest",
+                        "-y"
+                    ])
+                    .arg(&path)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
             sqlx::query("INSERT INTO media_items (id,path,title,kind,duration_ms,created_at) VALUES (?,?,?,'movie',4000,0)")
                 .bind(id).bind(path.to_str().unwrap()).bind(id).execute(&pool).await.unwrap();
         }
-        let mut channel = crate::db::create_channel_shell(&pool, "991", "test").await.unwrap();
+        let mut channel = crate::db::create_channel_shell(&pool, "991", "test")
+            .await
+            .unwrap();
         channel.stream.segment_seconds = 2;
         channel.stream.cache_segments = 12;
         channel.stream.preset = "ultrafast".into();
@@ -1983,7 +2573,8 @@ mod tests {
             .bind(broken.to_str().unwrap()).execute(&pool).await.unwrap();
         sqlx::query("INSERT INTO channel_items (channel_id,position,media_id,title,start_ms,end_ms,in_ms,out_ms,kind) VALUES (?,2,'broken','broken',?,?,0,4000,'program')")
             .bind(&channel.id).bind(start + 4000).bind(start + 8000).execute(&pool).await.unwrap();
-        let cloud = Arc::new(CloudManager::new(pool.clone(), root.clone(), "127.0.0.1", 0).unwrap());
+        let cloud =
+            Arc::new(CloudManager::new(pool.clone(), root.clone(), "127.0.0.1", 0).unwrap());
         let engine = Arc::new(Engine::new(pool, root.clone(), cloud, 0));
         let playlist = engine.ensure(&channel).await.unwrap();
         let mut previous = 0_u64;
@@ -1991,76 +2582,189 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(20), async {
             loop {
                 if let Ok(text) = tokio::fs::read_to_string(&playlist).await {
-                    let sequence = text.lines().find_map(|l| l.strip_prefix("#EXT-X-MEDIA-SEQUENCE:")).unwrap().parse::<u64>().unwrap();
+                    let sequence = text
+                        .lines()
+                        .find_map(|l| l.strip_prefix("#EXT-X-MEDIA-SEQUENCE:"))
+                        .unwrap()
+                        .parse::<u64>()
+                        .unwrap();
                     assert!(sequence >= previous);
                     previous = sequence;
-                    if text.contains("#EXT-X-DISCONTINUITY-SEQUENCE:") && text.matches("#EXT-X-DISCONTINUITY\n").count() >= 2 && text.matches("#EXTINF:").count() >= 5 {
-                        observed = text; break;
+                    if text.contains("#EXT-X-DISCONTINUITY-SEQUENCE:")
+                        && text.matches("#EXT-X-DISCONTINUITY\n").count() >= 2
+                        && text.matches("#EXTINF:").count() >= 5
+                    {
+                        observed = text;
+                        break;
                     }
                 }
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
-        }).await.unwrap();
+        })
+        .await
+        .unwrap();
         let before = observed.split("#EXT-X-DISCONTINUITY\n").next().unwrap();
-        assert!(before.matches("#EXTINF:").count() >= 2, "first item tail missing: {observed}");
-        let dates: Vec<_> = observed.lines().filter_map(|line| line.strip_prefix("#EXT-X-PROGRAM-DATE-TIME:")).collect();
+        assert!(
+            before.matches("#EXTINF:").count() >= 2,
+            "first item tail missing: {observed}"
+        );
+        let dates: Vec<_> = observed
+            .lines()
+            .filter_map(|line| line.strip_prefix("#EXT-X-PROGRAM-DATE-TIME:"))
+            .collect();
         assert!(dates.len() >= 5 && dates.windows(2).all(|pair| pair[0] < pair[1]));
-        for segment in observed.lines().filter(|line| !line.starts_with('#') && !line.is_empty()) {
-            assert!(std::fs::metadata(playlist.parent().unwrap().join(segment)).unwrap().len() > 0);
+        for segment in observed
+            .lines()
+            .filter(|line| !line.starts_with('#') && !line.is_empty())
+        {
+            assert!(
+                std::fs::metadata(playlist.parent().unwrap().join(segment))
+                    .unwrap()
+                    .len()
+                    > 0
+            );
         }
         // Decode the last segment before each boundary and the first after it.
-        let groups: Vec<Vec<&str>> = observed.split("#EXT-X-DISCONTINUITY\n")
-            .map(|group| group.lines().filter(|l| !l.starts_with('#') && !l.is_empty()).collect()).collect();
+        let groups: Vec<Vec<&str>> = observed
+            .split("#EXT-X-DISCONTINUITY\n")
+            .map(|group| {
+                group
+                    .lines()
+                    .filter(|l| !l.starts_with('#') && !l.is_empty())
+                    .collect()
+            })
+            .collect();
         assert!(groups.len() >= 3 && groups.iter().take(3).all(|g| !g.is_empty()));
-        let guide = crate::db::guide_blocks(&engine.pool, &channel.id, start, start + 12_000).await.unwrap();
-        assert_eq!(guide.iter().map(|item| item.media_id.as_str()).collect::<Vec<_>>(), vec!["first", "broken", "second"]);
-        assert_eq!(guide.iter().map(|item| item.start_ms).collect::<Vec<_>>(), vec![start, start + 4_000, start + 8_000]);
+        let guide = crate::db::guide_blocks(&engine.pool, &channel.id, start, start + 12_000)
+            .await
+            .unwrap();
+        assert_eq!(
+            guide
+                .iter()
+                .map(|item| item.media_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["first", "broken", "second"]
+        );
+        assert_eq!(
+            guide.iter().map(|item| item.start_ms).collect::<Vec<_>>(),
+            vec![start, start + 4_000, start + 8_000]
+        );
         let lag = now_ms() - (start + 8_000);
-        assert!((0..8_000).contains(&lag), "resume publication lag: {lag} ms");
+        assert!(
+            (0..8_000).contains(&lag),
+            "resume publication lag: {lag} ms"
+        );
         eprintln!("scheduled resume publication lag: {lag} ms");
         for (index, expected) in [(1, start + 4_000), (2, start + 8_000)] {
             let group = observed.split("#EXT-X-DISCONTINUITY\n").nth(index).unwrap();
-            let pdt = group.lines().find_map(|line| line.strip_prefix("#EXT-X-PROGRAM-DATE-TIME:")).unwrap();
-            let actual = time::OffsetDateTime::parse(pdt, &time::format_description::well_known::Rfc3339).unwrap().unix_timestamp_nanos() / 1_000_000;
-            assert!((actual - expected as i128).abs() <= 1000, "scheduled boundary {expected}, playlist {actual}");
+            let pdt = group
+                .lines()
+                .find_map(|line| line.strip_prefix("#EXT-X-PROGRAM-DATE-TIME:"))
+                .unwrap();
+            let actual =
+                time::OffsetDateTime::parse(pdt, &time::format_description::well_known::Rfc3339)
+                    .unwrap()
+                    .unix_timestamp_nanos()
+                    / 1_000_000;
+            assert!(
+                (actual - expected as i128).abs() <= 1000,
+                "scheduled boundary {expected}, playlist {actual}"
+            );
         }
         for (name, expected) in [(&groups[0][0], 0), (&groups[1][0], 1), (&groups[2][0], 2)] {
             let path = playlist.parent().unwrap().join(name);
-            let video = Command::new("ffmpeg").args(["-v", "error", "-i"]).arg(&path)
-                .args(["-frames:v", "1", "-vf", "scale=1:1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]).output().unwrap();
+            let video = Command::new("ffmpeg")
+                .args(["-v", "error", "-i"])
+                .arg(&path)
+                .args([
+                    "-frames:v",
+                    "1",
+                    "-vf",
+                    "scale=1:1",
+                    "-f",
+                    "rawvideo",
+                    "-pix_fmt",
+                    "rgb24",
+                    "-",
+                ])
+                .output()
+                .unwrap();
             assert!(video.status.success() && video.stdout.len() == 3);
             let rgb = &video.stdout;
-            match expected { 0 => assert!(rgb[0] > rgb[2] + 50, "red: {rgb:?}"), 2 => assert!(rgb[2] > rgb[0] + 50, "blue: {rgb:?}"), _ => assert!(rgb[0] < 80 && rgb[2] < 80, "slate: {rgb:?}") }
-            let audio = Command::new("ffmpeg").args(["-v", "error", "-i"]).arg(&path)
-                .args(["-t", "1", "-ac", "1", "-ar", "48000", "-f", "s16le", "-"]).output().unwrap();
+            match expected {
+                0 => assert!(rgb[0] > rgb[2] + 50, "red: {rgb:?}"),
+                2 => assert!(rgb[2] > rgb[0] + 50, "blue: {rgb:?}"),
+                _ => assert!(rgb[0] < 80 && rgb[2] < 80, "slate: {rgb:?}"),
+            }
+            let audio = Command::new("ffmpeg")
+                .args(["-v", "error", "-i"])
+                .arg(&path)
+                .args(["-t", "1", "-ac", "1", "-ar", "48000", "-f", "s16le", "-"])
+                .output()
+                .unwrap();
             assert!(audio.status.success());
-            let samples: Vec<i16> = audio.stdout.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]])).collect();
+            let samples: Vec<i16> = audio
+                .stdout
+                .chunks_exact(2)
+                .map(|b| i16::from_le_bytes([b[0], b[1]]))
+                .collect();
             assert!(samples.len() > 20000);
             let crossings = samples.windows(2).filter(|w| w[0] <= 0 && w[1] > 0).count();
             let peak = samples.iter().map(|v| (*v as i32).abs()).max().unwrap();
-            match expected { 0 => assert!((350..530).contains(&crossings), "440 Hz: {crossings}"), 2 => assert!((750..1000).contains(&crossings), "880 Hz: {crossings}"), _ => assert!(peak < 100, "slate audio: {peak}") }
+            match expected {
+                0 => assert!((350..530).contains(&crossings), "440 Hz: {crossings}"),
+                2 => assert!((750..1000).contains(&crossings), "880 Hz: {crossings}"),
+                _ => assert!(peak < 100, "slate audio: {peak}"),
+            }
         }
-        assert!(!engine.private_runtimes.lock().await[&channel.id].task.is_finished());
+        assert!(
+            !engine.private_runtimes.lock().await[&channel.id]
+                .task
+                .is_finished()
+        );
         engine.stop_all().await;
         let _ = std::fs::remove_dir_all(root);
     }
 
     #[tokio::test]
     async fn channel_runtime_recovers_from_removed_scheduled_file() {
-        let root = std::env::temp_dir().join(format!("channel-missing-recovery-{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("channel-missing-recovery-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         let pool = crate::db::init(&root).await.unwrap();
         for (id, color, frequency) in [("first", "red", 440), ("second", "blue", 880)] {
             let path = root.join(format!("{id}.mp4"));
-            assert!(Command::new("ffmpeg").args(["-v", "error", "-f", "lavfi", "-i"])
-                .arg(format!("color=c={color}:s=160x90:r=30000/1001:d=4.2"))
-                .args(["-f", "lavfi", "-i"]).arg(format!("sine=frequency={frequency}:sample_rate=48000:duration=4.2"))
-                .args(["-c:v", "libx264", "-threads", "1", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", "-y"])
-                .arg(&path).status().unwrap().success());
+            assert!(
+                Command::new("ffmpeg")
+                    .args(["-v", "error", "-f", "lavfi", "-i"])
+                    .arg(format!("color=c={color}:s=160x90:r=30000/1001:d=4.2"))
+                    .args(["-f", "lavfi", "-i"])
+                    .arg(format!(
+                        "sine=frequency={frequency}:sample_rate=48000:duration=4.2"
+                    ))
+                    .args([
+                        "-c:v",
+                        "libx264",
+                        "-threads",
+                        "1",
+                        "-pix_fmt",
+                        "yuv420p",
+                        "-c:a",
+                        "aac",
+                        "-shortest",
+                        "-y"
+                    ])
+                    .arg(&path)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
             sqlx::query("INSERT INTO media_items (id,path,title,kind,duration_ms,created_at) VALUES (?,?,?,'movie',4000,0)")
                 .bind(id).bind(path.to_str().unwrap()).bind(id).execute(&pool).await.unwrap();
         }
-        let mut channel = crate::db::create_channel_shell(&pool, "991", "test").await.unwrap();
+        let mut channel = crate::db::create_channel_shell(&pool, "991", "test")
+            .await
+            .unwrap();
         channel.stream.segment_seconds = 2;
         channel.stream.cache_segments = 12;
         channel.stream.preset = "ultrafast".into();
@@ -2080,7 +2784,8 @@ mod tests {
             .bind(broken.to_str().unwrap()).execute(&pool).await.unwrap();
         sqlx::query("INSERT INTO channel_items (channel_id,position,media_id,title,start_ms,end_ms,in_ms,out_ms,kind) VALUES (?,2,'broken','broken',?,?,0,4000,'program')")
             .bind(&channel.id).bind(start + 4000).bind(start + 8000).execute(&pool).await.unwrap();
-        let cloud = Arc::new(CloudManager::new(pool.clone(), root.clone(), "127.0.0.1", 0).unwrap());
+        let cloud =
+            Arc::new(CloudManager::new(pool.clone(), root.clone(), "127.0.0.1", 0).unwrap());
         let engine = Arc::new(Engine::new(pool, root.clone(), cloud, 0));
         let playlist = engine.ensure(&channel).await.unwrap();
         let mut previous = 0_u64;
@@ -2088,77 +2793,193 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(20), async {
             loop {
                 if let Ok(text) = tokio::fs::read_to_string(&playlist).await {
-                    let sequence = text.lines().find_map(|l| l.strip_prefix("#EXT-X-MEDIA-SEQUENCE:")).unwrap().parse::<u64>().unwrap();
+                    let sequence = text
+                        .lines()
+                        .find_map(|l| l.strip_prefix("#EXT-X-MEDIA-SEQUENCE:"))
+                        .unwrap()
+                        .parse::<u64>()
+                        .unwrap();
                     assert!(sequence >= previous);
                     previous = sequence;
-                    if text.contains("#EXT-X-DISCONTINUITY-SEQUENCE:") && text.matches("#EXT-X-DISCONTINUITY\n").count() >= 2 && text.matches("#EXTINF:").count() >= 5 {
-                        observed = text; break;
+                    if text.contains("#EXT-X-DISCONTINUITY-SEQUENCE:")
+                        && text.matches("#EXT-X-DISCONTINUITY\n").count() >= 2
+                        && text.matches("#EXTINF:").count() >= 5
+                    {
+                        observed = text;
+                        break;
                     }
                 }
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
-        }).await.unwrap();
+        })
+        .await
+        .unwrap();
         let before = observed.split("#EXT-X-DISCONTINUITY\n").next().unwrap();
-        assert!(before.matches("#EXTINF:").count() >= 2, "first item tail missing: {observed}");
-        let dates: Vec<_> = observed.lines().filter_map(|line| line.strip_prefix("#EXT-X-PROGRAM-DATE-TIME:")).collect();
+        assert!(
+            before.matches("#EXTINF:").count() >= 2,
+            "first item tail missing: {observed}"
+        );
+        let dates: Vec<_> = observed
+            .lines()
+            .filter_map(|line| line.strip_prefix("#EXT-X-PROGRAM-DATE-TIME:"))
+            .collect();
         assert!(dates.len() >= 5 && dates.windows(2).all(|pair| pair[0] < pair[1]));
-        for segment in observed.lines().filter(|line| !line.starts_with('#') && !line.is_empty()) {
-            assert!(std::fs::metadata(playlist.parent().unwrap().join(segment)).unwrap().len() > 0);
+        for segment in observed
+            .lines()
+            .filter(|line| !line.starts_with('#') && !line.is_empty())
+        {
+            assert!(
+                std::fs::metadata(playlist.parent().unwrap().join(segment))
+                    .unwrap()
+                    .len()
+                    > 0
+            );
         }
         // Decode the last segment before each boundary and the first after it.
-        let groups: Vec<Vec<&str>> = observed.split("#EXT-X-DISCONTINUITY\n")
-            .map(|group| group.lines().filter(|l| !l.starts_with('#') && !l.is_empty()).collect()).collect();
+        let groups: Vec<Vec<&str>> = observed
+            .split("#EXT-X-DISCONTINUITY\n")
+            .map(|group| {
+                group
+                    .lines()
+                    .filter(|l| !l.starts_with('#') && !l.is_empty())
+                    .collect()
+            })
+            .collect();
         assert!(groups.len() >= 3 && groups.iter().take(3).all(|g| !g.is_empty()));
-        let guide = crate::db::guide_blocks(&engine.pool, &channel.id, start, start + 12_000).await.unwrap();
-        assert_eq!(guide.iter().map(|item| item.media_id.as_str()).collect::<Vec<_>>(), vec!["first", "broken", "second"]);
-        assert_eq!(guide.iter().map(|item| item.start_ms).collect::<Vec<_>>(), vec![start, start + 4_000, start + 8_000]);
-        eprintln!("missing file to resumed publication: {} ms", now_ms() - failure_at);
+        let guide = crate::db::guide_blocks(&engine.pool, &channel.id, start, start + 12_000)
+            .await
+            .unwrap();
+        assert_eq!(
+            guide
+                .iter()
+                .map(|item| item.media_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["first", "broken", "second"]
+        );
+        assert_eq!(
+            guide.iter().map(|item| item.start_ms).collect::<Vec<_>>(),
+            vec![start, start + 4_000, start + 8_000]
+        );
+        eprintln!(
+            "missing file to resumed publication: {} ms",
+            now_ms() - failure_at
+        );
         let lag = now_ms() - (start + 8_000);
-        assert!((0..8_000).contains(&lag), "resume publication lag: {lag} ms");
+        assert!(
+            (0..8_000).contains(&lag),
+            "resume publication lag: {lag} ms"
+        );
         eprintln!("scheduled resume publication lag: {lag} ms");
         for (index, expected) in [(1, start + 4_000), (2, start + 8_000)] {
             let group = observed.split("#EXT-X-DISCONTINUITY\n").nth(index).unwrap();
-            let pdt = group.lines().find_map(|line| line.strip_prefix("#EXT-X-PROGRAM-DATE-TIME:")).unwrap();
-            let actual = time::OffsetDateTime::parse(pdt, &time::format_description::well_known::Rfc3339).unwrap().unix_timestamp_nanos() / 1_000_000;
-            assert!((actual - expected as i128).abs() <= 1000, "scheduled boundary {expected}, playlist {actual}");
+            let pdt = group
+                .lines()
+                .find_map(|line| line.strip_prefix("#EXT-X-PROGRAM-DATE-TIME:"))
+                .unwrap();
+            let actual =
+                time::OffsetDateTime::parse(pdt, &time::format_description::well_known::Rfc3339)
+                    .unwrap()
+                    .unix_timestamp_nanos()
+                    / 1_000_000;
+            assert!(
+                (actual - expected as i128).abs() <= 1000,
+                "scheduled boundary {expected}, playlist {actual}"
+            );
         }
         for (name, expected) in [(&groups[0][0], 0), (&groups[1][0], 1), (&groups[2][0], 2)] {
             let path = playlist.parent().unwrap().join(name);
-            let video = Command::new("ffmpeg").args(["-v", "error", "-i"]).arg(&path)
-                .args(["-frames:v", "1", "-vf", "scale=1:1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]).output().unwrap();
+            let video = Command::new("ffmpeg")
+                .args(["-v", "error", "-i"])
+                .arg(&path)
+                .args([
+                    "-frames:v",
+                    "1",
+                    "-vf",
+                    "scale=1:1",
+                    "-f",
+                    "rawvideo",
+                    "-pix_fmt",
+                    "rgb24",
+                    "-",
+                ])
+                .output()
+                .unwrap();
             assert!(video.status.success() && video.stdout.len() == 3);
             let rgb = &video.stdout;
-            match expected { 0 => assert!(rgb[0] > rgb[2] + 50, "red: {rgb:?}"), 2 => assert!(rgb[2] > rgb[0] + 50, "blue: {rgb:?}"), _ => assert!(rgb[0] < 80 && rgb[2] < 80, "slate: {rgb:?}") }
-            let audio = Command::new("ffmpeg").args(["-v", "error", "-i"]).arg(&path)
-                .args(["-t", "1", "-ac", "1", "-ar", "48000", "-f", "s16le", "-"]).output().unwrap();
+            match expected {
+                0 => assert!(rgb[0] > rgb[2] + 50, "red: {rgb:?}"),
+                2 => assert!(rgb[2] > rgb[0] + 50, "blue: {rgb:?}"),
+                _ => assert!(rgb[0] < 80 && rgb[2] < 80, "slate: {rgb:?}"),
+            }
+            let audio = Command::new("ffmpeg")
+                .args(["-v", "error", "-i"])
+                .arg(&path)
+                .args(["-t", "1", "-ac", "1", "-ar", "48000", "-f", "s16le", "-"])
+                .output()
+                .unwrap();
             assert!(audio.status.success());
-            let samples: Vec<i16> = audio.stdout.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]])).collect();
+            let samples: Vec<i16> = audio
+                .stdout
+                .chunks_exact(2)
+                .map(|b| i16::from_le_bytes([b[0], b[1]]))
+                .collect();
             assert!(samples.len() > 20000);
             let crossings = samples.windows(2).filter(|w| w[0] <= 0 && w[1] > 0).count();
             let peak = samples.iter().map(|v| (*v as i32).abs()).max().unwrap();
-            match expected { 0 => assert!((350..530).contains(&crossings), "440 Hz: {crossings}"), 2 => assert!((750..1000).contains(&crossings), "880 Hz: {crossings}"), _ => assert!(peak < 100, "slate audio: {peak}") }
+            match expected {
+                0 => assert!((350..530).contains(&crossings), "440 Hz: {crossings}"),
+                2 => assert!((750..1000).contains(&crossings), "880 Hz: {crossings}"),
+                _ => assert!(peak < 100, "slate audio: {peak}"),
+            }
         }
-        assert!(!engine.private_runtimes.lock().await[&channel.id].task.is_finished());
+        assert!(
+            !engine.private_runtimes.lock().await[&channel.id]
+                .task
+                .is_finished()
+        );
         engine.stop_all().await;
         let _ = std::fs::remove_dir_all(root);
     }
 
     #[tokio::test]
     async fn channel_runtime_recovers_from_resolved_remote_failure() {
-        let root = std::env::temp_dir().join(format!("channel-remote-recovery-{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("channel-remote-recovery-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         let pool = crate::db::init(&root).await.unwrap();
         for (id, color, frequency) in [("first", "red", 440), ("second", "blue", 880)] {
             let path = root.join(format!("{id}.mp4"));
-            assert!(Command::new("ffmpeg").args(["-v", "error", "-f", "lavfi", "-i"])
-                .arg(format!("color=c={color}:s=160x90:r=30000/1001:d=4.2"))
-                .args(["-f", "lavfi", "-i"]).arg(format!("sine=frequency={frequency}:sample_rate=48000:duration=4.2"))
-                .args(["-c:v", "libx264", "-threads", "1", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", "-y"])
-                .arg(&path).status().unwrap().success());
+            assert!(
+                Command::new("ffmpeg")
+                    .args(["-v", "error", "-f", "lavfi", "-i"])
+                    .arg(format!("color=c={color}:s=160x90:r=30000/1001:d=4.2"))
+                    .args(["-f", "lavfi", "-i"])
+                    .arg(format!(
+                        "sine=frequency={frequency}:sample_rate=48000:duration=4.2"
+                    ))
+                    .args([
+                        "-c:v",
+                        "libx264",
+                        "-threads",
+                        "1",
+                        "-pix_fmt",
+                        "yuv420p",
+                        "-c:a",
+                        "aac",
+                        "-shortest",
+                        "-y"
+                    ])
+                    .arg(&path)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
             sqlx::query("INSERT INTO media_items (id,path,title,kind,duration_ms,created_at) VALUES (?,?,?,'movie',4000,0)")
                 .bind(id).bind(path.to_str().unwrap()).bind(id).execute(&pool).await.unwrap();
         }
-        let mut channel = crate::db::create_channel_shell(&pool, "991", "test").await.unwrap();
+        let mut channel = crate::db::create_channel_shell(&pool, "991", "test")
+            .await
+            .unwrap();
         channel.stream.segment_seconds = 2;
         channel.stream.cache_segments = 12;
         channel.stream.preset = "ultrafast".into();
@@ -2187,7 +3008,9 @@ mod tests {
                     let _ = stream.read(&mut request);
                     failure_time.store(now_ms(), Ordering::Release);
                     seen_request.store(true, Ordering::Release);
-                    let _ = stream.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                    let _ = stream.write_all(
+                        b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    );
                     return;
                 }
                 std::thread::sleep(Duration::from_millis(10));
@@ -2197,7 +3020,8 @@ mod tests {
             .bind(format!("http://{address}/gone.mp4")).execute(&pool).await.unwrap();
         sqlx::query("INSERT INTO channel_items (channel_id,position,media_id,title,start_ms,end_ms,in_ms,out_ms,kind) VALUES (?,2,'broken','broken',?,?,0,4000,'program')")
             .bind(&channel.id).bind(start + 4000).bind(start + 8000).execute(&pool).await.unwrap();
-        let cloud = Arc::new(CloudManager::new(pool.clone(), root.clone(), "127.0.0.1", 0).unwrap());
+        let cloud =
+            Arc::new(CloudManager::new(pool.clone(), root.clone(), "127.0.0.1", 0).unwrap());
         let engine = Arc::new(Engine::new(pool, root.clone(), cloud, 0));
         let playlist = engine.ensure(&channel).await.unwrap();
         let mut previous = 0_u64;
@@ -2205,59 +3029,155 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(20), async {
             loop {
                 if let Ok(text) = tokio::fs::read_to_string(&playlist).await {
-                    let sequence = text.lines().find_map(|l| l.strip_prefix("#EXT-X-MEDIA-SEQUENCE:")).unwrap().parse::<u64>().unwrap();
+                    let sequence = text
+                        .lines()
+                        .find_map(|l| l.strip_prefix("#EXT-X-MEDIA-SEQUENCE:"))
+                        .unwrap()
+                        .parse::<u64>()
+                        .unwrap();
                     assert!(sequence >= previous);
                     previous = sequence;
-                    if text.contains("#EXT-X-DISCONTINUITY-SEQUENCE:") && text.matches("#EXT-X-DISCONTINUITY\n").count() >= 2 && text.matches("#EXTINF:").count() >= 5 {
-                        observed = text; break;
+                    if text.contains("#EXT-X-DISCONTINUITY-SEQUENCE:")
+                        && text.matches("#EXT-X-DISCONTINUITY\n").count() >= 2
+                        && text.matches("#EXTINF:").count() >= 5
+                    {
+                        observed = text;
+                        break;
                     }
                 }
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
-        }).await.unwrap();
+        })
+        .await
+        .unwrap();
         let before = observed.split("#EXT-X-DISCONTINUITY\n").next().unwrap();
-        assert!(before.matches("#EXTINF:").count() >= 2, "first item tail missing: {observed}");
-        let dates: Vec<_> = observed.lines().filter_map(|line| line.strip_prefix("#EXT-X-PROGRAM-DATE-TIME:")).collect();
+        assert!(
+            before.matches("#EXTINF:").count() >= 2,
+            "first item tail missing: {observed}"
+        );
+        let dates: Vec<_> = observed
+            .lines()
+            .filter_map(|line| line.strip_prefix("#EXT-X-PROGRAM-DATE-TIME:"))
+            .collect();
         assert!(dates.len() >= 5 && dates.windows(2).all(|pair| pair[0] < pair[1]));
-        for segment in observed.lines().filter(|line| !line.starts_with('#') && !line.is_empty()) {
-            assert!(std::fs::metadata(playlist.parent().unwrap().join(segment)).unwrap().len() > 0);
+        for segment in observed
+            .lines()
+            .filter(|line| !line.starts_with('#') && !line.is_empty())
+        {
+            assert!(
+                std::fs::metadata(playlist.parent().unwrap().join(segment))
+                    .unwrap()
+                    .len()
+                    > 0
+            );
         }
         // Decode the last segment before each boundary and the first after it.
-        let groups: Vec<Vec<&str>> = observed.split("#EXT-X-DISCONTINUITY\n")
-            .map(|group| group.lines().filter(|l| !l.starts_with('#') && !l.is_empty()).collect()).collect();
+        let groups: Vec<Vec<&str>> = observed
+            .split("#EXT-X-DISCONTINUITY\n")
+            .map(|group| {
+                group
+                    .lines()
+                    .filter(|l| !l.starts_with('#') && !l.is_empty())
+                    .collect()
+            })
+            .collect();
         assert!(groups.len() >= 3 && groups.iter().take(3).all(|g| !g.is_empty()));
-        let guide = crate::db::guide_blocks(&engine.pool, &channel.id, start, start + 12_000).await.unwrap();
-        assert_eq!(guide.iter().map(|item| item.media_id.as_str()).collect::<Vec<_>>(), vec!["first", "broken", "second"]);
-        assert_eq!(guide.iter().map(|item| item.start_ms).collect::<Vec<_>>(), vec![start, start + 4_000, start + 8_000]);
+        let guide = crate::db::guide_blocks(&engine.pool, &channel.id, start, start + 12_000)
+            .await
+            .unwrap();
+        assert_eq!(
+            guide
+                .iter()
+                .map(|item| item.media_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["first", "broken", "second"]
+        );
+        assert_eq!(
+            guide.iter().map(|item| item.start_ms).collect::<Vec<_>>(),
+            vec![start, start + 4_000, start + 8_000]
+        );
         assert!(failure_at.load(Ordering::Acquire) > 0);
-        eprintln!("remote failure to resumed publication: {} ms", now_ms() - failure_at.load(Ordering::Acquire));
+        eprintln!(
+            "remote failure to resumed publication: {} ms",
+            now_ms() - failure_at.load(Ordering::Acquire)
+        );
         let lag = now_ms() - (start + 8_000);
-        assert!((0..8_000).contains(&lag), "resume publication lag: {lag} ms");
+        assert!(
+            (0..8_000).contains(&lag),
+            "resume publication lag: {lag} ms"
+        );
         eprintln!("scheduled resume publication lag: {lag} ms");
         for (index, expected) in [(1, start + 4_000), (2, start + 8_000)] {
             let group = observed.split("#EXT-X-DISCONTINUITY\n").nth(index).unwrap();
-            let pdt = group.lines().find_map(|line| line.strip_prefix("#EXT-X-PROGRAM-DATE-TIME:")).unwrap();
-            let actual = time::OffsetDateTime::parse(pdt, &time::format_description::well_known::Rfc3339).unwrap().unix_timestamp_nanos() / 1_000_000;
-            assert!((actual - expected as i128).abs() <= 1000, "scheduled boundary {expected}, playlist {actual}");
+            let pdt = group
+                .lines()
+                .find_map(|line| line.strip_prefix("#EXT-X-PROGRAM-DATE-TIME:"))
+                .unwrap();
+            let actual =
+                time::OffsetDateTime::parse(pdt, &time::format_description::well_known::Rfc3339)
+                    .unwrap()
+                    .unix_timestamp_nanos()
+                    / 1_000_000;
+            assert!(
+                (actual - expected as i128).abs() <= 1000,
+                "scheduled boundary {expected}, playlist {actual}"
+            );
         }
         for (name, expected) in [(&groups[0][0], 0), (&groups[1][0], 1), (&groups[2][0], 2)] {
             let path = playlist.parent().unwrap().join(name);
-            let video = Command::new("ffmpeg").args(["-v", "error", "-i"]).arg(&path)
-                .args(["-frames:v", "1", "-vf", "scale=1:1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]).output().unwrap();
+            let video = Command::new("ffmpeg")
+                .args(["-v", "error", "-i"])
+                .arg(&path)
+                .args([
+                    "-frames:v",
+                    "1",
+                    "-vf",
+                    "scale=1:1",
+                    "-f",
+                    "rawvideo",
+                    "-pix_fmt",
+                    "rgb24",
+                    "-",
+                ])
+                .output()
+                .unwrap();
             assert!(video.status.success() && video.stdout.len() == 3);
             let rgb = &video.stdout;
-            match expected { 0 => assert!(rgb[0] > rgb[2] + 50, "red: {rgb:?}"), 2 => assert!(rgb[2] > rgb[0] + 50, "blue: {rgb:?}"), _ => assert!(rgb[0] < 80 && rgb[2] < 80, "slate: {rgb:?}") }
-            let audio = Command::new("ffmpeg").args(["-v", "error", "-i"]).arg(&path)
-                .args(["-t", "1", "-ac", "1", "-ar", "48000", "-f", "s16le", "-"]).output().unwrap();
+            match expected {
+                0 => assert!(rgb[0] > rgb[2] + 50, "red: {rgb:?}"),
+                2 => assert!(rgb[2] > rgb[0] + 50, "blue: {rgb:?}"),
+                _ => assert!(rgb[0] < 80 && rgb[2] < 80, "slate: {rgb:?}"),
+            }
+            let audio = Command::new("ffmpeg")
+                .args(["-v", "error", "-i"])
+                .arg(&path)
+                .args(["-t", "1", "-ac", "1", "-ar", "48000", "-f", "s16le", "-"])
+                .output()
+                .unwrap();
             assert!(audio.status.success());
-            let samples: Vec<i16> = audio.stdout.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]])).collect();
+            let samples: Vec<i16> = audio
+                .stdout
+                .chunks_exact(2)
+                .map(|b| i16::from_le_bytes([b[0], b[1]]))
+                .collect();
             assert!(samples.len() > 20000);
             let crossings = samples.windows(2).filter(|w| w[0] <= 0 && w[1] > 0).count();
             let peak = samples.iter().map(|v| (*v as i32).abs()).max().unwrap();
-            match expected { 0 => assert!((350..530).contains(&crossings), "440 Hz: {crossings}"), 2 => assert!((750..1000).contains(&crossings), "880 Hz: {crossings}"), _ => assert!(peak < 100, "slate audio: {peak}") }
+            match expected {
+                0 => assert!((350..530).contains(&crossings), "440 Hz: {crossings}"),
+                2 => assert!((750..1000).contains(&crossings), "880 Hz: {crossings}"),
+                _ => assert!(peak < 100, "slate audio: {peak}"),
+            }
         }
-        assert!(!engine.private_runtimes.lock().await[&channel.id].task.is_finished());
-        assert!(seen.load(Ordering::Acquire), "FFmpeg never reached the resolved remote URL");
+        assert!(
+            !engine.private_runtimes.lock().await[&channel.id]
+                .task
+                .is_finished()
+        );
+        assert!(
+            seen.load(Ordering::Acquire),
+            "FFmpeg never reached the resolved remote URL"
+        );
         server.join().unwrap();
         let before = std::fs::read_to_string(&playlist).unwrap();
         {
@@ -2265,22 +3185,54 @@ mod tests {
             runtimes[&channel.id].task.abort();
         }
         tokio::time::timeout(Duration::from_secs(3), async {
-            while !engine.private_runtimes.lock().await[&channel.id].task.is_finished() {
+            while !engine.private_runtimes.lock().await[&channel.id]
+                .task
+                .is_finished()
+            {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
-        }).await.unwrap();
-        assert_eq!(engine.producer_snapshots().await[0].item, "private publisher failed");
-        engine.private_runtimes.lock().await[&channel.id].failed_at_ms.store(now_ms(), Ordering::Release);
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            engine.producer_snapshots().await[0].item,
+            "private publisher failed"
+        );
+        engine.private_runtimes.lock().await[&channel.id]
+            .failed_at_ms
+            .store(now_ms(), Ordering::Release);
         for _ in 0..3 {
-            assert!(engine.ensure(&channel).await.unwrap_err().to_string().contains("backoff"));
-            assert!(engine.private_runtimes.lock().await[&channel.id].task.is_finished());
+            assert!(
+                engine
+                    .ensure(&channel)
+                    .await
+                    .unwrap_err()
+                    .to_string()
+                    .contains("backoff")
+            );
+            assert!(
+                engine.private_runtimes.lock().await[&channel.id]
+                    .task
+                    .is_finished()
+            );
         }
-        engine.private_runtimes.lock().await[&channel.id].failed_at_ms.store(now_ms() - 5_001, Ordering::Release);
+        engine.private_runtimes.lock().await[&channel.id]
+            .failed_at_ms
+            .store(now_ms() - 5_001, Ordering::Release);
         engine.ensure(&channel).await.unwrap();
         let after = std::fs::read_to_string(&playlist).unwrap();
-        let old_entries: Vec<_> = before.lines().filter(|line| line.starts_with("segment_")).collect();
-        let new_entries: Vec<_> = after.lines().filter(|line| line.starts_with("segment_")).collect();
-        assert!(new_entries.starts_with(&old_entries), "restart replaced advertised entries");
+        let old_entries: Vec<_> = before
+            .lines()
+            .filter(|line| line.starts_with("segment_"))
+            .collect();
+        let new_entries: Vec<_> = after
+            .lines()
+            .filter(|line| line.starts_with("segment_"))
+            .collect();
+        assert!(
+            new_entries.starts_with(&old_entries),
+            "restart replaced advertised entries"
+        );
         assert!(new_entries.len() > old_entries.len());
         engine.stop_all().await;
         let _ = std::fs::remove_dir_all(root);
@@ -2295,15 +3247,37 @@ mod tests {
         let pool = crate::db::init(&root).await.unwrap();
         for (id, color, freq, seconds) in [("first", "red", 440, 10), ("second", "blue", 880, 10)] {
             let path = root.join(format!("{id}.mp4"));
-            assert!(Command::new("ffmpeg").args(["-v", "error", "-f", "lavfi", "-i"])
-                .arg(format!("color=c={color}:s=160x90:r=30:d={seconds}"))
-                .args(["-f", "lavfi", "-i"]).arg(format!("sine=frequency={freq}:sample_rate=48000:duration={seconds}"))
-                .args(["-c:v", "libx264", "-threads", "1", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", "-y"])
-                .arg(&path).status().unwrap().success());
+            assert!(
+                Command::new("ffmpeg")
+                    .args(["-v", "error", "-f", "lavfi", "-i"])
+                    .arg(format!("color=c={color}:s=160x90:r=30:d={seconds}"))
+                    .args(["-f", "lavfi", "-i"])
+                    .arg(format!(
+                        "sine=frequency={freq}:sample_rate=48000:duration={seconds}"
+                    ))
+                    .args([
+                        "-c:v",
+                        "libx264",
+                        "-threads",
+                        "1",
+                        "-pix_fmt",
+                        "yuv420p",
+                        "-c:a",
+                        "aac",
+                        "-shortest",
+                        "-y"
+                    ])
+                    .arg(&path)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
             sqlx::query("INSERT INTO media_items (id,path,title,kind,duration_ms,created_at) VALUES (?,?,?,'movie',10000,0)")
                 .bind(id).bind(path.to_str().unwrap()).bind(id).execute(&pool).await.unwrap();
         }
-        let mut channel = crate::db::create_channel_shell(&pool, "991", "test").await.unwrap();
+        let mut channel = crate::db::create_channel_shell(&pool, "991", "test")
+            .await
+            .unwrap();
         channel.stream.segment_seconds = 2;
         channel.stream.cache_segments = 60;
         channel.stream.prebuffer_seconds = 0;
@@ -2316,7 +3290,8 @@ mod tests {
                 .bind(&channel.id).bind(position).bind(id).bind(id).bind(start + position * 10000)
                 .bind(start + (position + 1) * 10000).execute(&pool).await.unwrap();
         }
-        let cloud = Arc::new(CloudManager::new(pool.clone(), root.clone(), "127.0.0.1", 0).unwrap());
+        let cloud =
+            Arc::new(CloudManager::new(pool.clone(), root.clone(), "127.0.0.1", 0).unwrap());
         let engine = Arc::new(Engine::new(pool, root.clone(), cloud, 0));
         let playlist = engine.ensure(&channel).await.unwrap();
         let target = root.join("first.mp4");
@@ -2325,71 +3300,174 @@ mod tests {
                 let text = std::fs::read_to_string(&playlist).unwrap_or_default();
                 if text.lines().any(|l| l.starts_with("segment_")) {
                     for entry in std::fs::read_dir("/proc").unwrap().flatten() {
-                        let Ok(pid) = entry.file_name().to_string_lossy().parse::<u32>() else { continue };
+                        let Ok(pid) = entry.file_name().to_string_lossy().parse::<u32>() else {
+                            continue;
+                        };
                         if let Ok(args) = std::fs::read(entry.path().join("cmdline")) {
-                            if args.split(|b| *b == 0).any(|a| a == target.as_os_str().as_encoded_bytes()) { return pid; }
+                            if args
+                                .split(|b| *b == 0)
+                                .any(|a| a == target.as_os_str().as_encoded_bytes())
+                            {
+                                return pid;
+                            }
                         }
                     }
                 }
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
-        }).await.expect("first segment and live encoder");
+        })
+        .await
+        .expect("first segment and live encoder");
         let task_id = engine.private_runtimes.lock().await[&channel.id].task.id();
         let before = std::fs::read_to_string(&playlist).unwrap();
-        let retained_name = before.lines().find(|l| l.starts_with("segment_")).unwrap().to_owned();
-        let retained_bytes = std::fs::read(playlist.parent().unwrap().join(&retained_name)).unwrap();
-        assert!(Command::new("kill").args(["-STOP", &pid.to_string()]).status().unwrap().success());
+        let retained_name = before
+            .lines()
+            .find(|l| l.starts_with("segment_"))
+            .unwrap()
+            .to_owned();
+        let retained_bytes =
+            std::fs::read(playlist.parent().unwrap().join(&retained_name)).unwrap();
+        assert!(
+            Command::new("kill")
+                .args(["-STOP", &pid.to_string()])
+                .status()
+                .unwrap()
+                .success()
+        );
         let injected = std::time::Instant::now();
         let observed = tokio::time::timeout(Duration::from_secs(45), async {
             loop {
                 let text = std::fs::read_to_string(&playlist).unwrap_or_default();
-                if text.matches("#EXT-X-DISCONTINUITY\n").count() >= 2 { break text; }
-                assert!(!engine.private_runtimes.lock().await[&channel.id].task.is_finished(), "runtime terminated during recovery");
+                if text.matches("#EXT-X-DISCONTINUITY\n").count() >= 2 {
+                    break text;
+                }
+                assert!(
+                    !engine.private_runtimes.lock().await[&channel.id]
+                        .task
+                        .is_finished(),
+                    "runtime terminated during recovery"
+                );
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
-        }).await.expect("slate and next source publication");
+        })
+        .await
+        .expect("slate and next source publication");
         let elapsed = injected.elapsed();
-        eprintln!("stall to next-source publication: {} ms", elapsed.as_millis());
+        eprintln!(
+            "stall to next-source publication: {} ms",
+            elapsed.as_millis()
+        );
         assert!(elapsed >= Duration::from_secs(21)); // FIFO stall timeout is 22s
         assert!(observed.lines().any(|line| line == retained_name));
-        assert_eq!(std::fs::read(playlist.parent().unwrap().join(&retained_name)).unwrap(), retained_bytes);
+        assert_eq!(
+            std::fs::read(playlist.parent().unwrap().join(&retained_name)).unwrap(),
+            retained_bytes
+        );
         assert!(observed.contains("#EXT-X-MEDIA-SEQUENCE:0\n"));
         let mut previous_end: Option<i128> = None;
         let mut date: Option<i128> = None;
         let mut duration: Option<i128> = None;
         for line in observed.lines() {
             if let Some(v) = line.strip_prefix("#EXT-X-PROGRAM-DATE-TIME:") {
-                date = Some(time::OffsetDateTime::parse(v, &time::format_description::well_known::Rfc3339).unwrap().unix_timestamp_nanos());
+                date = Some(
+                    time::OffsetDateTime::parse(v, &time::format_description::well_known::Rfc3339)
+                        .unwrap()
+                        .unix_timestamp_nanos(),
+                );
             } else if let Some(v) = line.strip_prefix("#EXTINF:") {
-                duration = Some((v.trim_end_matches(',').parse::<f64>().unwrap() * 1_000_000_000.0).round() as i128);
+                duration = Some(
+                    (v.trim_end_matches(',').parse::<f64>().unwrap() * 1_000_000_000.0).round()
+                        as i128,
+                );
             } else if line.starts_with("segment_") {
                 let current = date.take().unwrap();
-                if let Some(end) = previous_end { assert!((current - end).abs() <= 2_000_000, "PDT gap"); }
+                if let Some(end) = previous_end {
+                    assert!((current - end).abs() <= 2_000_000, "PDT gap");
+                }
                 previous_end = Some(current + duration.take().unwrap());
             }
         }
-        let groups: Vec<Vec<_>> = observed.split("#EXT-X-DISCONTINUITY\n").map(|g| g.lines().filter(|l| l.starts_with("segment_")).collect()).collect();
-        assert!(groups.len() >= 3 && groups.iter().take(3).all(|g| !g.is_empty()), "{observed}");
+        let groups: Vec<Vec<_>> = observed
+            .split("#EXT-X-DISCONTINUITY\n")
+            .map(|g| g.lines().filter(|l| l.starts_with("segment_")).collect())
+            .collect();
+        assert!(
+            groups.len() >= 3 && groups.iter().take(3).all(|g| !g.is_empty()),
+            "{observed}"
+        );
         for (index, expected) in [(0, 0), (1, 1), (2, 2)] {
             let path = playlist.parent().unwrap().join(groups[index][0]);
-            let video = Command::new("ffmpeg").args(["-v", "error", "-i"]).arg(&path).args(["-frames:v", "1", "-vf", "scale=1:1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]).output().unwrap();
+            let video = Command::new("ffmpeg")
+                .args(["-v", "error", "-i"])
+                .arg(&path)
+                .args([
+                    "-frames:v",
+                    "1",
+                    "-vf",
+                    "scale=1:1",
+                    "-f",
+                    "rawvideo",
+                    "-pix_fmt",
+                    "rgb24",
+                    "-",
+                ])
+                .output()
+                .unwrap();
             assert!(video.status.success() && video.stdout.len() == 3);
             let rgb = &video.stdout;
-            match expected { 0 => assert!(rgb[0] > rgb[2] + 50, "red {rgb:?}"), 1 => assert!(rgb[0] < 80 && rgb[2] < 80, "slate {rgb:?}"), _ => assert!(rgb[2] > rgb[0] + 50, "blue {rgb:?}") }
-            let audio = Command::new("ffmpeg").args(["-v", "error", "-i"]).arg(&path).args(["-t", "1", "-ac", "1", "-ar", "48000", "-f", "s16le", "-"]).output().unwrap();
+            match expected {
+                0 => assert!(rgb[0] > rgb[2] + 50, "red {rgb:?}"),
+                1 => assert!(rgb[0] < 80 && rgb[2] < 80, "slate {rgb:?}"),
+                _ => assert!(rgb[2] > rgb[0] + 50, "blue {rgb:?}"),
+            }
+            let audio = Command::new("ffmpeg")
+                .args(["-v", "error", "-i"])
+                .arg(&path)
+                .args(["-t", "1", "-ac", "1", "-ar", "48000", "-f", "s16le", "-"])
+                .output()
+                .unwrap();
             assert!(audio.status.success());
-            let samples: Vec<i16> = audio.stdout.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]])).collect();
+            let samples: Vec<i16> = audio
+                .stdout
+                .chunks_exact(2)
+                .map(|b| i16::from_le_bytes([b[0], b[1]]))
+                .collect();
             assert!(samples.len() > 20000);
             let crossings = samples.windows(2).filter(|w| w[0] <= 0 && w[1] > 0).count();
             let peak = samples.iter().map(|v| (*v as i32).abs()).max().unwrap();
-            match expected { 0 => assert!((350..530).contains(&crossings)), 1 => assert!(peak < 100), _ => assert!((750..1000).contains(&crossings), "{crossings}") }
+            match expected {
+                0 => assert!((350..530).contains(&crossings)),
+                1 => assert!(peak < 100),
+                _ => assert!((750..1000).contains(&crossings), "{crossings}"),
+            }
         }
-        let guide = crate::db::guide_blocks(&engine.pool, &channel.id, start, start + 20000).await.unwrap();
-        assert_eq!(guide.iter().map(|i| i.media_id.as_str()).collect::<Vec<_>>(), vec!["first", "second"]);
+        let guide = crate::db::guide_blocks(&engine.pool, &channel.id, start, start + 20000)
+            .await
+            .unwrap();
+        assert_eq!(
+            guide
+                .iter()
+                .map(|i| i.media_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["first", "second"]
+        );
         assert_eq!(guide[1].start_ms, start + 10000);
-        let pdt = observed.split("#EXT-X-DISCONTINUITY\n").nth(2).unwrap().lines().find_map(|l| l.strip_prefix("#EXT-X-PROGRAM-DATE-TIME:")).unwrap();
-        let date = time::OffsetDateTime::parse(pdt, &time::format_description::well_known::Rfc3339).unwrap().unix_timestamp_nanos() / 1_000_000;
-        assert!((date - guide[1].start_ms as i128).abs() <= 1000, "guide {} PDT {date}", guide[1].start_ms);
+        let pdt = observed
+            .split("#EXT-X-DISCONTINUITY\n")
+            .nth(2)
+            .unwrap()
+            .lines()
+            .find_map(|l| l.strip_prefix("#EXT-X-PROGRAM-DATE-TIME:"))
+            .unwrap();
+        let date = time::OffsetDateTime::parse(pdt, &time::format_description::well_known::Rfc3339)
+            .unwrap()
+            .unix_timestamp_nanos()
+            / 1_000_000;
+        assert!(
+            (date - guide[1].start_ms as i128).abs() <= 1000,
+            "guide {} PDT {date}",
+            guide[1].start_ms
+        );
         {
             let runtimes = engine.private_runtimes.lock().await;
             let runtime = &runtimes[&channel.id];
@@ -2405,20 +3483,43 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn channel_runtime_recovers_after_encoder_kill() {
-        let root = std::env::temp_dir().join(format!("channel-kill-recovery-{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("channel-kill-recovery-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         let pool = crate::db::init(&root).await.unwrap();
         for (id, color, frequency) in [("first", "red", 440), ("second", "blue", 880)] {
             let path = root.join(format!("{id}.mp4"));
-            assert!(Command::new("ffmpeg").args(["-v", "error", "-f", "lavfi", "-i"])
-                .arg(format!("color=c={color}:s=160x90:r=30000/1001:d=4.2"))
-                .args(["-f", "lavfi", "-i"]).arg(format!("sine=frequency={frequency}:sample_rate=48000:duration=4.2"))
-                .args(["-c:v", "libx264", "-threads", "1", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", "-y"])
-                .arg(&path).status().unwrap().success());
+            assert!(
+                Command::new("ffmpeg")
+                    .args(["-v", "error", "-f", "lavfi", "-i"])
+                    .arg(format!("color=c={color}:s=160x90:r=30000/1001:d=4.2"))
+                    .args(["-f", "lavfi", "-i"])
+                    .arg(format!(
+                        "sine=frequency={frequency}:sample_rate=48000:duration=4.2"
+                    ))
+                    .args([
+                        "-c:v",
+                        "libx264",
+                        "-threads",
+                        "1",
+                        "-pix_fmt",
+                        "yuv420p",
+                        "-c:a",
+                        "aac",
+                        "-shortest",
+                        "-y"
+                    ])
+                    .arg(&path)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
             sqlx::query("INSERT INTO media_items (id,path,title,kind,duration_ms,created_at) VALUES (?,?,?,'movie',4000,0)")
                 .bind(id).bind(path.to_str().unwrap()).bind(id).execute(&pool).await.unwrap();
         }
-        let mut channel = crate::db::create_channel_shell(&pool, "991", "test").await.unwrap();
+        let mut channel = crate::db::create_channel_shell(&pool, "991", "test")
+            .await
+            .unwrap();
         channel.stream.segment_seconds = 2;
         channel.stream.cache_segments = 12;
         channel.stream.prebuffer_seconds = 0;
@@ -2456,80 +3557,189 @@ mod tests {
             .bind(format!("http://{address}/gone.mp4")).execute(&pool).await.unwrap();
         sqlx::query("INSERT INTO channel_items (channel_id,position,media_id,title,start_ms,end_ms,in_ms,out_ms,kind) VALUES (?,2,'broken','broken',?,?,0,4000,'program')")
             .bind(&channel.id).bind(start + 4000).bind(start + 8000).execute(&pool).await.unwrap();
-        let cloud = Arc::new(CloudManager::new(pool.clone(), root.clone(), "127.0.0.1", 0).unwrap());
+        let cloud =
+            Arc::new(CloudManager::new(pool.clone(), root.clone(), "127.0.0.1", 0).unwrap());
         let engine = Arc::new(Engine::new(pool, root.clone(), cloud, 0));
         let playlist = engine.ensure(&channel).await.unwrap();
         let target = format!("http://{address}/gone.mp4");
         let pid = tokio::time::timeout(Duration::from_secs(5), async {
             loop {
                 for entry in std::fs::read_dir("/proc").unwrap().flatten() {
-                    let Ok(pid) = entry.file_name().to_string_lossy().parse::<u32>() else { continue };
+                    let Ok(pid) = entry.file_name().to_string_lossy().parse::<u32>() else {
+                        continue;
+                    };
                     if let Ok(args) = std::fs::read(entry.path().join("cmdline")) {
-                        if args.split(|b| *b == 0).any(|arg| arg == target.as_bytes()) { return pid; }
+                        if args.split(|b| *b == 0).any(|arg| arg == target.as_bytes()) {
+                            return pid;
+                        }
                     }
                 }
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
-        }).await.expect("remote encoder was not started");
-        assert!(Command::new("kill").args(["-KILL", &pid.to_string()]).status().unwrap().success());
+        })
+        .await
+        .expect("remote encoder was not started");
+        assert!(
+            Command::new("kill")
+                .args(["-KILL", &pid.to_string()])
+                .status()
+                .unwrap()
+                .success()
+        );
         let failure_at = now_ms();
         let mut previous = 0_u64;
         let mut observed = String::new();
         tokio::time::timeout(Duration::from_secs(20), async {
             loop {
                 if let Ok(text) = tokio::fs::read_to_string(&playlist).await {
-                    let sequence = text.lines().find_map(|l| l.strip_prefix("#EXT-X-MEDIA-SEQUENCE:")).unwrap().parse::<u64>().unwrap();
+                    let sequence = text
+                        .lines()
+                        .find_map(|l| l.strip_prefix("#EXT-X-MEDIA-SEQUENCE:"))
+                        .unwrap()
+                        .parse::<u64>()
+                        .unwrap();
                     assert!(sequence >= previous);
                     previous = sequence;
-                    if text.contains("#EXT-X-DISCONTINUITY-SEQUENCE:") && text.matches("#EXT-X-DISCONTINUITY\n").count() >= 2 && text.matches("#EXTINF:").count() >= 5 {
-                        observed = text; break;
+                    if text.contains("#EXT-X-DISCONTINUITY-SEQUENCE:")
+                        && text.matches("#EXT-X-DISCONTINUITY\n").count() >= 2
+                        && text.matches("#EXTINF:").count() >= 5
+                    {
+                        observed = text;
+                        break;
                     }
                 }
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
-        }).await.unwrap();
+        })
+        .await
+        .unwrap();
         let before = observed.split("#EXT-X-DISCONTINUITY\n").next().unwrap();
-        assert!(before.matches("#EXTINF:").count() >= 2, "first item tail missing: {observed}");
-        let dates: Vec<_> = observed.lines().filter_map(|line| line.strip_prefix("#EXT-X-PROGRAM-DATE-TIME:")).collect();
+        assert!(
+            before.matches("#EXTINF:").count() >= 2,
+            "first item tail missing: {observed}"
+        );
+        let dates: Vec<_> = observed
+            .lines()
+            .filter_map(|line| line.strip_prefix("#EXT-X-PROGRAM-DATE-TIME:"))
+            .collect();
         assert!(dates.len() >= 5 && dates.windows(2).all(|pair| pair[0] < pair[1]));
-        for segment in observed.lines().filter(|line| !line.starts_with('#') && !line.is_empty()) {
-            assert!(std::fs::metadata(playlist.parent().unwrap().join(segment)).unwrap().len() > 0);
+        for segment in observed
+            .lines()
+            .filter(|line| !line.starts_with('#') && !line.is_empty())
+        {
+            assert!(
+                std::fs::metadata(playlist.parent().unwrap().join(segment))
+                    .unwrap()
+                    .len()
+                    > 0
+            );
         }
         // Decode the last segment before each boundary and the first after it.
-        let groups: Vec<Vec<&str>> = observed.split("#EXT-X-DISCONTINUITY\n")
-            .map(|group| group.lines().filter(|l| !l.starts_with('#') && !l.is_empty()).collect()).collect();
+        let groups: Vec<Vec<&str>> = observed
+            .split("#EXT-X-DISCONTINUITY\n")
+            .map(|group| {
+                group
+                    .lines()
+                    .filter(|l| !l.starts_with('#') && !l.is_empty())
+                    .collect()
+            })
+            .collect();
         assert!(groups.len() >= 3 && groups.iter().take(3).all(|g| !g.is_empty()));
-        let guide = crate::db::guide_blocks(&engine.pool, &channel.id, start, start + 12_000).await.unwrap();
-        assert_eq!(guide.iter().map(|item| item.media_id.as_str()).collect::<Vec<_>>(), vec!["first", "broken", "second"]);
-        assert_eq!(guide.iter().map(|item| item.start_ms).collect::<Vec<_>>(), vec![start, start + 4_000, start + 8_000]);
-        eprintln!("encoder kill to resumed publication: {} ms", now_ms() - failure_at);
+        let guide = crate::db::guide_blocks(&engine.pool, &channel.id, start, start + 12_000)
+            .await
+            .unwrap();
+        assert_eq!(
+            guide
+                .iter()
+                .map(|item| item.media_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["first", "broken", "second"]
+        );
+        assert_eq!(
+            guide.iter().map(|item| item.start_ms).collect::<Vec<_>>(),
+            vec![start, start + 4_000, start + 8_000]
+        );
+        eprintln!(
+            "encoder kill to resumed publication: {} ms",
+            now_ms() - failure_at
+        );
         let lag = now_ms() - (start + 8_000);
-        assert!((0..8_000).contains(&lag), "resume publication lag: {lag} ms");
+        assert!(
+            (0..8_000).contains(&lag),
+            "resume publication lag: {lag} ms"
+        );
         eprintln!("scheduled resume publication lag: {lag} ms");
         for (index, expected) in [(1, start + 4_000), (2, start + 8_000)] {
             let group = observed.split("#EXT-X-DISCONTINUITY\n").nth(index).unwrap();
-            let pdt = group.lines().find_map(|line| line.strip_prefix("#EXT-X-PROGRAM-DATE-TIME:")).unwrap();
-            let actual = time::OffsetDateTime::parse(pdt, &time::format_description::well_known::Rfc3339).unwrap().unix_timestamp_nanos() / 1_000_000;
-            assert!((actual - expected as i128).abs() <= 1000, "scheduled boundary {expected}, playlist {actual}");
+            let pdt = group
+                .lines()
+                .find_map(|line| line.strip_prefix("#EXT-X-PROGRAM-DATE-TIME:"))
+                .unwrap();
+            let actual =
+                time::OffsetDateTime::parse(pdt, &time::format_description::well_known::Rfc3339)
+                    .unwrap()
+                    .unix_timestamp_nanos()
+                    / 1_000_000;
+            assert!(
+                (actual - expected as i128).abs() <= 1000,
+                "scheduled boundary {expected}, playlist {actual}"
+            );
         }
         for (name, expected) in [(&groups[0][0], 0), (&groups[1][0], 1), (&groups[2][0], 2)] {
             let path = playlist.parent().unwrap().join(name);
-            let video = Command::new("ffmpeg").args(["-v", "error", "-i"]).arg(&path)
-                .args(["-frames:v", "1", "-vf", "scale=1:1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]).output().unwrap();
+            let video = Command::new("ffmpeg")
+                .args(["-v", "error", "-i"])
+                .arg(&path)
+                .args([
+                    "-frames:v",
+                    "1",
+                    "-vf",
+                    "scale=1:1",
+                    "-f",
+                    "rawvideo",
+                    "-pix_fmt",
+                    "rgb24",
+                    "-",
+                ])
+                .output()
+                .unwrap();
             assert!(video.status.success() && video.stdout.len() == 3);
             let rgb = &video.stdout;
-            match expected { 0 => assert!(rgb[0] > rgb[2] + 50, "red: {rgb:?}"), 2 => assert!(rgb[2] > rgb[0] + 50, "blue: {rgb:?}"), _ => assert!(rgb[0] < 80 && rgb[2] < 80, "slate: {rgb:?}") }
-            let audio = Command::new("ffmpeg").args(["-v", "error", "-i"]).arg(&path)
-                .args(["-t", "1", "-ac", "1", "-ar", "48000", "-f", "s16le", "-"]).output().unwrap();
+            match expected {
+                0 => assert!(rgb[0] > rgb[2] + 50, "red: {rgb:?}"),
+                2 => assert!(rgb[2] > rgb[0] + 50, "blue: {rgb:?}"),
+                _ => assert!(rgb[0] < 80 && rgb[2] < 80, "slate: {rgb:?}"),
+            }
+            let audio = Command::new("ffmpeg")
+                .args(["-v", "error", "-i"])
+                .arg(&path)
+                .args(["-t", "1", "-ac", "1", "-ar", "48000", "-f", "s16le", "-"])
+                .output()
+                .unwrap();
             assert!(audio.status.success());
-            let samples: Vec<i16> = audio.stdout.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]])).collect();
+            let samples: Vec<i16> = audio
+                .stdout
+                .chunks_exact(2)
+                .map(|b| i16::from_le_bytes([b[0], b[1]]))
+                .collect();
             assert!(samples.len() > 20000);
             let crossings = samples.windows(2).filter(|w| w[0] <= 0 && w[1] > 0).count();
             let peak = samples.iter().map(|v| (*v as i32).abs()).max().unwrap();
-            match expected { 0 => assert!((350..530).contains(&crossings), "440 Hz: {crossings}"), 2 => assert!((750..1000).contains(&crossings), "880 Hz: {crossings}"), _ => assert!(peak < 100, "slate audio: {peak}") }
+            match expected {
+                0 => assert!((350..530).contains(&crossings), "440 Hz: {crossings}"),
+                2 => assert!((750..1000).contains(&crossings), "880 Hz: {crossings}"),
+                _ => assert!(peak < 100, "slate audio: {peak}"),
+            }
         }
-        assert!(!engine.private_runtimes.lock().await[&channel.id].task.is_finished());
-        assert!(seen.load(Ordering::Acquire), "FFmpeg never reached the hanging remote URL");
+        assert!(
+            !engine.private_runtimes.lock().await[&channel.id]
+                .task
+                .is_finished()
+        );
+        assert!(
+            seen.load(Ordering::Acquire),
+            "FFmpeg never reached the hanging remote URL"
+        );
         server.join().unwrap();
         engine.stop_all().await;
         let _ = std::fs::remove_dir_all(root);
@@ -2548,18 +3758,29 @@ mod tests {
         let root = std::env::temp_dir().join(format!("private-status-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         let pool = crate::db::init(&root).await.unwrap();
-        let cloud = Arc::new(CloudManager::new(pool.clone(), root.clone(), "127.0.0.1", 0).unwrap());
+        let cloud =
+            Arc::new(CloudManager::new(pool.clone(), root.clone(), "127.0.0.1", 0).unwrap());
         let engine = Engine::new(pool, root.clone(), cloud, 0);
         let playlist = root.join("index.m3u8");
         std::fs::write(&playlist, "#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-PROGRAM-DATE-TIME:2020-01-01T00:00:00Z\n#EXTINF:2,\na.ts\n").unwrap();
         std::fs::write(root.join("a.ts"), b"abc").unwrap();
         let stop = Arc::new(AtomicBool::new(false));
         let task = tokio::spawn(std::future::pending::<()>());
-        engine.private_runtimes.lock().await.insert("id".into(), PrivateRuntime {
-            generation: "test".into(), snapshot: Arc::new(std::sync::Mutex::new(PublishedSnapshot::default())),
-            ready: Arc::new(AtomicBool::new(true)), failed_at_ms: Arc::new(AtomicI64::new(0)), stop: stop.clone(), task, last_access_ms: now_ms(), channel_number: "9".into(),
-            channel_name: "status".into(), playlist: playlist.clone(),
-        });
+        engine.private_runtimes.lock().await.insert(
+            "id".into(),
+            PrivateRuntime {
+                generation: "test".into(),
+                snapshot: Arc::new(std::sync::Mutex::new(PublishedSnapshot::default())),
+                ready: Arc::new(AtomicBool::new(true)),
+                failed_at_ms: Arc::new(AtomicI64::new(0)),
+                stop: stop.clone(),
+                task,
+                last_access_ms: now_ms(),
+                channel_number: "9".into(),
+                channel_name: "status".into(),
+                playlist: playlist.clone(),
+            },
+        );
         let first = engine.producer_snapshots().await;
         assert_eq!((first.len(), first[0].segments, first[0].bytes), (1, 1, 3));
         assert_eq!(first[0].item, "private publisher");
@@ -2571,7 +3792,11 @@ mod tests {
         assert_eq!(engine.resync_lagging(1000).await, 0);
         assert_eq!(std::fs::read(&playlist).unwrap(), original);
         assert!(!stop.load(Ordering::Relaxed));
-        assert!(!engine.private_runtimes.lock().await["id"].task.is_finished());
+        assert!(
+            !engine.private_runtimes.lock().await["id"]
+                .task
+                .is_finished()
+        );
         engine.private_runtimes.lock().await["id"].task.abort();
         engine.stop_all().await;
         let _ = std::fs::remove_dir_all(root);
@@ -2655,14 +3880,22 @@ fn media_input(path: &Path) -> String {
     }
 }
 
-fn probe_streams(path: &Path, stream: &crate::db::StreamSettings, lease: Option<InputLease>) -> StreamProbe {
+fn probe_streams(
+    path: &Path,
+    stream: &crate::db::StreamSettings,
+    lease: Option<InputLease>,
+) -> StreamProbe {
     let source = path.to_path_buf();
     let settings = stream.clone();
-    probe_with_deadline(lease, Duration::from_secs(6), move || probe_streams_blocking(&source, &settings))
+    probe_with_deadline(lease, Duration::from_secs(6), move || {
+        probe_streams_blocking(&source, &settings)
+    })
 }
 
 fn probe_with_deadline<F>(lease: Option<InputLease>, timeout: Duration, probe: F) -> StreamProbe
-where F: FnOnce() -> StreamProbe + Send + 'static {
+where
+    F: FnOnce() -> StreamProbe + Send + 'static,
+{
     let (sender, receiver) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let _lease = lease;
@@ -2749,10 +3982,7 @@ fn probe_streams_blocking(path: &Path, stream: &crate::db::StreamSettings) -> St
     }
 }
 
-fn choose_audio_index(
-    streams: &[serde_json::Value],
-    wanted: Option<&str>,
-) -> Option<i64> {
+fn choose_audio_index(streams: &[serde_json::Value], wanted: Option<&str>) -> Option<i64> {
     let mut matching = Vec::new();
     let mut fallback = Vec::new();
     let mut has_language_tags = false;
@@ -3280,10 +4510,7 @@ mod language_tests {
     #[test]
     fn selects_the_requested_audio_language_even_when_it_is_not_first() {
         let streams = vec![audio(1, "ger", true, false), audio(2, "eng", false, false)];
-        assert_eq!(
-            choose_audio_index(&streams, Some("eng")),
-            Some(2)
-        );
+        assert_eq!(choose_audio_index(&streams, Some("eng")), Some(2));
     }
 
     #[test]
@@ -3293,19 +4520,13 @@ mod language_tests {
             audio(2, "eng", true, false),
             audio(3, "eng", true, true),
         ];
-        assert_eq!(
-            choose_audio_index(&streams, Some("eng")),
-            Some(2)
-        );
+        assert_eq!(choose_audio_index(&streams, Some("eng")), Some(2));
     }
 
     #[test]
     fn falls_back_when_the_language_is_absent() {
         let streams = vec![audio(1, "fra", true, false), audio(2, "spa", false, false)];
-        assert_eq!(
-            choose_audio_index(&streams, Some("eng")),
-            Some(1)
-        );
+        assert_eq!(choose_audio_index(&streams, Some("eng")), Some(1));
     }
 }
 

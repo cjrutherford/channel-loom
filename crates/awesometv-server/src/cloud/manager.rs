@@ -39,7 +39,9 @@ pub struct ResolutionTicket {
 }
 
 impl ResolutionTicket {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     pub fn cancel(&self) {
         self.cancelled.store(true, Ordering::SeqCst);
@@ -47,14 +49,25 @@ impl ResolutionTicket {
 
     async fn admit(&self) -> Option<tokio::sync::MutexGuard<'_, ()>> {
         let guard = self.gate.lock().await;
-        if self.cancelled.load(Ordering::SeqCst) { None } else { Some(guard) }
+        if self.cancelled.load(Ordering::SeqCst) {
+            None
+        } else {
+            Some(guard)
+        }
     }
 }
 
 pub(crate) async fn admitted_blocking<F, T>(admission: Arc<Semaphore>, work: F) -> Result<T>
-where F: FnOnce() -> T + Send + 'static, T: Send + 'static {
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
     let permit = admission.acquire_owned().await?;
-    Ok(tokio::task::spawn_blocking(move || { let _permit = permit; work() }).await?)
+    Ok(tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        work()
+    })
+    .await?)
 }
 
 struct CachedToken {
@@ -159,16 +172,31 @@ impl CloudManager {
     }
 
     pub(crate) fn validate_source(&self, input: &db::CloudSourceInput) -> Result<()> {
-        if input.name.trim().is_empty() { bail!("cloud source name is required"); }
-        if !matches!(input.policy.as_str(), "auto" | "cache_all" | "stream_all") { bail!("invalid cloud policy"); }
-        if !input.config.is_null() && !input.config.as_object().is_some_and(|config| config.is_empty()) {
+        if input.name.trim().is_empty() {
+            bail!("cloud source name is required");
+        }
+        if !matches!(input.policy.as_str(), "auto" | "cache_all" | "stream_all") {
+            bail!("invalid cloud policy");
+        }
+        if !input.config.is_null()
+            && !input
+                .config
+                .as_object()
+                .is_some_and(|config| config.is_empty())
+        {
             bail!("config must be an empty object");
         }
         let secret = input.secret.as_deref().unwrap_or("").trim();
-        if secret.is_empty() { bail!("cloud source secret is required"); }
-        self.providers.require(&input.provider)?.validate_secret(&input.auth_type, secret)
+        if secret.is_empty() {
+            bail!("cloud source secret is required");
+        }
+        self.providers
+            .require(&input.provider)?
+            .validate_secret(&input.auth_type, secret)
             .map_err(|_| anyhow::anyhow!("secret: invalid credentials or token_uri"))?;
-        for root in &input.roots { Self::validate_root(&input.provider, root)?; }
+        for root in &input.roots {
+            Self::validate_root(&input.provider, root)?;
+        }
         Ok(())
     }
 
@@ -176,11 +204,19 @@ impl CloudManager {
         if root.remote_id.trim().is_empty() || root.remote_id.chars().any(char::is_control) {
             bail!("root remote_id is required");
         }
-        if provider == "google" && (root.remote_id.contains('/') || root.remote_id == "." || root.remote_id == "..") {
+        if provider == "google"
+            && (root.remote_id.contains('/') || root.remote_id == "." || root.remote_id == "..")
+        {
             bail!("invalid Google folder ID");
         }
-        for (field, path) in [("remote_path", &root.remote_path), ("display_path", &root.display_path)] {
-            if path.trim().is_empty() || path.chars().any(char::is_control) || path.split('/').any(|part| part == "..") {
+        for (field, path) in [
+            ("remote_path", &root.remote_path),
+            ("display_path", &root.display_path),
+        ] {
+            if path.trim().is_empty()
+                || path.chars().any(char::is_control)
+                || path.split('/').any(|part| part == "..")
+            {
                 bail!("invalid root {field}");
             }
         }
@@ -260,7 +296,9 @@ impl CloudManager {
         source_id: &str,
         root: &db::CloudRootInput,
     ) -> Result<db::CloudRoot> {
-        let source = db::cloud_source(&self.pool, source_id).await?.context("cloud source not found")?;
+        let source = db::cloud_source(&self.pool, source_id)
+            .await?
+            .context("cloud source not found")?;
         Self::validate_root(&source.provider, root)?;
         db::add_cloud_root(&self.pool, source_id, root).await
     }
@@ -279,7 +317,8 @@ impl CloudManager {
         }
         if !db::list_cloud_roots(&self.pool, source_id)
             .await?
-            .iter().any(|root| root.enabled)
+            .iter()
+            .any(|root| root.enabled)
         {
             bail!("add at least one cloud folder root before scanning");
         }
@@ -304,7 +343,10 @@ impl CloudManager {
         };
         {
             let mut jobs = self.scan_jobs.lock().await;
-            if jobs.values().any(|job| job.source_id == source_id && job.status == "running") {
+            if jobs
+                .values()
+                .any(|job| job.source_id == source_id && job.status == "running")
+            {
                 bail!("cloud scan already running");
             }
             jobs.insert(id.clone(), job.clone());
@@ -328,18 +370,19 @@ impl CloudManager {
                 )
                 .await;
             {
-            let _publication = cancel.publish.lock().await;
-            if !cancel.cancelled.load(Ordering::SeqCst) && let Some(message) = result
-                    .as_ref()
-                    .err()
-                    .map(|_| "remote scan failed".to_string())
-            {
-                let _ = sqlx::query("UPDATE cloud_sources SET last_error = ? WHERE id = ?")
-                    .bind(&message)
-                    .bind(&source_id)
-                    .execute(&manager.pool)
-                    .await;
-            }
+                let _publication = cancel.publish.lock().await;
+                if !cancel.cancelled.load(Ordering::SeqCst)
+                    && let Some(message) = result
+                        .as_ref()
+                        .err()
+                        .map(|_| "remote scan failed".to_string())
+                {
+                    let _ = sqlx::query("UPDATE cloud_sources SET last_error = ? WHERE id = ?")
+                        .bind(&message)
+                        .bind(&source_id)
+                        .execute(&manager.pool)
+                        .await;
+                }
             }
             let mut jobs = manager.scan_jobs.lock().await;
             if let Some(job) = jobs.get_mut(&job_id) {
@@ -357,7 +400,12 @@ impl CloudManager {
                             job.errors = report.errors;
                             job.removed = report.removed;
                             job.complete = report.complete;
-                            job.status = if report.complete { "completed" } else { "failed" }.into();
+                            job.status = if report.complete {
+                                "completed"
+                            } else {
+                                "failed"
+                            }
+                            .into();
                             if !report.complete {
                                 job.message =
                                     Some("scan incomplete; stale media was not reconciled".into());
@@ -496,11 +544,24 @@ impl CloudManager {
                     let token = token.clone();
                     let folder_id = folder_id.clone();
                     let page = page.clone();
-                    let result = match tokio::time::timeout(std::time::Duration::from_secs(65), tokio::task::spawn_blocking(move || provider.list_folder(&token, &folder_id, page.as_deref()))).await {
+                    let result = match tokio::time::timeout(
+                        std::time::Duration::from_secs(65),
+                        tokio::task::spawn_blocking(move || {
+                            provider.list_folder(&token, &folder_id, page.as_deref())
+                        }),
+                    )
+                    .await
+                    {
                         Ok(Ok(result)) => result,
                         _ => Err(anyhow::anyhow!("cloud listing timed out")),
                     };
-                    if result.is_ok() || result.as_ref().err().is_some_and(|e| e.is::<crate::cloud::provider::AuthenticationError>()) || attempt == 3 {
+                    if result.is_ok()
+                        || result
+                            .as_ref()
+                            .err()
+                            .is_some_and(|e| e.is::<crate::cloud::provider::AuthenticationError>())
+                        || attempt == 3
+                    {
                         break result;
                     }
                     tokio::time::sleep(std::time::Duration::from_millis(250 * attempt)).await;
@@ -537,9 +598,12 @@ impl CloudManager {
                     } else {
                         let url = self.proxy_url(source_id, &entry.id, 3600);
                         let kind_for_probe = kind.clone();
-                        match tokio::time::timeout(Duration::from_secs(65), tokio::task::spawn_blocking(move || {
-                            scan::probe_target(&url, &kind_for_probe)
-                        }))
+                        match tokio::time::timeout(
+                            Duration::from_secs(65),
+                            tokio::task::spawn_blocking(move || {
+                                scan::probe_target(&url, &kind_for_probe)
+                            }),
+                        )
                         .await
                         {
                             Ok(Ok(Ok(probe))) => {
@@ -620,7 +684,9 @@ impl CloudManager {
             Some(cancel) => Some(cancel.publish.lock().await),
             None => None,
         };
-        if cancelled(&cancel) { bail!("scan cancelled"); }
+        if cancelled(&cancel) {
+            bail!("scan cancelled");
+        }
         if report.complete {
             // Full scans currently retain stale entries: deletions need a single atomic
             // reconciliation across media, collections, channels and cache bookkeeping.
@@ -642,7 +708,12 @@ impl CloudManager {
         Ok(report)
     }
 
-    async fn commit_scan(&self, staged: &[(db::Media, db::NewCloudMedia, bool)], source_id: &str, cancel: &Option<Arc<ScanCancel>>) -> Result<()> {
+    async fn commit_scan(
+        &self,
+        staged: &[(db::Media, db::NewCloudMedia, bool)],
+        source_id: &str,
+        cancel: &Option<Arc<ScanCancel>>,
+    ) -> Result<()> {
         let mut tx = self.pool.begin().await?;
         for (media, remote, probed) in staged {
             sqlx::query("INSERT INTO media_items (id,path,title,kind,duration_ms,width,height,video_codec,audio_codec,size_bytes,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET title=excluded.title,kind=excluded.kind,duration_ms=excluded.duration_ms,width=excluded.width,height=excluded.height,video_codec=excluded.video_codec,audio_codec=excluded.audio_codec,size_bytes=excluded.size_bytes")
@@ -658,8 +729,13 @@ impl CloudManager {
             }
         }
         sqlx::query("UPDATE cloud_sources SET last_sync_at = ?, last_error = NULL WHERE id = ?")
-            .bind(db::now_ms()).bind(source_id).execute(&mut *tx).await?;
-        if cancelled(cancel) { bail!("scan cancelled"); }
+            .bind(db::now_ms())
+            .bind(source_id)
+            .execute(&mut *tx)
+            .await?;
+        if cancelled(cancel) {
+            bail!("scan cancelled");
+        }
         tx.commit().await?;
         Ok(())
     }
@@ -693,16 +769,26 @@ impl CloudManager {
     }
 
     pub async fn resolve_media_input_with_ticket(
-        self: &Arc<Self>, media_id: &str, ticket: Option<ResolutionTicket>,
+        self: &Arc<Self>,
+        media_id: &str,
+        ticket: Option<ResolutionTicket>,
     ) -> Result<ResolvedMedia> {
         self.resolve_media_input_inner(media_id, ticket).await
     }
 
-    pub async fn resolve_without_precache(self: &Arc<Self>, media_id: &str, ticket: Option<ResolutionTicket>) -> Result<ResolvedMedia> {
+    pub async fn resolve_without_precache(
+        self: &Arc<Self>,
+        media_id: &str,
+        ticket: Option<ResolutionTicket>,
+    ) -> Result<ResolvedMedia> {
         self.resolve_media_input_inner(media_id, ticket).await
     }
 
-    async fn resolve_media_input_inner(self: &Arc<Self>, media_id: &str, ticket: Option<ResolutionTicket>) -> Result<ResolvedMedia> {
+    async fn resolve_media_input_inner(
+        self: &Arc<Self>,
+        media_id: &str,
+        ticket: Option<ResolutionTicket>,
+    ) -> Result<ResolvedMedia> {
         let kind = db::media_kind(&self.pool, media_id)
             .await?
             .unwrap_or_else(|| "other".into());
@@ -750,15 +836,21 @@ impl CloudManager {
                 .unwrap_or("bin")
                 .to_string();
             if let Ok(permit) = self.cache_admission.clone().try_acquire_owned() {
-            tokio::spawn(async move {
-                let _permit = permit;
-                if let Err(error) = manager
-                    .cache_media_with_ticket(&source_id, &media_id, &remote_id, &extension, ticket.as_ref())
-                    .await
-                {
-                    tracing::warn!(%error, %media_id, "cloud cache failed");
-                }
-            });
+                tokio::spawn(async move {
+                    let _permit = permit;
+                    if let Err(error) = manager
+                        .cache_media_with_ticket(
+                            &source_id,
+                            &media_id,
+                            &remote_id,
+                            &extension,
+                            ticket.as_ref(),
+                        )
+                        .await
+                    {
+                        tracing::warn!(%error, %media_id, "cloud cache failed");
+                    }
+                });
             }
         }
         Ok(ResolvedMedia {
@@ -824,12 +916,17 @@ impl CloudManager {
         remote_id: &str,
         extension: &str,
     ) -> Result<()> {
-        self.cache_media_with_ticket(source_id, media_id, remote_id, extension, None).await
+        self.cache_media_with_ticket(source_id, media_id, remote_id, extension, None)
+            .await
     }
 
     async fn cache_media_with_ticket(
-        &self, source_id: &str, media_id: &str, remote_id: &str,
-        extension: &str, ticket: Option<&ResolutionTicket>,
+        &self,
+        source_id: &str,
+        media_id: &str,
+        remote_id: &str,
+        extension: &str,
+        ticket: Option<&ResolutionTicket>,
     ) -> Result<()> {
         let source = db::cloud_source(&self.pool, source_id)
             .await?
@@ -861,8 +958,13 @@ impl CloudManager {
         // Eviction is separately admitted, so cancellation also prevents late
         // bookkeeping after a completed publication.
         let _guard = if let Some(ticket) = ticket {
-            match ticket.admit().await { Some(guard) => Some(guard), None => return Ok(()) }
-        } else { None };
+            match ticket.admit().await {
+                Some(guard) => Some(guard),
+                None => return Ok(()),
+            }
+        } else {
+            None
+        };
         self.evict_cache().await?;
         Ok(())
     }
@@ -898,8 +1000,15 @@ impl CloudManager {
         let provider = self.providers.require(&source.provider)?;
         let auth_type = source.auth_type.clone();
         let permit = self.blocking_admission.clone().acquire_owned().await?;
-        let token = tokio::time::timeout(Duration::from_secs(65), tokio::task::spawn_blocking(move || { let _permit = permit; provider.access_token(&auth_type, &secret) }))
-            .await.map_err(|_| anyhow::anyhow!("cloud authentication timed out"))???;
+        let token = tokio::time::timeout(
+            Duration::from_secs(65),
+            tokio::task::spawn_blocking(move || {
+                let _permit = permit;
+                provider.access_token(&auth_type, &secret)
+            }),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("cloud authentication timed out"))???;
         let mut tokens = self.tokens.lock().await;
         tokens.insert(
             source.id.clone(),
@@ -913,7 +1022,11 @@ impl CloudManager {
 }
 
 pub(crate) async fn publish_cache(
-    pool: &SqlitePool, media_id: &str, temp: &Path, target: &Path, bytes: u64,
+    pool: &SqlitePool,
+    media_id: &str,
+    temp: &Path,
+    target: &Path,
+    bytes: u64,
     ticket: Option<&ResolutionTicket>,
 ) -> Result<()> {
     let _guard = if let Some(ticket) = ticket {
@@ -924,15 +1037,28 @@ pub(crate) async fn publish_cache(
                 bail!("resolution cancelled before cache publication");
             }
         }
-    } else { None };
+    } else {
+        None
+    };
     publish_cache_admitted(pool, media_id, temp, target, bytes).await
 }
 
 async fn publish_cache_admitted(
-    pool: &SqlitePool, media_id: &str, temp: &Path, target: &Path, bytes: u64,
+    pool: &SqlitePool,
+    media_id: &str,
+    temp: &Path,
+    target: &Path,
+    bytes: u64,
 ) -> Result<()> {
     tokio::fs::rename(temp, target).await?;
-    db::set_cloud_media_cache(pool, media_id, "cached", Some(target.to_string_lossy().as_ref()), Some(bytes as i64)).await
+    db::set_cloud_media_cache(
+        pool,
+        media_id,
+        "cached",
+        Some(target.to_string_lossy().as_ref()),
+        Some(bytes as i64),
+    )
+    .await
 }
 
 fn cloud_media_id(source_id: &str, remote_id: &str) -> String {
@@ -1001,10 +1127,28 @@ mod tests {
         std::fs::write(&cached, b"cached").unwrap();
         sqlx::query("INSERT INTO media_items (id,path,title,kind,duration_ms,created_at) VALUES ('item',?,'item','movie',1000,0)")
             .bind(source.to_str().unwrap()).execute(&pool).await.unwrap();
-        db::upsert_precache(&pool, "item", source.to_str().unwrap(), 8, 1, cached.to_str().unwrap(), "copy", 1, 1).await.unwrap();
-        db::set_precache_status(&pool, "item", "ready", 6, None).await.unwrap();
-        let manager = Arc::new(CloudManager::new(pool.clone(), dir.clone(), "127.0.0.1", 8421).unwrap());
-        assert_eq!(manager.resolve_media_input("item").await.unwrap().location, source.to_str().unwrap());
+        db::upsert_precache(
+            &pool,
+            "item",
+            source.to_str().unwrap(),
+            8,
+            1,
+            cached.to_str().unwrap(),
+            "copy",
+            1,
+            1,
+        )
+        .await
+        .unwrap();
+        db::set_precache_status(&pool, "item", "ready", 6, None)
+            .await
+            .unwrap();
+        let manager =
+            Arc::new(CloudManager::new(pool.clone(), dir.clone(), "127.0.0.1", 8421).unwrap());
+        assert_eq!(
+            manager.resolve_media_input("item").await.unwrap().location,
+            source.to_str().unwrap()
+        );
         pool.close().await;
         std::fs::remove_dir_all(dir).unwrap();
     }
@@ -1013,16 +1157,28 @@ mod tests {
     async fn resolution_ticket_publication() {
         let dir = std::env::temp_dir().join(format!("resolution-ticket-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
-        let pool = SqlitePool::connect(&format!("sqlite://{}?mode=rwc", dir.join("test.db").display())).await.unwrap();
+        let pool = SqlitePool::connect(&format!(
+            "sqlite://{}?mode=rwc",
+            dir.join("test.db").display()
+        ))
+        .await
+        .unwrap();
         sqlx::query("CREATE TABLE cloud_media (media_id TEXT PRIMARY KEY, cache_state TEXT, cache_path TEXT, cached_bytes INTEGER, last_access_at INTEGER)").execute(&pool).await.unwrap();
-        sqlx::query("INSERT INTO cloud_media VALUES ('item', 'none', NULL, NULL, NULL)").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO cloud_media VALUES ('item', 'none', NULL, NULL, NULL)")
+            .execute(&pool)
+            .await
+            .unwrap();
         let temp = dir.join("item.part");
         let target = dir.join("item.mp4");
         tokio::fs::write(&target, b"old").await.unwrap();
         tokio::fs::write(&temp, b"new").await.unwrap();
         let ticket = ResolutionTicket::new();
         ticket.cancel();
-        assert!(publish_cache(&pool, "item", &temp, &target, 3, Some(&ticket)).await.is_err());
+        assert!(
+            publish_cache(&pool, "item", &temp, &target, 3, Some(&ticket))
+                .await
+                .is_err()
+        );
         assert!(!temp.exists());
         assert_eq!(tokio::fs::read(&target).await.unwrap(), b"old");
         let row: (String, Option<String>, Option<i64>, Option<i64>) = sqlx::query_as("SELECT cache_state, cache_path, cached_bytes, last_access_at FROM cloud_media WHERE media_id = 'item'").fetch_one(&pool).await.unwrap();
@@ -1033,12 +1189,29 @@ mod tests {
         let guard = ticket.admit().await.unwrap();
         let cancel_ticket = ticket.clone();
         let cancellation = tokio::spawn(async move { cancel_ticket.cancel() });
-        tokio::time::timeout(Duration::from_millis(200), cancellation).await.expect("cancellation must not wait for admitted publication").unwrap();
-        publish_cache_admitted(&pool, "item", &temp, &target, 3).await.unwrap();
+        tokio::time::timeout(Duration::from_millis(200), cancellation)
+            .await
+            .expect("cancellation must not wait for admitted publication")
+            .unwrap();
+        publish_cache_admitted(&pool, "item", &temp, &target, 3)
+            .await
+            .unwrap();
         drop(guard);
         assert_eq!(tokio::fs::read(&target).await.unwrap(), b"new");
-        let row: (String, Option<String>, Option<i64>) = sqlx::query_as("SELECT cache_state, cache_path, cached_bytes FROM cloud_media WHERE media_id = 'item'").fetch_one(&pool).await.unwrap();
-        assert_eq!(row, ("cached".into(), Some(target.to_string_lossy().into_owned()), Some(3)));
+        let row: (String, Option<String>, Option<i64>) = sqlx::query_as(
+            "SELECT cache_state, cache_path, cached_bytes FROM cloud_media WHERE media_id = 'item'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            row,
+            (
+                "cached".into(),
+                Some(target.to_string_lossy().into_owned()),
+                Some(3)
+            )
+        );
         assert!(ticket.admit().await.is_none());
         pool.close().await;
         std::fs::remove_dir_all(dir).unwrap();
@@ -1070,20 +1243,39 @@ mod tests {
         assert_eq!(cloud_title("My.Movie.2024.mkv"), "My Movie 2024");
     }
 
+    use crate::cloud::google::{DriveEntry, RemoteEntry};
     use crate::cloud::provider::conformance::MockProvider;
-    use crate::cloud::provider::{CloudProvider, ProviderCapabilities, AuthenticationError};
-    use crate::cloud::google::{RemoteEntry, DriveEntry};
+    use crate::cloud::provider::{AuthenticationError, CloudProvider, ProviderCapabilities};
     use std::sync::atomic::AtomicUsize;
 
-    struct FaultProvider { inner: MockProvider, mode: AtomicUsize, calls: AtomicUsize }
+    struct FaultProvider {
+        inner: MockProvider,
+        mode: AtomicUsize,
+        calls: AtomicUsize,
+    }
     impl CloudProvider for FaultProvider {
-        fn id(&self) -> &'static str { "mock" }
-        fn capabilities(&self) -> ProviderCapabilities { self.inner.capabilities() }
-        fn validate_secret(&self, a: &str, s: &str) -> Result<()> { self.inner.validate_secret(a, s) }
-        fn access_token(&self, a: &str, s: &str) -> Result<String> { self.inner.access_token(a, s) }
-        fn list_folder(&self, t: &str, f: &str, p: Option<&str>) -> Result<(Vec<RemoteEntry>, Option<String>)> {
+        fn id(&self) -> &'static str {
+            "mock"
+        }
+        fn capabilities(&self) -> ProviderCapabilities {
+            self.inner.capabilities()
+        }
+        fn validate_secret(&self, a: &str, s: &str) -> Result<()> {
+            self.inner.validate_secret(a, s)
+        }
+        fn access_token(&self, a: &str, s: &str) -> Result<String> {
+            self.inner.access_token(a, s)
+        }
+        fn list_folder(
+            &self,
+            t: &str,
+            f: &str,
+            p: Option<&str>,
+        ) -> Result<(Vec<RemoteEntry>, Option<String>)> {
             self.calls.fetch_add(1, Ordering::SeqCst);
-            while self.mode.load(Ordering::SeqCst) == 3 { std::thread::park_timeout(std::time::Duration::from_millis(5)); }
+            while self.mode.load(Ordering::SeqCst) == 3 {
+                std::thread::park_timeout(std::time::Duration::from_millis(5));
+            }
             match self.mode.load(Ordering::SeqCst) {
                 1 => Err(AuthenticationError.into()),
                 2 if p.is_some() => Err(anyhow::anyhow!("simulated later page timeout secret")),
@@ -1094,10 +1286,13 @@ mod tests {
                 _ => self.inner.list_folder(t, f, p),
             }
         }
-        fn list_drives(&self, t: &str) -> Result<Vec<DriveEntry>> { self.inner.list_drives(t) }
-        fn download(&self, t: &str, r: &str, range: Option<&str>) -> Result<ureq::Response> { self.inner.download(t, r, range) }
+        fn list_drives(&self, t: &str) -> Result<Vec<DriveEntry>> {
+            self.inner.list_drives(t)
+        }
+        fn download(&self, t: &str, r: &str, range: Option<&str>) -> Result<ureq::Response> {
+            self.inner.download(t, r, range)
+        }
     }
-
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn http_failures_preserve_last_success_and_recover() {
@@ -1110,39 +1305,107 @@ mod tests {
         let server_mode = mode.clone();
         let server = std::thread::spawn(move || {
             loop {
-                if server_mode.load(Ordering::SeqCst) == 9 { break; }
+                if server_mode.load(Ordering::SeqCst) == 9 {
+                    break;
+                }
                 match listener.accept() {
                     Ok((mut stream, _)) => {
                         let mut buf = [0; 4096];
                         let n = stream.read(&mut buf).unwrap_or(0);
                         let request = String::from_utf8_lossy(&buf[..n]);
                         let current = server_mode.load(Ordering::SeqCst);
-                        if current == 2 { std::thread::sleep(Duration::from_millis(180)); continue; }
+                        if current == 2 {
+                            std::thread::sleep(Duration::from_millis(180));
+                            continue;
+                        }
                         let later = request.contains("pageToken=");
                         let fail = current == 1 || (current == 3 && later);
-                        let (status, body) = if fail { ("401 Unauthorized", "sentinel-credential") }
-                            else if current == 3 { ("200 OK", r#"{"files":[{"id":"new","name":"new.srt","mimeType":"text/plain"}],"nextPageToken":"next"}"#) }
-                            else { ("200 OK", r#"{"files":[{"id":"old","name":"old.srt","mimeType":"text/plain"}]}"#) };
-                        let _ = write!(stream, "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+                        let (status, body) = if fail {
+                            ("401 Unauthorized", "sentinel-credential")
+                        } else if current == 3 {
+                            (
+                                "200 OK",
+                                r#"{"files":[{"id":"new","name":"new.srt","mimeType":"text/plain"}],"nextPageToken":"next"}"#,
+                            )
+                        } else {
+                            (
+                                "200 OK",
+                                r#"{"files":[{"id":"old","name":"old.srt","mimeType":"text/plain"}]}"#,
+                            )
+                        };
+                        let _ = write!(
+                            stream,
+                            "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                            body.len()
+                        );
                     }
-                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => std::thread::sleep(Duration::from_millis(2)),
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(2))
+                    }
                     Err(e) => panic!("{e}"),
                 }
             }
         });
         let dir = std::env::temp_dir().join(format!("awesometv-http-{}", Uuid::new_v4()));
         let pool = db::init(&dir).await.unwrap();
-        let provider = Arc::new(crate::cloud::google::GoogleClient::for_test(base, Duration::from_millis(60)));
-        let manager = CloudManager::with_providers(pool.clone(), dir, "127.0.0.1", 8421, ProviderRegistry::from_providers(vec![provider])).unwrap();
-        let source = manager.create_source(&db::CloudSourceInput { provider: "google".into(), name: "HTTP".into(), auth_type: "access_token".into(), policy: "auto".into(), config: serde_json::json!({}), secret: Some("sentinel-credential".into()), roots: vec![] }).await.unwrap();
-        manager.add_root(&source.id, &db::CloudRootInput { remote_id: "root".into(), remote_path: "/".into(), display_path: "/".into() }).await.unwrap();
-        assert!(manager.scan_source_controlled(&source.id, 100, true, None, None).await.unwrap().complete);
+        let provider = Arc::new(crate::cloud::google::GoogleClient::for_test(
+            base,
+            Duration::from_millis(60),
+        ));
+        let manager = CloudManager::with_providers(
+            pool.clone(),
+            dir,
+            "127.0.0.1",
+            8421,
+            ProviderRegistry::from_providers(vec![provider]),
+        )
+        .unwrap();
+        let source = manager
+            .create_source(&db::CloudSourceInput {
+                provider: "google".into(),
+                name: "HTTP".into(),
+                auth_type: "access_token".into(),
+                policy: "auto".into(),
+                config: serde_json::json!({}),
+                secret: Some("sentinel-credential".into()),
+                roots: vec![],
+            })
+            .await
+            .unwrap();
+        manager
+            .add_root(
+                &source.id,
+                &db::CloudRootInput {
+                    remote_id: "root".into(),
+                    remote_path: "/".into(),
+                    display_path: "/".into(),
+                },
+            )
+            .await
+            .unwrap();
+        assert!(
+            manager
+                .scan_source_controlled(&source.id, 100, true, None, None)
+                .await
+                .unwrap()
+                .complete
+        );
         let before = db::list_media(&pool).await.unwrap();
         assert_eq!(before.len(), 1);
-        let success = db::cloud_source(&pool, &source.id).await.unwrap().unwrap().last_sync_at;
+        let success = db::cloud_source(&pool, &source.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .last_sync_at;
         for fault in [1, 2, 3] {
             mode.store(fault, Ordering::SeqCst);
-            assert!(!manager.scan_source_controlled(&source.id, 100, true, None, None).await.unwrap().complete);
+            assert!(
+                !manager
+                    .scan_source_controlled(&source.id, 100, true, None, None)
+                    .await
+                    .unwrap()
+                    .complete
+            );
             let after = db::list_media(&pool).await.unwrap();
             assert_eq!(after.len(), 1);
             assert_eq!(after[0].id, before[0].id);
@@ -1151,8 +1414,21 @@ mod tests {
             assert!(!state.last_error.unwrap().contains("sentinel-credential"));
         }
         mode.store(0, Ordering::SeqCst);
-        assert!(manager.scan_source_controlled(&source.id, 100, true, None, None).await.unwrap().complete);
-        assert!(db::cloud_source(&pool, &source.id).await.unwrap().unwrap().last_error.is_none());
+        assert!(
+            manager
+                .scan_source_controlled(&source.id, 100, true, None, None)
+                .await
+                .unwrap()
+                .complete
+        );
+        assert!(
+            db::cloud_source(&pool, &source.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .last_error
+                .is_none()
+        );
         mode.store(9, Ordering::SeqCst);
         server.join().unwrap();
     }
@@ -1161,7 +1437,11 @@ mod tests {
     async fn mock_provider_lifecycle_conformance() {
         let dir = std::env::temp_dir().join(format!("awesometv-cloud-test-{}", Uuid::new_v4()));
         let pool = db::init(&dir).await.unwrap();
-        let provider = Arc::new(FaultProvider { inner: MockProvider::media_tree(), mode: AtomicUsize::new(0), calls: AtomicUsize::new(0) });
+        let provider = Arc::new(FaultProvider {
+            inner: MockProvider::media_tree(),
+            mode: AtomicUsize::new(0),
+            calls: AtomicUsize::new(0),
+        });
         let registry = ProviderRegistry::from_providers(vec![provider.clone()]);
         let manager = Arc::new(
             CloudManager::with_providers(pool.clone(), dir.clone(), "127.0.0.1", 8421, registry)
@@ -1216,16 +1496,27 @@ mod tests {
         for mode in [1, 2] {
             provider.mode.store(mode, Ordering::SeqCst);
             provider.calls.store(0, Ordering::SeqCst);
-            let failed = manager.scan_source_controlled(&source.id, 100, true, None, None).await.unwrap();
+            let failed = manager
+                .scan_source_controlled(&source.id, 100, true, None, None)
+                .await
+                .unwrap();
             assert!(!failed.complete);
-            if mode == 1 { assert_eq!(provider.calls.load(Ordering::SeqCst), 1); }
+            if mode == 1 {
+                assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
+            }
             assert_eq!(db::list_media(&pool).await.unwrap().len(), before.len());
             let status = db::cloud_source(&pool, &source.id).await.unwrap().unwrap();
             assert_eq!(status.last_sync_at, success_at);
             assert!(!status.last_error.unwrap().contains("secret"));
         }
         provider.mode.store(0, Ordering::SeqCst);
-        assert!(manager.scan_source_controlled(&source.id, 100, true, None, None).await.unwrap().complete);
+        assert!(
+            manager
+                .scan_source_controlled(&source.id, 100, true, None, None)
+                .await
+                .unwrap()
+                .complete
+        );
         // A database failure after earlier staged writes must roll back all of them.
         sqlx::query("UPDATE media_items SET title = 'prior title' WHERE path LIKE '%sample-srt'")
             .execute(&pool)
@@ -1254,47 +1545,103 @@ mod tests {
         provider.mode.store(3, Ordering::SeqCst);
         let job = manager.start_scan(&source.id, 100, true).await.unwrap();
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
-            while provider.calls.load(Ordering::SeqCst) == 0 { tokio::task::yield_now().await; }
-        }).await.unwrap();
+            while provider.calls.load(Ordering::SeqCst) == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
         assert!(manager.start_scan(&source.id, 100, true).await.is_err());
         provider.mode.store(0, Ordering::SeqCst);
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
             loop {
-                if manager.scan_job(&job.id).await.unwrap().status != "running" { break; }
+                if manager.scan_job(&job.id).await.unwrap().status != "running" {
+                    break;
+                }
                 tokio::task::yield_now().await;
             }
-        }).await.unwrap();
+        })
+        .await
+        .unwrap();
         assert_eq!(manager.scan_job(&job.id).await.unwrap().status, "completed");
         // A detached blocking provider call may finish after cancellation, but cannot publish.
         provider.calls.store(0, Ordering::SeqCst);
         provider.mode.store(3, Ordering::SeqCst);
         let cancelled_job = manager.start_scan(&source.id, 100, true).await.unwrap();
         tokio::time::timeout(Duration::from_secs(5), async {
-            while provider.calls.load(Ordering::SeqCst) == 0 { tokio::task::yield_now().await; }
-        }).await.unwrap();
-        let before_cancel = db::cloud_source(&pool, &source.id).await.unwrap().unwrap().last_sync_at;
-        let before_title: String = sqlx::query_scalar("SELECT title FROM media_items WHERE path LIKE '%sample-srt'").fetch_one(&pool).await.unwrap();
+            while provider.calls.load(Ordering::SeqCst) == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let before_cancel = db::cloud_source(&pool, &source.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .last_sync_at;
+        let before_title: String =
+            sqlx::query_scalar("SELECT title FROM media_items WHERE path LIKE '%sample-srt'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         manager.cancel_scan(&cancelled_job.id).await.unwrap();
         provider.mode.store(0, Ordering::SeqCst);
         tokio::time::timeout(Duration::from_secs(5), async {
-            while manager.scan_job(&cancelled_job.id).await.unwrap().status == "running" { tokio::task::yield_now().await; }
-        }).await.unwrap();
-        assert_eq!(manager.scan_job(&cancelled_job.id).await.unwrap().status, "cancelled");
-        assert_eq!(db::cloud_source(&pool, &source.id).await.unwrap().unwrap().last_sync_at, before_cancel);
-        let after_title: String = sqlx::query_scalar("SELECT title FROM media_items WHERE path LIKE '%sample-srt'").fetch_one(&pool).await.unwrap();
+            while manager.scan_job(&cancelled_job.id).await.unwrap().status == "running" {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            manager.scan_job(&cancelled_job.id).await.unwrap().status,
+            "cancelled"
+        );
+        assert_eq!(
+            db::cloud_source(&pool, &source.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .last_sync_at,
+            before_cancel
+        );
+        let after_title: String =
+            sqlx::query_scalar("SELECT title FROM media_items WHERE path LIKE '%sample-srt'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(after_title, before_title);
         let stale = Some(Arc::new(ScanCancel::default()));
-        stale.as_ref().unwrap().cancelled.store(true, Ordering::SeqCst);
+        stale
+            .as_ref()
+            .unwrap()
+            .cancelled
+            .store(true, Ordering::SeqCst);
         assert!(manager.commit_scan(&[], &source.id, &stale).await.is_err());
-        assert_eq!(db::cloud_source(&pool, &source.id).await.unwrap().unwrap().last_sync_at, before_cancel);
+        assert_eq!(
+            db::cloud_source(&pool, &source.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .last_sync_at,
+            before_cancel
+        );
         let next = manager.start_scan(&source.id, 100, true).await.unwrap();
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
             loop {
-                if manager.scan_job(&next.id).await.unwrap().status != "running" { break; }
+                if manager.scan_job(&next.id).await.unwrap().status != "running" {
+                    break;
+                }
                 tokio::task::yield_now().await;
             }
-        }).await.unwrap();
-        assert_eq!(manager.scan_job(&next.id).await.unwrap().status, "completed");
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            manager.scan_job(&next.id).await.unwrap().status,
+            "completed"
+        );
 
         let media = db::list_media(&pool)
             .await

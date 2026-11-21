@@ -182,7 +182,10 @@ pub async fn stage_restore(data_dir: &Path, name: &str) -> Result<()> {
         // Copy through the already-private file: fs::copy can copy the source's
         // permissions and briefly expose the unencrypted snapshot.
         let mut input = tokio::fs::File::open(&source).await?;
-        let mut output = tokio::fs::OpenOptions::new().write(true).open(&temporary).await?;
+        let mut output = tokio::fs::OpenOptions::new()
+            .write(true)
+            .open(&temporary)
+            .await?;
         tokio::io::copy(&mut input, &mut output).await?;
         drop(output);
         validate(&temporary).await?;
@@ -209,13 +212,24 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(dir.join("backups").join(&info.name), std::fs::Permissions::from_mode(0o644)).unwrap();
+            std::fs::set_permissions(
+                dir.join("backups").join(&info.name),
+                std::fs::Permissions::from_mode(0o644),
+            )
+            .unwrap();
         }
         stage_restore(&dir, &info.name).await.unwrap();
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            assert_eq!(std::fs::metadata(dir.join("restore.pending")).unwrap().permissions().mode() & 0o777, 0o600);
+            assert_eq!(
+                std::fs::metadata(dir.join("restore.pending"))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
         }
         let original = tokio::fs::read(dir.join("restore.pending")).await.unwrap();
         tokio::fs::write(dir.join("backups/bad.sqlite"), b"truncated")
@@ -245,7 +259,9 @@ mod tests {
         assert!(stage_restore(&dir, &info.name).await.is_err());
         pool.close().await;
         let before = tokio::fs::read(dir.join("awesometv.db")).await.unwrap();
-        tokio::fs::write(dir.join("operator-config"), b"unchanged").await.unwrap();
+        tokio::fs::write(dir.join("operator-config"), b"unchanged")
+            .await
+            .unwrap();
         tokio::fs::write(dir.join("restore.pending"), b"interrupted")
             .await
             .unwrap();
@@ -254,7 +270,10 @@ mod tests {
             before,
             tokio::fs::read(dir.join("awesometv.db")).await.unwrap()
         );
-        assert_eq!(tokio::fs::read(dir.join("operator-config")).await.unwrap(), b"unchanged");
+        assert_eq!(
+            tokio::fs::read(dir.join("operator-config")).await.unwrap(),
+            b"unchanged"
+        );
         tokio::fs::remove_dir_all(dir).await.unwrap();
     }
 

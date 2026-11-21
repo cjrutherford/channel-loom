@@ -80,14 +80,18 @@ impl FifoSpool {
         limit: u64,
     ) -> io::Result<Self> {
         let mut command = Command::new("ffmpeg");
-        command.args(["-hide_banner", "-loglevel", "error", "-nostdin"]).args(input_args);
+        command
+            .args(["-hide_banner", "-loglevel", "error", "-nostdin"])
+            .args(input_args);
         Self::spawn_command_with_setup(dir, command, limit, set_nonblocking)
     }
     pub fn spawn_command(dir: impl AsRef<Path>, command: Command) -> io::Result<Self> {
         Self::spawn_command_with_setup(dir, command, MAX_SEGMENT, set_nonblocking)
     }
     fn spawn_command_with_setup(
-        dir: impl AsRef<Path>, mut command: Command, limit: u64,
+        dir: impl AsRef<Path>,
+        mut command: Command,
+        limit: u64,
         setup: impl FnOnce(i32) -> io::Result<()>,
     ) -> io::Result<Self> {
         let dir = dir.as_ref().to_path_buf();
@@ -108,7 +112,9 @@ impl FifoSpool {
         }
         // Prepare the read end before spawning: any setup error leaves no child behind.
         let mut fds = [0; 2];
-        if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 { return Err(io::Error::last_os_error()); }
+        if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
         let stdout = unsafe { File::from_raw_fd(fds[0]) };
         let writer = unsafe { File::from_raw_fd(fds[1]) };
         for fd in fds {
@@ -117,10 +123,25 @@ impl FifoSpool {
             }
         }
         setup(stdout.as_raw_fd())?;
-        let mut child = command.process_group(0).args([
-                "-f", "segment", "-segment_format", "mpegts", "-segment_time", "1",
-                "-segment_wrap", "2", "-reset_timestamps", "0", "-segment_list_type", "csv",
-                "-segment_list_size", "0", "-segment_list", "pipe:1",
+        let mut child = command
+            .process_group(0)
+            .args([
+                "-f",
+                "segment",
+                "-segment_format",
+                "mpegts",
+                "-segment_time",
+                "1",
+                "-segment_wrap",
+                "2",
+                "-reset_timestamps",
+                "0",
+                "-segment_list_type",
+                "csv",
+                "-segment_list_size",
+                "0",
+                "-segment_list",
+                "pipe:1",
             ])
             .arg(dir.join("slot_%01d.ts"))
             .stdout(Stdio::from(writer))
@@ -135,7 +156,9 @@ impl FifoSpool {
             if result.is_err() || s.cancelled.load(Ordering::Acquire) {
                 // The encoder may have spawned helpers that still hold the FIFO or
                 // stdout open. Retire the entire private process group.
-                unsafe { libc::kill(-(child.id() as i32), libc::SIGKILL); }
+                unsafe {
+                    libc::kill(-(child.id() as i32), libc::SIGKILL);
+                }
             }
             // Reaping is confined to this owned worker; callers never synchronously wait on Child.
             let status = child.wait();
@@ -157,7 +180,8 @@ impl FifoSpool {
             shared,
             rx,
             worker: Some(worker),
-            #[cfg(test)] pid,
+            #[cfg(test)]
+            pid,
         })
     }
     pub fn recv_timeout(
@@ -170,10 +194,14 @@ impl FifoSpool {
         self.rx.try_recv()
     }
     #[cfg(test)]
-    pub fn pid(&self) -> u32 { self.pid }
+    pub fn pid(&self) -> u32 {
+        self.pid
+    }
     #[cfg(test)]
     pub fn worker_finished(&self) -> bool {
-        self.worker.as_ref().is_none_or(|worker| worker.is_finished())
+        self.worker
+            .as_ref()
+            .is_none_or(|worker| worker.is_finished())
     }
     pub fn cancel(&self) {
         self.shared.cancelled.store(true, Ordering::Release);
@@ -300,9 +328,14 @@ fn run(
             if stdout_eof && line.is_none() {
                 return Err(io::Error::other("missing segment CSV"));
             }
-            if progress { last_progress = std::time::Instant::now(); }
+            if progress {
+                last_progress = std::time::Instant::now();
+            }
             if last_progress.elapsed() >= Duration::from_secs(22) {
-                return Err(io::Error::new(io::ErrorKind::TimedOut, "active FIFO encoder stalled"));
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "active FIFO encoder stalled",
+                ));
             }
             if !progress {
                 let _ = child.try_wait()?;
@@ -370,17 +403,35 @@ fn presentation_bounds(s: &Shared, path: &Path) -> io::Result<(f64, f64)> {
     let probe_path = path.with_extension("probe");
     let output = File::create(&probe_path)?;
     let mut child = Command::new("ffprobe")
-        .args(["-v", "error", "-f", "mpegts", "-show_entries",
-            "stream=index,codec_type:packet=stream_index,pts_time,duration_time", "-of", "json"])
-        .arg(path).stdout(Stdio::from(output)).stderr(Stdio::null()).spawn()?;
+        .args([
+            "-v",
+            "error",
+            "-f",
+            "mpegts",
+            "-show_entries",
+            "stream=index,codec_type:packet=stream_index,pts_time,duration_time",
+            "-of",
+            "json",
+        ])
+        .arg(path)
+        .stdout(Stdio::from(output))
+        .stderr(Stdio::null())
+        .spawn()?;
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     let result = loop {
-        if s.cancelled.load(Ordering::Acquire) || std::time::Instant::now() >= deadline
-            || fs::metadata(&probe_path)?.len() > 8 * 1024 * 1024 {
+        if s.cancelled.load(Ordering::Acquire)
+            || std::time::Instant::now() >= deadline
+            || fs::metadata(&probe_path)?.len() > 8 * 1024 * 1024
+        {
             let _ = child.kill();
             // Reaping must not hold up the spool worker if the process is stuck.
-            thread::spawn(move || { let _ = child.wait(); });
-            break Err(io::Error::new(io::ErrorKind::TimedOut, "presentation packet probe cancelled or exceeded limit"));
+            thread::spawn(move || {
+                let _ = child.wait();
+            });
+            break Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "presentation packet probe cancelled or exceeded limit",
+            ));
         }
         match child.try_wait()? {
             Some(status) if status.success() => break Ok(()),
@@ -392,18 +443,39 @@ fn presentation_bounds(s: &Shared, path: &Path) -> io::Result<(f64, f64)> {
         let data = fs::read(&probe_path)?;
         let json: serde_json::Value = serde_json::from_slice(&data)
             .map_err(|_| io::Error::other("invalid presentation packet probe"))?;
-        let packets = json["packets"].as_array().ok_or_else(|| io::Error::other("missing presentation packets"))?;
-        let streams = json["streams"].as_array().ok_or_else(|| io::Error::other("missing streams"))?;
-        let stream = ["video", "audio"].iter().find_map(|kind| streams.iter().find(|s| s["codec_type"].as_str() == Some(kind)).and_then(|s| s["index"].as_u64()))
+        let packets = json["packets"]
+            .as_array()
+            .ok_or_else(|| io::Error::other("missing presentation packets"))?;
+        let streams = json["streams"]
+            .as_array()
+            .ok_or_else(|| io::Error::other("missing streams"))?;
+        let stream = ["video", "audio"]
+            .iter()
+            .find_map(|kind| {
+                streams
+                    .iter()
+                    .find(|s| s["codec_type"].as_str() == Some(kind))
+                    .and_then(|s| s["index"].as_u64())
+            })
             .ok_or_else(|| io::Error::other("missing presentation stream"))?;
         let mut first = f64::INFINITY;
         let mut end = f64::NEG_INFINITY;
-        for packet in packets.iter().filter(|p| p["stream_index"].as_u64() == Some(stream)) {
-            let parse = |key: &str| packet[key].as_str().and_then(|v| v.parse::<f64>().ok())
-                .filter(|v| v.is_finite()).ok_or_else(|| io::Error::other("missing presentation packet timing"));
+        for packet in packets
+            .iter()
+            .filter(|p| p["stream_index"].as_u64() == Some(stream))
+        {
+            let parse = |key: &str| {
+                packet[key]
+                    .as_str()
+                    .and_then(|v| v.parse::<f64>().ok())
+                    .filter(|v| v.is_finite())
+                    .ok_or_else(|| io::Error::other("missing presentation packet timing"))
+            };
             let pts = parse("pts_time")?;
             let duration = parse("duration_time")?;
-            if duration <= 0.0 { return Err(io::Error::other("invalid presentation packet duration")); }
+            if duration <= 0.0 {
+                return Err(io::Error::other("invalid presentation packet duration"));
+            }
             first = first.min(pts);
             end = end.max(pts + duration);
         }
@@ -425,37 +497,85 @@ mod tests {
         let root = std::env::temp_dir().join(format!("fifo-setup-{}", uuid::Uuid::new_v4()));
         // A missing executable would return NotFound if spawn were attempted first.
         let command = Command::new(root.join("missing-executable"));
-        let result = FifoSpool::spawn_command_with_setup(&root, command, MAX_SEGMENT, |_| Err(io::Error::other("injected setup failure")));
+        let result = FifoSpool::spawn_command_with_setup(&root, command, MAX_SEGMENT, |_| {
+            Err(io::Error::other("injected setup failure"))
+        });
         assert_eq!(result.err().unwrap().to_string(), "injected setup failure");
         assert!(!root.exists());
     }
     #[test]
     fn fifo_presentation_duration_across_segments() {
-        for (rate, frames, bframes, audio) in [(10, 12, true, false), (25, 100, true, true), (25, 100, false, false)] {
+        for (rate, frames, bframes, audio) in [
+            (10, 12, true, false),
+            (25, 100, true, true),
+            (25, 100, false, false),
+        ] {
             let dir = std::env::temp_dir().join(format!("fifo-timing-{}", uuid::Uuid::new_v4()));
             let mut command = Command::new("ffmpeg");
-            command.args(["-v", "error", "-nostdin", "-f", "lavfi", "-i"])
+            command
+                .args(["-v", "error", "-nostdin", "-f", "lavfi", "-i"])
                 .arg(format!("testsrc2=size=160x90:rate={rate}"));
-            if audio { command.args(["-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo", "-c:a", "aac"]); }
-            command.args(["-frames:v", &frames.to_string(), "-c:v", "libx264", "-threads", "1",
-                "-preset", "veryfast", "-crf", "28", "-pix_fmt", "yuv420p", "-g", &rate.to_string(),
-                "-keyint_min", &rate.to_string(), "-sc_threshold", "0", "-force_key_frames", "expr:gte(t,n_forced*1)"]);
-            if !bframes { command.args(["-bf", "0"]); }
+            if audio {
+                command.args([
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "anullsrc=r=48000:cl=stereo",
+                    "-c:a",
+                    "aac",
+                ]);
+            }
+            command.args([
+                "-frames:v",
+                &frames.to_string(),
+                "-c:v",
+                "libx264",
+                "-threads",
+                "1",
+                "-preset",
+                "veryfast",
+                "-crf",
+                "28",
+                "-pix_fmt",
+                "yuv420p",
+                "-g",
+                &rate.to_string(),
+                "-keyint_min",
+                &rate.to_string(),
+                "-sc_threshold",
+                "0",
+                "-force_key_frames",
+                "expr:gte(t,n_forced*1)",
+            ]);
+            if !bframes {
+                command.args(["-bf", "0"]);
+            }
             let spool = FifoSpool::spawn_command(&dir, command).unwrap();
             let mut ticks = 0i64;
             let mut count = 0;
             loop {
                 match spool.recv_timeout(Duration::from_secs(15)) {
                     Ok(Ok(segment)) => {
-                        ticks += (segment.end * 90000.0).round() as i64 - (segment.start * 90000.0).round() as i64;
+                        ticks += (segment.end * 90000.0).round() as i64
+                            - (segment.start * 90000.0).round() as i64;
                         count += 1;
                     }
                     Err(mpsc::RecvTimeoutError::Disconnected) => break,
-                    other => panic!("segment failed: {}", match other { Ok(Err(e)) => e.to_string(), _ => "timeout".into() }),
+                    other => panic!(
+                        "segment failed: {}",
+                        match other {
+                            Ok(Err(e)) => e.to_string(),
+                            _ => "timeout".into(),
+                        }
+                    ),
                 }
             }
             assert!(count >= 2, "rate {rate}: {count} segments");
-            assert_eq!(ticks, frames * 90000 / rate, "rate {rate}, bframes {bframes}, audio {audio}");
+            assert_eq!(
+                ticks,
+                frames * 90000 / rate,
+                "rate {rate}, bframes {bframes}, audio {audio}"
+            );
         }
     }
     fn fixture(limit: u64) -> FifoSpool {

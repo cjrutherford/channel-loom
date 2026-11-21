@@ -10,8 +10,8 @@ mod limits;
 mod oidc;
 mod precache;
 mod programming;
-mod renewal;
 mod remote_refresh;
+mod renewal;
 mod scan;
 mod scripted;
 mod tokens;
@@ -36,7 +36,10 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let args: Vec<_> = std::env::args_os().skip(1).collect();
-    anyhow::ensure!(args.is_empty() || args == ["--migrate-only"], "usage: awesometv-server [--migrate-only]");
+    anyhow::ensure!(
+        args.is_empty() || args == ["--migrate-only"],
+        "usage: awesometv-server [--migrate-only]"
+    );
     let migrate_only = !args.is_empty();
     let config = Config::from_env();
     let pool = db::init(&config.data_dir).await?;
@@ -70,12 +73,15 @@ async fn main() -> anyhow::Result<()> {
         config.port,
     )?);
     let precache = Arc::new(Precache::new(&config, pool.clone()));
-    let engine = Arc::new(Engine::new(
-        pool.clone(),
-        config.data_dir.clone(),
-        cloud.clone(),
-        config.stream_max_kbps,
-    ).with_precache(precache.clone()));
+    let engine = Arc::new(
+        Engine::new(
+            pool.clone(),
+            config.data_dir.clone(),
+            cloud.clone(),
+            config.stream_max_kbps,
+        )
+        .with_precache(precache.clone()),
+    );
     if let Ok(rotated) = cloud.rotate_secrets().await
         && rotated > 0
     {
@@ -128,7 +134,8 @@ async fn main() -> anyhow::Result<()> {
             }
         });
     }
-    let (refresh_stop, refresh_task) = remote_refresh::start(state.pool.clone(), config.clone(), cloud.clone());
+    let (refresh_stop, refresh_task) =
+        remote_refresh::start(state.pool.clone(), config.clone(), cloud.clone());
     let state_pool_for_renewal = state.pool.clone();
     let app = api::router(state);
 

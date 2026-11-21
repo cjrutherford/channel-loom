@@ -1005,7 +1005,8 @@ struct PublicGuideChannel {
 }
 
 async fn public_playout(
-    State(state): State<AppState>, Path(id): Path<String>,
+    State(state): State<AppState>,
+    Path(id): Path<String>,
 ) -> Result<Json<crate::engine::PlayoutStatus>, ApiError> {
     if db::channel_by_id(&state.pool, &id).await?.is_none() {
         return Err(ApiError::not_found("channel not found"));
@@ -1013,8 +1014,11 @@ async fn public_playout(
     let mut status = state.engine.playout_status(&id).await;
     for segment in &mut status.segments {
         if let Some(id) = &segment.media_id {
-            segment.title = sqlx::query_scalar::<_, String>("SELECT title FROM media_items WHERE id = ?")
-                .bind(id).fetch_optional(&state.pool).await?;
+            segment.title =
+                sqlx::query_scalar::<_, String>("SELECT title FROM media_items WHERE id = ?")
+                    .bind(id)
+                    .fetch_optional(&state.pool)
+                    .await?;
         }
     }
     Ok(Json(status))
@@ -1148,8 +1152,17 @@ async fn jellyfin_sync(
     let music_root = state.config.music_root.clone();
     let limit = request.limit.clamp(1, 50_000);
     let report = crate::remote_refresh::sync_library(
-        &state.pool, "jellyfin", base_url, api_key, movies_root, tv_root, music_root, limit,
-    ).await.map_err(|_| ApiError::internal("jellyfin refresh failed"))?;
+        &state.pool,
+        "jellyfin",
+        base_url,
+        api_key,
+        movies_root,
+        tv_root,
+        music_root,
+        limit,
+    )
+    .await
+    .map_err(|_| ApiError::internal("jellyfin refresh failed"))?;
     Ok(Json(report))
 }
 
@@ -1166,15 +1179,23 @@ async fn update_language_settings(
     // Do not include serde's input-dependent diagnostics in responses: callers may
     // accidentally submit credentials in any field.
     let Json(value) = payload.map_err(|_| ApiError::bad_request("body: expected valid JSON"))?;
-    let object = value.as_object().ok_or_else(|| ApiError::bad_request("body: expected an object"))?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| ApiError::bad_request("body: expected an object"))?;
     let language = |field: &str| -> Result<String, ApiError> {
         let text = match object.get(field) {
             None | Some(serde_json::Value::Null) => "",
             Some(serde_json::Value::String(value)) => value.trim(),
-            _ => return Err(ApiError::bad_request(format!("{field}: expected a string or null"))),
+            _ => {
+                return Err(ApiError::bad_request(format!(
+                    "{field}: expected a string or null"
+                )));
+            }
         };
         if text.chars().count() > 16 || text.chars().any(char::is_control) {
-            return Err(ApiError::bad_request(format!("{field}: must be at most 16 characters and contain no control characters")));
+            return Err(ApiError::bad_request(format!(
+                "{field}: must be at most 16 characters and contain no control characters"
+            )));
         }
         Ok(text.to_owned())
     };
@@ -1322,7 +1343,9 @@ struct Stats {
     emby_configured: bool,
 }
 
-async fn precache_coverage(State(state): State<AppState>) -> Result<Json<crate::precache::CoverageReport>, ApiError> {
+async fn precache_coverage(
+    State(state): State<AppState>,
+) -> Result<Json<crate::precache::CoverageReport>, ApiError> {
     Ok(Json(state.precache.coverage(db::now_ms()).await?))
 }
 
@@ -1387,8 +1410,17 @@ async fn emby_sync(
     let music_root = state.config.music_root.clone();
     let limit = request.limit.clamp(1, 50_000);
     let report = crate::remote_refresh::sync_library(
-        &state.pool, "emby", base_url, api_key, movies_root, tv_root, music_root, limit,
-    ).await.map_err(|_| ApiError::internal("emby refresh failed"))?;
+        &state.pool,
+        "emby",
+        base_url,
+        api_key,
+        movies_root,
+        tv_root,
+        music_root,
+        limit,
+    )
+    .await
+    .map_err(|_| ApiError::internal("emby refresh failed"))?;
     Ok(Json(report))
 }
 
@@ -1545,7 +1577,10 @@ async fn create_cloud_source(
     if !state.cloud.supports_provider(&input.provider) {
         return Err(ApiError::bad_request("unsupported cloud provider"));
     }
-    state.cloud.validate_source(&input).map_err(|error| ApiError::bad_request(&error.to_string()))?;
+    state
+        .cloud
+        .validate_source(&input)
+        .map_err(|error| ApiError::bad_request(&error.to_string()))?;
     Ok(Json(state.cloud.create_source(&input).await?))
 }
 
@@ -1588,7 +1623,9 @@ async fn add_cloud_root(
     Path(id): Path<String>,
     Json(root): Json<db::CloudRootInput>,
 ) -> Result<Json<db::CloudRoot>, ApiError> {
-    let source = db::cloud_source(&state.pool, &id).await?.ok_or_else(|| ApiError::not_found("cloud source not found"))?;
+    let source = db::cloud_source(&state.pool, &id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("cloud source not found"))?;
     crate::cloud::manager::CloudManager::validate_root(&source.provider, &root)
         .map_err(|error| ApiError::bad_request(&error.to_string()))?;
     Ok(Json(state.cloud.add_root(&id, &root).await?))
@@ -1599,10 +1636,21 @@ async fn update_cloud_root(
     Path(id): Path<String>,
     Json(update): Json<db::CloudRootUpdate>,
 ) -> Result<Json<db::CloudRoot>, ApiError> {
-    let root = db::cloud_root(&state.pool, &id).await?.ok_or_else(|| ApiError::not_found("cloud root not found"))?;
-    let source = db::cloud_source(&state.pool, &root.source_id).await?.ok_or_else(|| ApiError::not_found("cloud source not found"))?;
-    crate::cloud::manager::CloudManager::validate_root(&source.provider, &db::CloudRootInput { remote_id: root.remote_id, remote_path: root.remote_path, display_path: update.display_path.clone().unwrap_or(root.display_path) })
-        .map_err(|error| ApiError::bad_request(&error.to_string()))?;
+    let root = db::cloud_root(&state.pool, &id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("cloud root not found"))?;
+    let source = db::cloud_source(&state.pool, &root.source_id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("cloud source not found"))?;
+    crate::cloud::manager::CloudManager::validate_root(
+        &source.provider,
+        &db::CloudRootInput {
+            remote_id: root.remote_id,
+            remote_path: root.remote_path,
+            display_path: update.display_path.clone().unwrap_or(root.display_path),
+        },
+    )
+    .map_err(|error| ApiError::bad_request(&error.to_string()))?;
     Ok(Json(
         db::update_cloud_root(&state.pool, &id, &update).await?,
     ))
@@ -2314,7 +2362,9 @@ fn validate_stream(stream: &db::StreamSettings) -> Result<(), ApiError> {
         ("cache_segments", stream.cache_segments, 4, 60),
     ] {
         if !(min..=max).contains(&value) {
-            return Err(ApiError::bad_request(format!("stream {field} must be {min}-{max}")));
+            return Err(ApiError::bad_request(format!(
+                "stream {field} must be {min}-{max}"
+            )));
         }
     }
 
@@ -2969,7 +3019,9 @@ async fn playlist_for_channel(
 ) -> Result<std::path::PathBuf, ApiError> {
     match tokio::time::timeout(Duration::from_secs(1), state.engine.ensure(channel)).await {
         Ok(Ok(path)) => Ok(path),
-        Ok(Err(error)) => Err(ApiError::service_unavailable(format!("Preparing channel: {error:#}"))),
+        Ok(Err(error)) => Err(ApiError::service_unavailable(format!(
+            "Preparing channel: {error:#}"
+        ))),
         Err(_) => Err(ApiError::service_unavailable("Preparing channel")),
     }
 }
@@ -3617,9 +3669,26 @@ mod auto_build_api_tests {
     #[test]
     fn stream_numeric_bounds_are_enforced() {
         let mut stream = super::db::StreamSettings::default();
-        for (field, value) in [(0, -1), (0, 20001), (1, 1), (1, 11), (2, -1), (2, 31), (3, 3), (3, 61)] {
-            match field { 0 => stream.max_kbps = value, 1 => stream.segment_seconds = value, 2 => stream.prebuffer_seconds = value, _ => stream.cache_segments = value }
-            assert!(super::validate_stream(&stream).is_err(), "field {field} value {value}");
+        for (field, value) in [
+            (0, -1),
+            (0, 20001),
+            (1, 1),
+            (1, 11),
+            (2, -1),
+            (2, 31),
+            (3, 3),
+            (3, 61),
+        ] {
+            match field {
+                0 => stream.max_kbps = value,
+                1 => stream.segment_seconds = value,
+                2 => stream.prebuffer_seconds = value,
+                _ => stream.cache_segments = value,
+            }
+            assert!(
+                super::validate_stream(&stream).is_err(),
+                "field {field} value {value}"
+            );
             stream = super::db::StreamSettings::default();
         }
     }
@@ -3636,15 +3705,27 @@ mod auto_build_api_tests {
         setup_mode(false).await
     }
 
-    async fn setup_mode(protected: bool) -> (
-        SqlitePool, std::path::PathBuf, std::net::SocketAddr, tokio::task::JoinHandle<()>,
+    async fn setup_mode(
+        protected: bool,
+    ) -> (
+        SqlitePool,
+        std::path::PathBuf,
+        std::net::SocketAddr,
+        tokio::task::JoinHandle<()>,
     ) {
         let (pool, dir, addr, server, _) = setup_mode_with_precache(protected, false).await;
         (pool, dir, addr, server)
     }
 
-    async fn setup_mode_with_precache(protected: bool, rolling: bool) -> (
-        SqlitePool, std::path::PathBuf, std::net::SocketAddr, tokio::task::JoinHandle<()>, Arc<crate::precache::Precache>,
+    async fn setup_mode_with_precache(
+        protected: bool,
+        rolling: bool,
+    ) -> (
+        SqlitePool,
+        std::path::PathBuf,
+        std::net::SocketAddr,
+        tokio::task::JoinHandle<()>,
+        Arc<crate::precache::Precache>,
     ) {
         let dir = std::env::temp_dir().join(format!("awesometv-auto-{}", uuid::Uuid::new_v4()));
         let pool = db::init(&dir).await.unwrap();
@@ -3676,7 +3757,8 @@ mod auto_build_api_tests {
         config.data_dir = dir.clone();
         config.precache_dir = dir.join("cache");
         config.precache_rolling_chunks = rolling;
-        config.admin_user = "fixture".into(); config.admin_password = "fixture-password".into();
+        config.admin_user = "fixture".into();
+        config.admin_password = "fixture-password".into();
         let cloud = Arc::new(
             CloudManager::new(pool.clone(), dir.clone(), &config.bind, config.port).unwrap(),
         );
@@ -3712,35 +3794,78 @@ mod auto_build_api_tests {
         };
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let app = if protected { router(state) } else { Router::new()
-            .route("/api/v1/public/channels", get(public_channels))
-            .route("/api/v1/public/channels/{id}/playout", get(public_playout))
-            .route("/channel/{file}", get(hls_playlist))
-            .route("/channel/{number}/{file}", get(hls_segment))
-            .route("/api/v1/channels/auto", post(auto_channels))
-            .route("/api/v1/channels/{id}/stream", get(channel_stream).put(update_channel_stream))
-            .route("/api/v1/settings/language", get(language_settings).put(update_language_settings))
-            .route("/api/v1/cloud/sources", get(cloud_sources).post(create_cloud_source))
-            .route("/api/v1/cloud/sources/{id}/roots", get(cloud_roots).post(add_cloud_root))
-            .route("/api/v1/cloud/roots/{id}", axum::routing::patch(update_cloud_root))
-            .with_state(state) };
-        let server = tokio::spawn(async move { axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap() });
+        let app = if protected {
+            router(state)
+        } else {
+            Router::new()
+                .route("/api/v1/public/channels", get(public_channels))
+                .route("/api/v1/public/channels/{id}/playout", get(public_playout))
+                .route("/channel/{file}", get(hls_playlist))
+                .route("/channel/{number}/{file}", get(hls_segment))
+                .route("/api/v1/channels/auto", post(auto_channels))
+                .route(
+                    "/api/v1/channels/{id}/stream",
+                    get(channel_stream).put(update_channel_stream),
+                )
+                .route(
+                    "/api/v1/settings/language",
+                    get(language_settings).put(update_language_settings),
+                )
+                .route(
+                    "/api/v1/cloud/sources",
+                    get(cloud_sources).post(create_cloud_source),
+                )
+                .route(
+                    "/api/v1/cloud/sources/{id}/roots",
+                    get(cloud_roots).post(add_cloud_root),
+                )
+                .route(
+                    "/api/v1/cloud/roots/{id}",
+                    axum::routing::patch(update_cloud_root),
+                )
+                .with_state(state)
+        };
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .await
+            .unwrap()
+        });
         (pool, dir, addr, server, precache)
     }
 
     #[tokio::test]
     async fn coverage_route_requires_admin_and_returns_snapshot() {
         let (pool, dir, addr, server) = setup_mode(true).await;
-        for (auth, expected) in [("", "401"), ("Authorization: Basic Zml4dHVyZTpmaXh0dXJlLXBhc3N3b3Jk\r\n", "200")] {
+        for (auth, expected) in [
+            ("", "401"),
+            (
+                "Authorization: Basic Zml4dHVyZTpmaXh0dXJlLXBhc3N3b3Jk\r\n",
+                "200",
+            ),
+        ] {
             let mut socket = tokio::net::TcpStream::connect(addr).await.unwrap();
             socket.write_all(format!("GET /api/v1/precache/coverage HTTP/1.1\r\nHost: localhost\r\n{auth}Connection: close\r\n\r\n").as_bytes()).await.unwrap();
-            let mut response = Vec::new(); socket.read_to_end(&mut response).await.unwrap();
+            let mut response = Vec::new();
+            socket.read_to_end(&mut response).await.unwrap();
             let response = String::from_utf8(response).unwrap();
-            assert!(response.starts_with(&format!("HTTP/1.1 {expected}")), "{response}");
-            if expected == "200" { assert!(response.contains("snapshot_ms")); }
+            assert!(
+                response.starts_with(&format!("HTTP/1.1 {expected}")),
+                "{response}"
+            );
+            if expected == "200" {
+                assert!(response.contains("snapshot_ms"));
+            }
         }
-        assert_eq!(required_scope(&Method::GET, "/api/v1/precache/coverage"), "admin");
-        server.abort(); pool.close().await; let _ = tokio::fs::remove_dir_all(dir).await;
+        assert_eq!(
+            required_scope(&Method::GET, "/api/v1/precache/coverage"),
+            "admin"
+        );
+        server.abort();
+        pool.close().await;
+        let _ = tokio::fs::remove_dir_all(dir).await;
     }
 
     #[tokio::test]
@@ -3749,26 +3874,54 @@ mod auto_build_api_tests {
         let (pool, dir, addr, server, precache) = setup_mode_with_precache(true, true).await;
         let source = dir.join("origin.mkv");
         std::fs::write(&source, b"origin").unwrap();
-        sqlx::query("UPDATE media_items SET path = ?, video_codec = 'h264' WHERE id = 'm'").bind(source.to_str().unwrap()).execute(&pool).await.unwrap();
+        sqlx::query("UPDATE media_items SET path = ?, video_codec = 'h264' WHERE id = 'm'")
+            .bind(source.to_str().unwrap())
+            .execute(&pool)
+            .await
+            .unwrap();
         sqlx::query("INSERT INTO channels (id, number, name, start_ms, created_at) VALUES ('rolling', '91', 'Rolling', 0, 0)").execute(&pool).await.unwrap();
         let now = db::now_ms();
         sqlx::query("INSERT INTO channel_items (channel_id, position, media_id, title, start_ms, end_ms, in_ms, out_ms, kind) VALUES ('rolling', 0, 'm', 'Media', ?, ?, 600000, 4200000, 'program')")
             .bind(now - 1000).bind(now + 3_599_000).execute(&pool).await.unwrap();
         let snapshot = precache.test_publish_rolling_snapshot(now).await.unwrap();
         let identity = &snapshot[0].source;
-        let chunks = dir.join("cache/chunks"); std::fs::create_dir_all(&chunks).unwrap();
+        let chunks = dir.join("cache/chunks");
+        std::fs::create_dir_all(&chunks).unwrap();
         std::fs::write(chunks.join("part.mkv"), b"payload").unwrap();
-        let manifest = Manifest { version: 2, payload_bytes: 7, source_path: identity.path.clone(), source_size: identity.size, source_mtime: identity.mtime, chunk_file: "part.mkv".into(), source_start_ms: 600_000, source_end_ms: 1_000_000, local_start_ms: 0 };
-        std::fs::write(chunks.join("part.json"), serde_json::to_vec(&manifest).unwrap()).unwrap();
+        let manifest = Manifest {
+            version: 2,
+            payload_bytes: 7,
+            source_path: identity.path.clone(),
+            source_size: identity.size,
+            source_mtime: identity.mtime,
+            chunk_file: "part.mkv".into(),
+            source_start_ms: 600_000,
+            source_end_ms: 1_000_000,
+            local_start_ms: 0,
+        };
+        std::fs::write(
+            chunks.join("part.json"),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
         std::fs::remove_file(source).unwrap();
         // Cached chunks keep a missing origin's current airing (aired to slot end).
-        assert_eq!(precache.test_publish_rolling_snapshot(now).await.unwrap().len(), 1);
+        assert_eq!(
+            precache
+                .test_publish_rolling_snapshot(now)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
         let mut socket = tokio::net::TcpStream::connect(addr).await.unwrap();
         socket.write_all(b"GET /api/v1/precache/coverage HTTP/1.1\r\nHost: localhost\r\nAuthorization: Basic Zml4dHVyZTpmaXh0dXJlLXBhc3N3b3Jk\r\nConnection: close\r\n\r\n").await.unwrap();
-        let mut response = Vec::new(); socket.read_to_end(&mut response).await.unwrap();
+        let mut response = Vec::new();
+        socket.read_to_end(&mut response).await.unwrap();
         let response = String::from_utf8(response).unwrap();
         assert!(response.starts_with("HTTP/1.1 200"), "{response}");
-        let json: serde_json::Value = serde_json::from_str(response.split_once("\r\n\r\n").unwrap().1).unwrap();
+        let json: serde_json::Value =
+            serde_json::from_str(response.split_once("\r\n\r\n").unwrap().1).unwrap();
         let target = &json["channels"][0]["targets"][0];
         assert_eq!(target["mode"], "rolling_chunks");
         assert!(target["required_source_interval"][0].as_i64().unwrap() >= 601_000);
@@ -3776,7 +3929,9 @@ mod auto_build_api_tests {
         assert_eq!(target["window_ready"], false);
         assert_eq!(json["startup_ready_count"], 1);
         assert_eq!(json["window_ready_count"], 0);
-        server.abort(); pool.close().await; let _ = tokio::fs::remove_dir_all(dir).await;
+        server.abort();
+        pool.close().await;
+        let _ = tokio::fs::remove_dir_all(dir).await;
     }
 
     #[tokio::test]
@@ -3785,7 +3940,8 @@ mod auto_build_api_tests {
         sqlx::query("INSERT INTO channels (id, number, name, start_ms, created_at) VALUES ('playout-fixture', '80', 'Test', 0, 0)").execute(&pool).await.unwrap();
         let mut socket = tokio::net::TcpStream::connect(addr).await.unwrap();
         socket.write_all(b"GET /api/v1/public/channels/playout-fixture/playout HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n").await.unwrap();
-        let mut response = Vec::new(); socket.read_to_end(&mut response).await.unwrap();
+        let mut response = Vec::new();
+        socket.read_to_end(&mut response).await.unwrap();
         let response = String::from_utf8(response).unwrap();
         assert!(response.starts_with("HTTP/1.1 200"));
         let body = response.split_once("\r\n\r\n").unwrap().1;
@@ -3799,7 +3955,8 @@ mod auto_build_api_tests {
         assert_eq!(json["segments"][2]["source"], "slate");
         assert_eq!(json["segments"][3]["title"], "Disc");
         assert!(!body.contains("/m.mp4") && !body.contains("secret-token"));
-        server.abort(); let _ = tokio::fs::remove_dir_all(dir).await;
+        server.abort();
+        let _ = tokio::fs::remove_dir_all(dir).await;
     }
 
     #[tokio::test]
@@ -3808,23 +3965,30 @@ mod auto_build_api_tests {
         sqlx::query("INSERT INTO channels (id, number, name, start_ms, created_at) VALUES ('idle', '79', 'Test', 0, 0)").execute(&pool).await.unwrap();
         let mut lineup = tokio::net::TcpStream::connect(addr).await.unwrap();
         lineup.write_all(b"GET /api/v1/public/channels HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n").await.unwrap();
-        let mut lineup_response = Vec::new(); lineup.read_to_end(&mut lineup_response).await.unwrap();
+        let mut lineup_response = Vec::new();
+        lineup.read_to_end(&mut lineup_response).await.unwrap();
         let lineup_response = String::from_utf8(lineup_response).unwrap();
-        let lineup_json: serde_json::Value = serde_json::from_str(lineup_response.split_once("\r\n\r\n").unwrap().1).unwrap();
+        let lineup_json: serde_json::Value =
+            serde_json::from_str(lineup_response.split_once("\r\n\r\n").unwrap().1).unwrap();
         assert_eq!(lineup_json[0]["id"], "idle");
         for (id, expected) in [("idle", "200"), ("missing", "404")] {
             let mut socket = tokio::net::TcpStream::connect(addr).await.unwrap();
             socket.write_all(format!("GET /api/v1/public/channels/{id}/playout HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
-            let mut response = Vec::new(); socket.read_to_end(&mut response).await.unwrap();
+            let mut response = Vec::new();
+            socket.read_to_end(&mut response).await.unwrap();
             let response = String::from_utf8(response).unwrap();
             assert!(response.starts_with(&format!("HTTP/1.1 {expected}")));
             if id == "idle" {
                 let body = response.split_once("\r\n\r\n").unwrap().1;
                 let json: serde_json::Value = serde_json::from_str(body).unwrap();
-                assert_eq!(json, serde_json::json!({"channel_id":"idle", "generation":null, "state":"preparing", "new_published_seconds":0.0, "segments":[]}));
+                assert_eq!(
+                    json,
+                    serde_json::json!({"channel_id":"idle", "generation":null, "state":"preparing", "new_published_seconds":0.0, "segments":[]})
+                );
             }
         }
-        server.abort(); let _ = tokio::fs::remove_dir_all(dir).await;
+        server.abort();
+        let _ = tokio::fs::remove_dir_all(dir).await;
     }
 
     #[tokio::test]
@@ -3833,12 +3997,22 @@ mod auto_build_api_tests {
         sqlx::query("INSERT INTO channels (id, number, name, start_ms, created_at) VALUES ('gate', '78', 'Test', 0, 0)").execute(&pool).await.unwrap();
         let output = dir.join("hls/78");
         tokio::fs::create_dir_all(&output).await.unwrap();
-        tokio::fs::write(output.join("seg_old.ts"), b"retained").await.unwrap();
+        tokio::fs::write(output.join("seg_old.ts"), b"retained")
+            .await
+            .unwrap();
         tokio::fs::write(output.join("index.m3u8"), "#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:42\n#EXT-X-PROGRAM-DATE-TIME:2020-01-01T00:00:00Z\n#EXTINF:2.0,\nseg_old.ts\n").await.unwrap();
         let mut socket = tokio::net::TcpStream::connect(addr).await.unwrap();
-        socket.write_all(b"GET /channel/78.m3u8 HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n").await.unwrap();
+        socket
+            .write_all(
+                b"GET /channel/78.m3u8 HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+            )
+            .await
+            .unwrap();
         let mut response = Vec::new();
-        tokio::time::timeout(Duration::from_secs(4), socket.read_to_end(&mut response)).await.unwrap().unwrap();
+        tokio::time::timeout(Duration::from_secs(4), socket.read_to_end(&mut response))
+            .await
+            .unwrap()
+            .unwrap();
         let response = String::from_utf8(response).unwrap().to_lowercase();
         assert!(response.starts_with("http/1.1 503"), "{response}");
         assert!(response.contains("retry-after: 2"));
@@ -3853,16 +4027,28 @@ mod auto_build_api_tests {
         let output = dir.join("hls/77");
         tokio::fs::create_dir_all(&output).await.unwrap();
         let bytes = b"retained transport segment\x00\xff";
-        tokio::fs::write(output.join("segment_0.ts"), bytes).await.unwrap();
-        tokio::fs::write(output.join("index.m3u8"), "#EXTM3U\n#EXTINF:2.0,\nsegment_0.ts\n").await.unwrap();
+        tokio::fs::write(output.join("segment_0.ts"), bytes)
+            .await
+            .unwrap();
+        tokio::fs::write(
+            output.join("index.m3u8"),
+            "#EXTM3U\n#EXTINF:2.0,\nsegment_0.ts\n",
+        )
+        .await
+        .unwrap();
         let body = serde_json::to_string(&db::StreamSettings::default()).unwrap();
         let mut socket = tokio::net::TcpStream::connect(addr).await.unwrap();
         socket.write_all(format!("PUT /api/v1/channels/retained/stream HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).as_bytes()).await.unwrap();
         let mut response = Vec::new();
         socket.read_to_end(&mut response).await.unwrap();
         assert!(response.starts_with(b"HTTP/1.1 200"));
-        let playlist = tokio::fs::read_to_string(output.join("index.m3u8")).await.unwrap();
-        let advertised = playlist.lines().find(|line| line.starts_with("segment_")).unwrap();
+        let playlist = tokio::fs::read_to_string(output.join("index.m3u8"))
+            .await
+            .unwrap();
+        let advertised = playlist
+            .lines()
+            .find(|line| line.starts_with("segment_"))
+            .unwrap();
         let mut socket = tokio::net::TcpStream::connect(addr).await.unwrap();
         socket.write_all(format!("GET /channel/77/{advertised} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
         let mut response = Vec::new();
@@ -3891,13 +4077,22 @@ mod auto_build_api_tests {
         valid["prebuffer_seconds"] = 30.into();
         valid["cache_segments"] = 60.into();
         assert!(send(valid.to_string()).await.starts_with("HTTP/1.1 200"));
-        for (field, value) in [("max_kbps", -1), ("segment_seconds", 11), ("prebuffer_seconds", 31), ("cache_segments", 3)] {
+        for (field, value) in [
+            ("max_kbps", -1),
+            ("segment_seconds", 11),
+            ("prebuffer_seconds", 31),
+            ("cache_segments", 3),
+        ] {
             let mut invalid = valid.clone();
             invalid[field] = value.into();
             let response = send(invalid.to_string()).await;
             assert!(response.starts_with("HTTP/1.1 400"), "{response}");
             assert!(response.contains(field));
-            assert_eq!(serde_json::to_value(db::channel_stream(&pool, "stream-test").await.unwrap()).unwrap(), valid);
+            assert_eq!(
+                serde_json::to_value(db::channel_stream(&pool, "stream-test").await.unwrap())
+                    .unwrap(),
+                valid
+            );
         }
         server.abort();
         pool.close().await;
@@ -3917,73 +4112,155 @@ mod auto_build_api_tests {
         )
     }
 
-    async fn settings_request(addr: std::net::SocketAddr, method: &str, body: &str) -> (u16, String) {
+    async fn settings_request(
+        addr: std::net::SocketAddr,
+        method: &str,
+        body: &str,
+    ) -> (u16, String) {
         let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
         stream.write_all(format!("{method} /api/v1/settings/language HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
         let mut response = String::new();
         stream.read_to_string(&mut response).await.unwrap();
         let (headers, body) = response.split_once("\r\n\r\n").unwrap();
-        (headers.split_whitespace().nth(1).unwrap().parse().unwrap(), body.to_string())
+        (
+            headers.split_whitespace().nth(1).unwrap().parse().unwrap(),
+            body.to_string(),
+        )
     }
 
     #[tokio::test]
     async fn cloud_validation_http_persistence() {
         let (pool, dir, addr, server) = setup().await;
-        async fn send(addr: std::net::SocketAddr, method: &str, path: &str, body: &str) -> (u16, String) {
+        async fn send(
+            addr: std::net::SocketAddr,
+            method: &str,
+            path: &str,
+            body: &str,
+        ) -> (u16, String) {
             let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
             stream.write_all(format!("{method} {path} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
-            let mut response = String::new(); stream.read_to_string(&mut response).await.unwrap();
+            let mut response = String::new();
+            stream.read_to_string(&mut response).await.unwrap();
             let (headers, body) = response.split_once("\r\n\r\n").unwrap();
-            (headers.split_whitespace().nth(1).unwrap().parse().unwrap(), body.to_string())
+            (
+                headers.split_whitespace().nth(1).unwrap().parse().unwrap(),
+                body.to_string(),
+            )
         }
         let base = "/api/v1/cloud/sources";
         let mut input = serde_json::json!({"provider":"google","name":"Drive","auth_type":"oauth","config":{},"secret":serde_json::json!({"refresh_token":"sentinel-secret","client_id":"id","client_secret":"secret","token_uri":"https://oauth.example.com/token"}).to_string(),"roots":[{"remote_id":"root","remote_path":"/","display_path":"/"}]});
-        for bad in ["http://example.com/token", "https://user:pass@example.com/token", "https://127.0.0.1/token", "not a url"] {
-            let mut credential: serde_json::Value = serde_json::from_str(input["secret"].as_str().unwrap()).unwrap();
-            credential["token_uri"] = bad.into(); input["secret"] = credential.to_string().into();
+        for bad in [
+            "http://example.com/token",
+            "https://user:pass@example.com/token",
+            "https://127.0.0.1/token",
+            "not a url",
+        ] {
+            let mut credential: serde_json::Value =
+                serde_json::from_str(input["secret"].as_str().unwrap()).unwrap();
+            credential["token_uri"] = bad.into();
+            input["secret"] = credential.to_string().into();
             let (status, response) = send(addr, "POST", base, &input.to_string()).await;
-            assert_eq!(status, 400); assert!(response.contains("secret")); assert!(!response.contains("sentinel-secret")); assert!(!response.contains(bad));
-            assert_eq!(sqlx::query_scalar::<_, i64>("SELECT count(*) FROM cloud_sources").fetch_one(&pool).await.unwrap(), 0);
+            assert_eq!(status, 400);
+            assert!(response.contains("secret"));
+            assert!(!response.contains("sentinel-secret"));
+            assert!(!response.contains(bad));
+            assert_eq!(
+                sqlx::query_scalar::<_, i64>("SELECT count(*) FROM cloud_sources")
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap(),
+                0
+            );
         }
         input["secret"] = serde_json::json!({"refresh_token":"sentinel-secret","client_id":"id","client_secret":"secret","token_uri":"https://oauth.example.com/token"}).to_string().into();
-        for uri in [serde_json::json!(null), serde_json::json!(42), serde_json::json!("http://example.com/token")] {
-            let mut invalid = input.clone(); invalid["auth_type"] = "service_account".into();
+        for uri in [
+            serde_json::json!(null),
+            serde_json::json!(42),
+            serde_json::json!("http://example.com/token"),
+        ] {
+            let mut invalid = input.clone();
+            invalid["auth_type"] = "service_account".into();
             invalid["secret"] = serde_json::json!({"client_email":"a@example.com","private_key":"sentinel-key","token_uri":uri}).to_string().into();
             let (status, error) = send(addr, "POST", base, &invalid.to_string()).await;
-            assert_eq!(status, 400); assert!(error.contains("secret")); assert!(!error.contains("sentinel-key"));
-            assert_eq!(sqlx::query_scalar::<_, i64>("SELECT count(*) FROM cloud_sources").fetch_one(&pool).await.unwrap(), 0);
+            assert_eq!(status, 400);
+            assert!(error.contains("secret"));
+            assert!(!error.contains("sentinel-key"));
+            assert_eq!(
+                sqlx::query_scalar::<_, i64>("SELECT count(*) FROM cloud_sources")
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap(),
+                0
+            );
         }
-        let mut leaked = input.clone(); leaked["config"] = serde_json::json!({"client_secret":"sentinel-config-secret"});
+        let mut leaked = input.clone();
+        leaked["config"] = serde_json::json!({"client_secret":"sentinel-config-secret"});
         let (status, error) = send(addr, "POST", base, &leaked.to_string()).await;
-        assert_eq!(status, 400); assert!(error.contains("config")); assert!(!error.contains("sentinel"));
-        assert_eq!(sqlx::query_scalar::<_, i64>("SELECT count(*) FROM cloud_sources").fetch_one(&pool).await.unwrap(), 0);
-        let mut bad = input.clone(); bad["config"] = "wrong".into();
+        assert_eq!(status, 400);
+        assert!(error.contains("config"));
+        assert!(!error.contains("sentinel"));
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM cloud_sources")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            0
+        );
+        let mut bad = input.clone();
+        bad["config"] = "wrong".into();
         assert_eq!(send(addr, "POST", base, &bad.to_string()).await.0, 400);
-        bad = input.clone(); bad["roots"][0]["remote_id"] = "../escape".into();
+        bad = input.clone();
+        bad["roots"][0]["remote_id"] = "../escape".into();
         assert_eq!(send(addr, "POST", base, &bad.to_string()).await.0, 400);
-        bad = input.clone(); bad["secret"] = r#"{"refresh_token":"sentinel-secret"}"#.into();
+        bad = input.clone();
+        bad["secret"] = r#"{"refresh_token":"sentinel-secret"}"#.into();
         assert_eq!(send(addr, "POST", base, &bad.to_string()).await.0, 400);
         let (status, body) = send(addr, "POST", base, &input.to_string()).await;
-        assert_eq!(status, 200, "{body}"); assert!(!body.contains("sentinel-secret"));
+        assert_eq!(status, 200, "{body}");
+        assert!(!body.contains("sentinel-secret"));
         let source: serde_json::Value = serde_json::from_str(&body).unwrap();
         let roots = format!("{base}/{}/roots", source["id"].as_str().unwrap());
-        let (status, before) = send(addr, "GET", &roots, "").await; assert_eq!(status, 200);
-        let (status, error) = send(addr, "POST", &roots, r#"{"remote_id":"folder","remote_path":"/../x","display_path":"/x"}"#).await;
-        assert_eq!(status, 400); assert!(error.contains("remote_path"));
+        let (status, before) = send(addr, "GET", &roots, "").await;
+        assert_eq!(status, 200);
+        let (status, error) = send(
+            addr,
+            "POST",
+            &roots,
+            r#"{"remote_id":"folder","remote_path":"/../x","display_path":"/x"}"#,
+        )
+        .await;
+        assert_eq!(status, 400);
+        assert!(error.contains("remote_path"));
         assert_eq!(send(addr, "GET", &roots, "").await.1, before);
-        let root_id = serde_json::from_str::<serde_json::Value>(&before).unwrap()[0]["id"].as_str().unwrap().to_string();
+        let root_id = serde_json::from_str::<serde_json::Value>(&before).unwrap()[0]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
         let root_url = format!("/api/v1/cloud/roots/{root_id}");
-        assert_eq!(send(addr, "PATCH", &root_url, r#"{"display_path":"/../bad","enabled":false}"#).await.0, 400);
+        assert_eq!(
+            send(
+                addr,
+                "PATCH",
+                &root_url,
+                r#"{"display_path":"/../bad","enabled":false}"#
+            )
+            .await
+            .0,
+            400
+        );
         assert_eq!(send(addr, "GET", &roots, "").await.1, before);
         for (auth, secret) in [("access_token", "sentinel-token".to_string()), ("service_account", serde_json::json!({"client_email":"account@example.com","private_key":"sentinel-key"}).to_string())] {
             let mut valid = input.clone(); valid["auth_type"] = auth.into(); valid["secret"] = secret.into(); valid["roots"] = serde_json::json!([]);
             assert_eq!(send(addr, "POST", base, &valid.to_string()).await.0, 200);
         }
-        let readback = send(addr, "GET", base, "").await.1; assert!(!readback.contains("sentinel"));
-        server.abort(); pool.close().await;
+        let readback = send(addr, "GET", base, "").await.1;
+        assert!(!readback.contains("sentinel"));
+        server.abort();
+        pool.close().await;
         let reopened = db::init(&dir).await.unwrap();
         assert_eq!(db::list_cloud_sources(&reopened).await.unwrap().len(), 3);
-        reopened.close().await; std::fs::remove_dir_all(dir).unwrap();
+        reopened.close().await;
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]
@@ -3993,16 +4270,28 @@ mod auto_build_api_tests {
         assert_eq!(settings_request(addr, "PUT", valid).await.0, 200);
         let before = settings_request(addr, "GET", "").await;
         assert_eq!(before.0, 200);
-        assert_eq!(serde_json::from_str::<serde_json::Value>(&before.1).unwrap(), serde_json::from_str::<serde_json::Value>(valid).unwrap());
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&before.1).unwrap(),
+            serde_json::from_str::<serde_json::Value>(valid).unwrap()
+        );
         for (body, field) in [
-            (r#"{"audio_language":"abcdefghijklmnopq"}"#, "audio_language"),
-            (r#"{"subtitle_language":"abcdefghijklmnopq"}"#, "subtitle_language"),
+            (
+                r#"{"audio_language":"abcdefghijklmnopq"}"#,
+                "audio_language",
+            ),
+            (
+                r#"{"subtitle_language":"abcdefghijklmnopq"}"#,
+                "subtitle_language",
+            ),
             (r#"{"audio_language":42}"#, "audio_language"),
             (r#"{"subtitle_language":[]}"#, "subtitle_language"),
             (r#"{"subtitle_mode":"secret-token"}"#, "subtitle_mode"),
             (r#"{"subtitle_mode":false}"#, "subtitle_mode"),
             (r#"{"audio_language":"secret-token\nX"}"#, "audio_language"),
-            (r#"{"audio_language":"secret-token", "subtitle_mode": "bad"}"#, "subtitle_mode"),
+            (
+                r#"{"audio_language":"secret-token", "subtitle_mode": "bad"}"#,
+                "subtitle_mode",
+            ),
         ] {
             let (status, error) = settings_request(addr, "PUT", body).await;
             assert_eq!(status, 400, "{field}");
@@ -4013,7 +4302,10 @@ mod auto_build_api_tests {
         server.abort();
         pool.close().await;
         let reopened = db::init(&dir).await.unwrap();
-        assert_eq!(serde_json::to_value(db::language_settings(&reopened).await.unwrap()).unwrap(), serde_json::from_str::<serde_json::Value>(valid).unwrap());
+        assert_eq!(
+            serde_json::to_value(db::language_settings(&reopened).await.unwrap()).unwrap(),
+            serde_json::from_str::<serde_json::Value>(valid).unwrap()
+        );
         reopened.close().await;
         tokio::fs::remove_dir_all(dir).await.unwrap();
     }
