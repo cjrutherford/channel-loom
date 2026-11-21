@@ -219,17 +219,47 @@ pub async fn init(data_dir: &Path) -> Result<SqlitePool> {
     let db_path = data_dir.join("awesometv.db");
     let pending = data_dir.join("restore.pending");
     if pending.is_file() {
+        crate::backup::validate(&pending)
+            .await
+            .context("validate pending restore")?;
+        // Fold any committed WAL into the old database before preserving it.
         if db_path.is_file() {
-            let stamp = time::OffsetDateTime::now_utc().unix_timestamp();
-            let previous = data_dir.join(format!("awesometv.pre-restore.{stamp}.db"));
-            std::fs::rename(&db_path, &previous).with_context(|| {
-                format!("preserve database before restore: {}", previous.display())
-            })?;
+            let options = sqlx::sqlite::SqliteConnectOptions::new().filename(&db_path);
+            let old = SqlitePoolOptions::new()
+                .max_connections(1)
+                .connect_with(options)
+                .await?;
+            let checkpoint: (i64, i64, i64) = sqlx::query_as("PRAGMA wal_checkpoint(TRUNCATE)")
+                .fetch_one(&old)
+                .await?;
+            anyhow::ensure!(
+                checkpoint.0 == 0,
+                "cannot checkpoint existing database before restore"
+            );
+            old.close().await;
+            // Remove checkpointed sidecars before replacing the database.
+            for suffix in ["awesometv.db-wal", "awesometv.db-shm"] {
+                match std::fs::remove_file(data_dir.join(suffix)) {
+                    Ok(()) => (),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+                    Err(error) => return Err(error).context("remove old SQLite sidecar"),
+                }
+            }
+            let previous =
+                data_dir.join(format!("awesometv.pre-restore.{}.db", uuid::Uuid::new_v4()));
+            std::fs::rename(&db_path, &previous).context("preserve database before restore")?;
+            if let Err(error) = std::fs::rename(&pending, &db_path) {
+                std::fs::rename(&previous, &db_path).context("roll back failed restore")?;
+                return Err(error).context("apply restore");
+            }
+        } else {
+            anyhow::ensure!(
+                !data_dir.join("awesometv.db-wal").exists()
+                    && !data_dir.join("awesometv.db-shm").exists(),
+                "orphaned SQLite sidecars require operator inspection before restore"
+            );
+            std::fs::rename(&pending, &db_path).context("apply restore")?;
         }
-        std::fs::rename(&pending, &db_path)
-            .with_context(|| format!("apply restore {}", pending.display()))?;
-        let _ = std::fs::remove_file(data_dir.join("awesometv.db-wal"));
-        let _ = std::fs::remove_file(data_dir.join("awesometv.db-shm"));
     }
     let url = format!("sqlite://{}?mode=rwc", db_path.display());
     let pool = SqlitePoolOptions::new()
@@ -485,6 +515,10 @@ pub async fn init(data_dir: &Path) -> Result<SqlitePool> {
     )
     .execute(&pool)
     .await?;
+
+    // Absence means unowned, including all legacy and manually created timelines.
+    sqlx::query("CREATE TABLE IF NOT EXISTS generated_timeline_state (channel_id TEXT PRIMARY KEY, definition_version TEXT NOT NULL, boundary_ms INTEGER NOT NULL, continuation_json TEXT NOT NULL)")
+        .execute(&pool).await?;
 
     sqlx::query(
         "CREATE INDEX IF NOT EXISTS idx_channel_items_time ON channel_items(channel_id, start_ms, end_ms);",
@@ -816,6 +850,54 @@ pub async fn init(data_dir: &Path) -> Result<SqlitePool> {
         .execute(&pool)
         .await?;
     }
+    if !precache_columns
+        .iter()
+        .any(|row| row.get::<String, _>("name") == "identity_known")
+    {
+        sqlx::query(
+            "ALTER TABLE precache_entries ADD COLUMN identity_known INTEGER NOT NULL DEFAULT 1",
+        )
+        .execute(&pool)
+        .await?;
+        // Rows produced by the previous planner carry these explicit diagnostics.
+        sqlx::query("UPDATE precache_entries SET identity_known = 0 WHERE status = 'queued' AND error IN ('source mtime unavailable', 'source size and mtime unavailable')").execute(&pool).await?;
+    }
+    if !precache_columns
+        .iter()
+        .any(|row| row.get::<String, _>("name") == "retry_count")
+    {
+        sqlx::query(
+            "ALTER TABLE precache_entries ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0",
+        )
+        .execute(&pool)
+        .await?;
+    }
+    if !precache_columns
+        .iter()
+        .any(|row| row.get::<String, _>("name") == "generation")
+    {
+        sqlx::query("ALTER TABLE precache_entries ADD COLUMN generation TEXT NOT NULL DEFAULT ''")
+            .execute(&pool)
+            .await?;
+    }
+    if !precache_columns
+        .iter()
+        .any(|row| row.get::<String, _>("name") == "last_attempt_order")
+    {
+        sqlx::query(
+            "ALTER TABLE precache_entries ADD COLUMN last_attempt_order INTEGER NOT NULL DEFAULT 0",
+        )
+        .execute(&pool)
+        .await?;
+    }
+    sqlx::query(
+        "UPDATE precache_entries SET generation = lower(hex(randomblob(16))) WHERE generation = ''",
+    )
+    .execute(&pool)
+    .await?;
+    // Existing databases retain their original column default; repair any legacy writer atomically.
+    sqlx::query("CREATE TRIGGER IF NOT EXISTS precache_generation_insert AFTER INSERT ON precache_entries WHEN NEW.generation = '' BEGIN UPDATE precache_entries SET generation=lower(hex(randomblob(16))) WHERE media_id=NEW.media_id AND generation=''; END").execute(&pool).await?;
+    sqlx::query("CREATE TRIGGER IF NOT EXISTS precache_generation_update AFTER UPDATE OF generation ON precache_entries WHEN NEW.generation = '' BEGIN UPDATE precache_entries SET generation=lower(hex(randomblob(16))) WHERE media_id=NEW.media_id AND generation=''; END").execute(&pool).await?;
     let media_columns = sqlx::query("PRAGMA table_info(media_items)")
         .fetch_all(&pool)
         .await?;
@@ -918,6 +1000,44 @@ pub async fn init(data_dir: &Path) -> Result<SqlitePool> {
         .await?;
     }
 
+    // A monotonic revision catches edits (including change-and-revert) while a
+    // renewal reads its inputs across multiple connections. SQLite triggers
+    // participate in the writer's transaction and also cover direct SQL edits.
+    sqlx::query("CREATE TABLE IF NOT EXISTS renewal_input_revision (id INTEGER PRIMARY KEY CHECK (id = 1), revision INTEGER NOT NULL)").execute(&pool).await?;
+    sqlx::query("INSERT OR IGNORE INTO renewal_input_revision VALUES (1, 0)")
+        .execute(&pool)
+        .await?;
+    for table in [
+        "channels",
+        "channel_classic_items",
+        "channel_blocks",
+        "schedule_overrides",
+        "collections",
+        "collection_items",
+        "media_items",
+        "media_chapters",
+    ] {
+        for operation in ["INSERT", "UPDATE", "DELETE"] {
+            let trigger = format!(
+                "CREATE TRIGGER IF NOT EXISTS renewal_revision_{table}_{operation} AFTER {operation} ON {table} BEGIN UPDATE renewal_input_revision SET revision = revision + 1 WHERE id = 1; END"
+            );
+            sqlx::query(&trigger).execute(&pool).await?;
+        }
+    }
+
+    sqlx::query("CREATE TABLE IF NOT EXISTS rebuild_timeline_revision (id INTEGER PRIMARY KEY CHECK (id = 1), revision INTEGER NOT NULL)").execute(&pool).await?;
+    sqlx::query("INSERT OR IGNORE INTO rebuild_timeline_revision VALUES (1, 0)")
+        .execute(&pool)
+        .await?;
+    for table in ["channel_items", "generated_timeline_state"] {
+        for operation in ["INSERT", "UPDATE", "DELETE"] {
+            let trigger = format!(
+                "CREATE TRIGGER IF NOT EXISTS rebuild_revision_{table}_{operation} AFTER {operation} ON {table} BEGIN UPDATE rebuild_timeline_revision SET revision = revision + 1 WHERE id = 1; END"
+            );
+            sqlx::query(&trigger).execute(&pool).await?;
+        }
+    }
+
     Ok(pool)
 }
 
@@ -953,6 +1073,33 @@ pub async fn upsert_media(pool: &SqlitePool, media: &Media) -> Result<()> {
     Ok(())
 }
 
+// Scan ownership is scoped by canonical root and kind; media rows are never deleted.
+pub async fn reconcile_local_scan(
+    pool: &SqlitePool,
+    root: &str,
+    kind: &str,
+    media: &[Media],
+    complete: bool,
+) -> Result<Vec<String>> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("CREATE TABLE IF NOT EXISTS local_scan_inventory (root TEXT NOT NULL, kind TEXT NOT NULL, path TEXT NOT NULL, missing INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(root, kind, path))").execute(&mut *tx).await?;
+    if complete {
+        sqlx::query("UPDATE local_scan_inventory SET missing = 1 WHERE root = ? AND kind = ?")
+            .bind(root)
+            .bind(kind)
+            .execute(&mut *tx)
+            .await?;
+    }
+    for item in media {
+        sqlx::query("INSERT INTO local_scan_inventory(root, kind, path, missing) VALUES (?, ?, ?, 0) ON CONFLICT(root, kind, path) DO UPDATE SET missing = 0")
+            .bind(root).bind(kind).bind(&item.path).execute(&mut *tx).await?;
+    }
+    let missing: Vec<String> = sqlx::query_scalar("SELECT path FROM local_scan_inventory WHERE root = ? AND kind = ? AND missing = 1 ORDER BY path")
+        .bind(root).bind(kind).fetch_all(&mut *tx).await?;
+    tx.commit().await?;
+    Ok(missing)
+}
+
 pub async fn list_media(pool: &SqlitePool) -> Result<Vec<Media>> {
     let rows = sqlx::query(
         "SELECT id, path, title, kind, duration_ms, width, height, video_codec, audio_codec, size_bytes FROM media_items ORDER BY kind, title COLLATE NOCASE",
@@ -977,6 +1124,69 @@ pub async fn list_media(pool: &SqlitePool) -> Result<Vec<Media>> {
         .collect())
 }
 
+pub(crate) async fn publish_auto_channels(
+    pool: &SqlitePool,
+    entries: &[(
+        String,
+        String,
+        ClassicItemInput,
+        crate::programming::StagedClassic,
+    )],
+    revision: (i64, i64),
+) -> Result<Vec<Channel>> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("UPDATE renewal_input_revision SET revision = revision WHERE id = 1")
+        .execute(&mut *tx)
+        .await?;
+    let actual: (i64, i64) = sqlx::query_as("SELECT (SELECT revision FROM renewal_input_revision WHERE id = 1), revision FROM rebuild_timeline_revision WHERE id = 1").fetch_one(&mut *tx).await?;
+    if actual != revision {
+        bail!("auto-build inputs changed; retry the request");
+    }
+    let existing = sqlx::query("SELECT number, name FROM channels")
+        .fetch_all(&mut *tx)
+        .await?;
+    for (number, name, _, _) in entries {
+        if existing
+            .iter()
+            .any(|r| r.get::<String, _>("number").parse::<i64>().ok() == number.parse::<i64>().ok())
+        {
+            bail!("channel number '{number}' is already in use; retry the request");
+        }
+        if existing
+            .iter()
+            .any(|r| r.get::<String, _>("name").eq_ignore_ascii_case(name))
+        {
+            bail!("channel name '{name}' is already in use; retry the request");
+        }
+    }
+    let mut ids = Vec::new();
+    for (number, name, input, staged) in entries {
+        let id = Uuid::new_v4().to_string();
+        sqlx::query("INSERT INTO channels (id, number, name, start_ms, created_at, schedule_mode, subtitle_mode) VALUES (?, ?, ?, ?, ?, 'classic', 'inherit')")
+            .bind(&id).bind(number).bind(name).bind(staged.start_ms).bind(now_ms()).execute(&mut *tx).await?;
+        sqlx::query("INSERT INTO channel_classic_items (id, channel_id, position, collection_id, mode, count, duration_minutes, filler_collection_id, mid_roll_interval_minutes, mid_roll_duration_seconds, chapter_breaks, break_markers, play_order) VALUES (?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+            .bind(Uuid::new_v4().to_string()).bind(&id).bind(&input.collection_id).bind(&input.mode).bind(input.count).bind(input.duration_minutes).bind(&input.filler_collection_id).bind(input.mid_roll_interval_minutes).bind(input.mid_roll_duration_seconds).bind(input.chapter_breaks).bind(serde_json::to_string(&input.break_markers)?).bind(&input.order).execute(&mut *tx).await?;
+        for (position, item) in staged.items.iter().enumerate() {
+            sqlx::query("INSERT INTO channel_items (channel_id, position, media_id, title, start_ms, end_ms, in_ms, out_ms, kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+                .bind(&id).bind(position as i64).bind(&item.media_id).bind(&item.title).bind(item.start_ms).bind(item.end_ms).bind(item.in_ms).bind(item.out_ms).bind(&item.kind).execute(&mut *tx).await?;
+        }
+        sqlx::query("INSERT INTO generated_timeline_state (channel_id, definition_version, boundary_ms, continuation_json) VALUES (?, ?, ?, ?)")
+            .bind(&id).bind(&staged.state.definition_version).bind(staged.state.boundary_ms).bind(&staged.state.continuation_json).execute(&mut *tx).await?;
+        ids.push(id);
+    }
+    let mut channels = Vec::new();
+    for id in ids {
+        channels.push(
+            channel_by_id_on(&mut tx, &id)
+                .await?
+                .context("channel disappeared before creation")?,
+        );
+    }
+    tx.commit().await?;
+    Ok(channels)
+}
+
+#[cfg(test)]
 pub async fn create_channel_shell(pool: &SqlitePool, number: &str, name: &str) -> Result<Channel> {
     let id = Uuid::new_v4().to_string();
     let start_ms = now_ms();
@@ -1080,10 +1290,15 @@ pub async fn create_channel(
 }
 
 pub async fn list_channels(pool: &SqlitePool) -> Result<Vec<Channel>> {
+    let mut conn = pool.acquire().await?;
+    list_channels_on(&mut conn).await
+}
+
+async fn list_channels_on(conn: &mut sqlx::SqliteConnection) -> Result<Vec<Channel>> {
     let rows = sqlx::query(
         "SELECT id, number, name, start_ms, schedule_mode, graphics_text, graphics_position, graphics_opacity, graphics_size, watermark_media_id, watermark_position, watermark_opacity, watermark_scale, lower_third_text, lower_third_size, lower_third_opacity, stream_width, stream_height, stream_preset, stream_crf, stream_max_kbps, stream_audio_kbps, audio_language, subtitle_mode, subtitle_language, hdr_mode, encoder, segment_seconds, prebuffer_seconds, cache_segments, prewarm FROM channels ORDER BY CAST(number AS INTEGER), number",
     )
-    .fetch_all(pool)
+    .fetch_all(conn)
     .await?;
     Ok(rows
         .into_iter()
@@ -1207,7 +1422,10 @@ fn merge_guide_blocks(items: Vec<ChannelItem>) -> Vec<ChannelItem> {
             let can_merge = {
                 let previous = &merged[position];
                 previous.media_id == item.media_id
-                    && item.start_ms.saturating_sub(previous.end_ms) <= MAX_BREAK_GAP_MS
+                    && previous.out_ms == Some(item.in_ms)
+                    && item.in_ms > previous.in_ms
+                    && (0..=MAX_BREAK_GAP_MS)
+                        .contains(&item.start_ms.saturating_sub(previous.end_ms))
             };
             if can_merge {
                 // Drop the short break items between the two program segments.
@@ -1373,6 +1591,178 @@ pub struct TimelineWrite {
     pub kind: String,
 }
 
+/// An opaque definition/epoch version and serialized generator state. A null cursor
+/// records that rebuild does not yet supply resumable mode-specific cursors.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct GeneratedTimelineState {
+    pub definition_version: String,
+    pub boundary_ms: i64,
+    pub continuation_json: String,
+}
+
+pub(crate) async fn generated_timeline_state(
+    pool: &SqlitePool,
+    channel_id: &str,
+) -> Result<Option<GeneratedTimelineState>> {
+    let row = sqlx::query("SELECT definition_version, boundary_ms, continuation_json FROM generated_timeline_state WHERE channel_id = ?")
+        .bind(channel_id).fetch_optional(pool).await?;
+    Ok(row.map(|r| GeneratedTimelineState {
+        definition_version: r.get(0),
+        boundary_ms: r.get(1),
+        continuation_json: r.get(2),
+    }))
+}
+
+pub(crate) async fn renewal_input_revision(pool: &SqlitePool) -> Result<i64> {
+    Ok(
+        sqlx::query_scalar("SELECT revision FROM renewal_input_revision WHERE id = 1")
+            .fetch_one(pool)
+            .await?,
+    )
+}
+
+pub(crate) async fn rebuild_revision(pool: &SqlitePool) -> Result<(i64, i64)> {
+    let row = sqlx::query_as("SELECT (SELECT revision FROM renewal_input_revision WHERE id = 1), revision FROM rebuild_timeline_revision WHERE id = 1").fetch_one(pool).await?;
+    Ok(row)
+}
+
+/// Compare under the SQLite write lock. Stale requests (including retries) fail
+/// without writing; the caller can reload state to distinguish a prior success.
+#[cfg(test)]
+pub(crate) async fn compare_append_generated_timeline(
+    pool: &SqlitePool,
+    channel_id: &str,
+    expected: &GeneratedTimelineState,
+    items: &[TimelineWrite],
+    next: &GeneratedTimelineState,
+) -> Result<()> {
+    compare_append_generated_timeline_guarded(pool, channel_id, expected, items, next, None, None)
+        .await
+}
+
+#[cfg(test)]
+pub(crate) async fn compare_append_generated_timeline_with_overrides(
+    pool: &SqlitePool,
+    channel_id: &str,
+    expected: &GeneratedTimelineState,
+    items: &[TimelineWrite],
+    next: &GeneratedTimelineState,
+    overrides: Option<&[ScheduleOverride]>,
+) -> Result<()> {
+    compare_append_generated_timeline_guarded(
+        pool, channel_id, expected, items, next, overrides, None,
+    )
+    .await
+}
+
+pub(crate) async fn compare_append_generated_timeline_guarded(
+    pool: &SqlitePool,
+    channel_id: &str,
+    expected: &GeneratedTimelineState,
+    items: &[TimelineWrite],
+    next: &GeneratedTimelineState,
+    overrides: Option<&[ScheduleOverride]>,
+    revision: Option<i64>,
+) -> Result<()> {
+    serde_json::from_str::<serde_json::Value>(&next.continuation_json)?;
+    if items.is_empty()
+        || next.definition_version.is_empty()
+        || next.boundary_ms <= expected.boundary_ms
+    {
+        bail!("invalid generated append");
+    }
+    let mut cursor = expected.boundary_ms;
+    for item in items {
+        if item.start_ms != cursor || item.end_ms <= item.start_ms {
+            bail!("generated append is not contiguous");
+        }
+        cursor = item.end_ms;
+    }
+    if cursor != next.boundary_ms {
+        bail!("generated append boundary mismatch");
+    }
+    let mut tx = pool.begin().await?;
+    // First statement acquires a write lock before any read, avoiding a deferred
+    // transaction's read-to-write upgrade race between competing renewals.
+    sqlx::query(
+        "UPDATE generated_timeline_state SET boundary_ms = boundary_ms WHERE channel_id = ?",
+    )
+    .bind(channel_id)
+    .execute(&mut *tx)
+    .await?;
+    if let Some(expected_revision) = revision {
+        let actual: i64 =
+            sqlx::query_scalar("SELECT revision FROM renewal_input_revision WHERE id = 1")
+                .fetch_one(&mut *tx)
+                .await?;
+        if actual != expected_revision {
+            bail!("renewal inputs changed during generation");
+        }
+    }
+    let row = sqlx::query("SELECT definition_version, boundary_ms, continuation_json FROM generated_timeline_state WHERE channel_id = ?")
+        .bind(channel_id).fetch_optional(&mut *tx).await?.context("timeline is not generated-owned")?;
+    if row.get::<String, _>(0) != expected.definition_version
+        || row.get::<i64, _>(1) != expected.boundary_ms
+        || row.get::<String, _>(2) != expected.continuation_json
+    {
+        bail!("generated timeline state changed");
+    }
+    if let Some(overrides) = overrides {
+        let rows = sqlx::query("SELECT id, name, start_date, end_date, priority, schedule_yaml FROM schedule_overrides WHERE channel_id = ? ORDER BY id")
+            .bind(channel_id).fetch_all(&mut *tx).await?;
+        let actual: Vec<(String, String, String, String, i64, String)> = rows
+            .iter()
+            .map(|r| (r.get(0), r.get(1), r.get(2), r.get(3), r.get(4), r.get(5)))
+            .collect();
+        let mut expected: Vec<_> = overrides
+            .iter()
+            .map(|r| {
+                (
+                    r.id.clone(),
+                    r.name.clone(),
+                    r.start_date.clone(),
+                    r.end_date.clone(),
+                    r.priority,
+                    r.schedule_yaml.clone(),
+                )
+            })
+            .collect();
+        expected.sort_by(|a, b| a.0.cmp(&b.0));
+        if actual != expected {
+            bail!("override definitions changed during renewal");
+        }
+    }
+    let rows = sqlx::query("SELECT position, start_ms, end_ms FROM channel_items WHERE channel_id = ? ORDER BY start_ms, position")
+        .bind(channel_id).fetch_all(&mut *tx).await?;
+    if rows.is_empty() {
+        bail!("generated timeline is empty");
+    }
+    let mut last = None;
+    let mut max_position = -1i64;
+    for row in rows {
+        let (position, start, end): (i64, i64, i64) = (row.get(0), row.get(1), row.get(2));
+        if end <= start || last.is_some_and(|v| v != start) {
+            bail!("published timeline has gaps or overlaps");
+        }
+        last = Some(end);
+        max_position = max_position.max(position);
+    }
+    if last != Some(expected.boundary_ms) {
+        bail!("published boundary changed");
+    }
+    for (index, item) in items.iter().enumerate() {
+        let position = max_position
+            .checked_add(index as i64 + 1)
+            .context("timeline position overflow")?;
+        sqlx::query("INSERT INTO channel_items (channel_id, position, media_id, title, start_ms, end_ms, in_ms, out_ms, kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+            .bind(channel_id).bind(position).bind(&item.media_id).bind(&item.title).bind(item.start_ms).bind(item.end_ms).bind(item.in_ms).bind(item.out_ms).bind(&item.kind).execute(&mut *tx).await?;
+    }
+    sqlx::query("UPDATE generated_timeline_state SET definition_version = ?, boundary_ms = ?, continuation_json = ? WHERE channel_id = ?")
+        .bind(&next.definition_version).bind(next.boundary_ms).bind(&next.continuation_json).bind(channel_id).execute(&mut *tx).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
 pub async fn replace_channel_timeline(
     pool: &SqlitePool,
     channel_id: &str,
@@ -1380,6 +1770,10 @@ pub async fn replace_channel_timeline(
     start_ms: i64,
 ) -> Result<()> {
     let mut tx = pool.begin().await?;
+    sqlx::query("DELETE FROM generated_timeline_state WHERE channel_id = ?")
+        .bind(channel_id)
+        .execute(&mut *tx)
+        .await?;
     sqlx::query("DELETE FROM channel_items WHERE channel_id = ?")
         .bind(channel_id)
         .execute(&mut *tx)
@@ -1471,6 +1865,8 @@ pub struct PrecacheEntry {
     pub source_path: String,
     pub source_size: i64,
     pub source_mtime: i64,
+    pub identity_known: bool,
+    pub generation: String,
     pub cache_path: Option<String>,
     pub mode: String,
     pub status: String,
@@ -1485,6 +1881,8 @@ pub struct PrecacheEntry {
 
 #[derive(Debug, Clone)]
 pub struct UpcomingMedia {
+    pub channel_id: String,
+    pub end_ms: i64,
     pub media_id: String,
     pub path: String,
     pub duration_ms: i64,
@@ -1500,6 +1898,8 @@ fn precache_row(row: &sqlx::sqlite::SqliteRow) -> PrecacheEntry {
         source_path: row.get("source_path"),
         source_size: row.get("source_size"),
         source_mtime: row.get("source_mtime"),
+        identity_known: row.get::<i64, _>("identity_known") != 0,
+        generation: row.get("generation"),
         cache_path: row.get("cache_path"),
         mode: row.get("mode"),
         status: row.get("status"),
@@ -1520,9 +1920,9 @@ pub async fn upcoming_media(
     to_ms: i64,
 ) -> Result<Vec<UpcomingMedia>> {
     let rows = sqlx::query(
-        "SELECT ci.media_id, m.path, m.duration_ms, COALESCE(m.size_bytes, 0) AS size_bytes, ci.start_ms \
+        "SELECT ci.channel_id, ci.end_ms, ci.media_id, m.path, m.duration_ms, COALESCE(m.size_bytes, 0) AS size_bytes, ci.start_ms \
          FROM channel_items ci JOIN media_items m ON m.id = ci.media_id \
-         WHERE ci.start_ms >= ? AND ci.start_ms <= ? AND m.kind NOT IN ('music', 'image') \
+         WHERE ci.end_ms > ? AND ci.start_ms <= ? AND m.kind != 'image' \
          ORDER BY ci.start_ms",
     )
     .bind(from_ms)
@@ -1533,6 +1933,8 @@ pub async fn upcoming_media(
     Ok(rows
         .into_iter()
         .map(|row| UpcomingMedia {
+            channel_id: row.get("channel_id"),
+            end_ms: row.get("end_ms"),
             media_id: row.get("media_id"),
             path: row.get("path"),
             duration_ms: row.get("duration_ms"),
@@ -1542,23 +1944,108 @@ pub async fn upcoming_media(
         .collect())
 }
 
+/// One SQLite read transaction supplies revisions, channels, schedule, and cache entries.
+#[derive(Debug)]
+pub(crate) struct PrecacheSnapshot {
+    #[allow(dead_code)]
+    pub now_ms: i64,
+    #[allow(dead_code)]
+    pub revisions: (i64, i64),
+    pub channels: Vec<Channel>,
+    pub schedule: Vec<PrecacheScheduleRow>,
+    pub entries: Vec<PrecacheEntry>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct PrecacheScheduleRow {
+    pub in_ms: i64,
+    pub video_codec: Option<String>,
+    pub audio_codec: Option<String>,
+    pub media_kind: Option<String>,
+    pub channel_id: String,
+    pub media_id: String,
+    pub start_ms: i64,
+    pub end_ms: i64,
+    #[allow(dead_code)]
+    pub kind: String,
+    pub title: String,
+    pub path: Option<String>,
+    pub duration_ms: Option<i64>,
+    pub size_bytes: Option<i64>,
+}
+
+pub(crate) async fn precache_snapshot(
+    pool: &SqlitePool,
+    now: i64,
+    horizon: i64,
+) -> Result<PrecacheSnapshot> {
+    let mut tx = pool.begin().await?;
+    let snapshot = precache_snapshot_on(&mut tx, now, horizon).await?;
+    tx.commit().await?;
+    Ok(snapshot)
+}
+
+async fn precache_snapshot_on(
+    conn: &mut sqlx::SqliteConnection,
+    now: i64,
+    horizon: i64,
+) -> Result<PrecacheSnapshot> {
+    let revisions = sqlx::query_as("SELECT (SELECT revision FROM renewal_input_revision WHERE id = 1), revision FROM rebuild_timeline_revision WHERE id = 1")
+        .fetch_one(&mut *conn).await?;
+    let channels = list_channels_on(&mut *conn).await?;
+    // Keep the current row and its next two rows even outside the optional horizon.
+    let rows = sqlx::query("SELECT ci.in_ms, m.video_codec, m.audio_codec, m.kind AS media_kind, ci.channel_id, ci.end_ms, ci.media_id, ci.kind, COALESCE(m.title, ci.title, ci.media_id) AS title, m.path, m.duration_ms, m.size_bytes, ci.start_ms FROM channel_items ci LEFT JOIN media_items m ON m.id = ci.media_id WHERE ci.end_ms > ? AND (m.kind IS NULL OR m.kind != 'image') ORDER BY ci.channel_id, ci.start_ms, ci.position")
+        .bind(now).fetch_all(&mut *conn).await?;
+    let mut schedule = Vec::new();
+    let mut channel = String::new();
+    let mut after_current = None::<usize>;
+    for row in rows {
+        let item = PrecacheScheduleRow {
+            in_ms: row.get("in_ms"),
+            video_codec: row.get("video_codec"),
+            audio_codec: row.get("audio_codec"),
+            media_kind: row.get("media_kind"),
+            channel_id: row.get("channel_id"),
+            end_ms: row.get("end_ms"),
+            media_id: row.get("media_id"),
+            kind: row.get("kind"),
+            title: row.get("title"),
+            path: row.get("path"),
+            duration_ms: row.get("duration_ms"),
+            size_bytes: row.get("size_bytes"),
+            start_ms: row.get("start_ms"),
+        };
+        if item.channel_id != channel {
+            channel = item.channel_id.clone();
+            after_current = None;
+        }
+        if after_current.is_none() && item.start_ms <= now && item.end_ms > now {
+            after_current = Some(0);
+        }
+        let required = after_current.is_some_and(|n| n < 3);
+        if item.start_ms <= horizon || required {
+            schedule.push(item);
+        }
+        if let Some(n) = after_current.as_mut() {
+            *n += 1;
+        }
+    }
+    let rows = sqlx::query("SELECT p.*, COALESCE(m.title, p.media_id) AS title FROM precache_entries p LEFT JOIN media_items m ON m.id = p.media_id ORDER BY p.start_ms").fetch_all(&mut *conn).await?;
+    Ok(PrecacheSnapshot {
+        now_ms: now,
+        revisions,
+        channels,
+        schedule,
+        entries: rows.iter().map(precache_row).collect(),
+    })
+}
+
 pub async fn precache_entry(pool: &SqlitePool, media_id: &str) -> Result<Option<PrecacheEntry>> {
     let row = sqlx::query("SELECT * FROM precache_entries WHERE media_id = ? LIMIT 1")
         .bind(media_id)
         .fetch_optional(pool)
         .await?;
     Ok(row.as_ref().map(precache_row))
-}
-
-pub async fn precache_ready_path(pool: &SqlitePool, media_id: &str) -> Result<Option<String>> {
-    let row = sqlx::query(
-        "SELECT cache_path FROM precache_entries WHERE media_id = ? AND status = 'ready' AND cache_path IS NOT NULL LIMIT 1",
-    )
-    .bind(media_id)
-    .fetch_optional(pool)
-    .await?;
-    use sqlx::Row;
-    Ok(row.map(|row| row.get::<String, _>("cache_path")))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1576,13 +2063,14 @@ pub async fn upsert_precache(
     let now = now_ms();
     sqlx::query(
         "INSERT INTO precache_entries \
-         (media_id, source_path, source_size, source_mtime, cache_path, mode, status, bytes, error, start_ms, created_ms, updated_ms, last_used_ms, deadline_ms) \
-         VALUES (?, ?, ?, ?, ?, ?, 'queued', 0, NULL, ?, ?, ?, 0, ?) \
+         (media_id, source_path, source_size, source_mtime, cache_path, mode, status, bytes, error, start_ms, created_ms, updated_ms, last_used_ms, deadline_ms, generation) \
+         VALUES (?, ?, ?, ?, ?, ?, 'queued', 0, NULL, ?, ?, ?, 0, ?, ?) \
          ON CONFLICT(media_id) DO UPDATE SET \
            source_path = excluded.source_path, source_size = excluded.source_size, \
            source_mtime = excluded.source_mtime, cache_path = excluded.cache_path, \
-           mode = excluded.mode, status = 'queued', bytes = 0, error = NULL, \
-           start_ms = excluded.start_ms, deadline_ms = excluded.deadline_ms, updated_ms = excluded.updated_ms",
+           mode = excluded.mode, status = 'queued', bytes = CASE WHEN precache_entries.source_path = excluded.source_path AND precache_entries.source_size = excluded.source_size AND precache_entries.source_mtime = excluded.source_mtime AND precache_entries.cache_path IS excluded.cache_path AND precache_entries.mode = excluded.mode THEN precache_entries.bytes ELSE 0 END, error = NULL, identity_known = 1, \
+           start_ms = excluded.start_ms, deadline_ms = excluded.deadline_ms, updated_ms = excluded.updated_ms, generation = CASE WHEN precache_entries.source_path = excluded.source_path AND precache_entries.source_size = excluded.source_size AND precache_entries.source_mtime = excluded.source_mtime AND precache_entries.cache_path IS excluded.cache_path AND precache_entries.mode = excluded.mode AND precache_entries.generation != '' THEN precache_entries.generation ELSE excluded.generation END \
+         WHERE precache_entries.status != 'running' AND (precache_entries.status NOT IN ('queued', 'ready') OR precache_entries.source_path != excluded.source_path OR precache_entries.source_size != excluded.source_size OR precache_entries.source_mtime != excluded.source_mtime OR precache_entries.cache_path IS NOT excluded.cache_path OR precache_entries.mode != excluded.mode)",
     )
     .bind(media_id)
     .bind(source_path)
@@ -1594,6 +2082,7 @@ pub async fn upsert_precache(
     .bind(now)
     .bind(now)
     .bind(deadline_ms)
+    .bind(uuid::Uuid::new_v4().to_string())
     .execute(pool)
     .await?;
     Ok(())
@@ -1607,34 +2096,40 @@ pub async fn set_precache_status(
     error: Option<&str>,
 ) -> Result<()> {
     sqlx::query(
-        "UPDATE precache_entries SET status = ?, bytes = ?, error = ?, updated_ms = ? WHERE media_id = ?",
+        "UPDATE precache_entries SET status = ?, bytes = ?, error = ?, updated_ms = ?, retry_count = CASE WHEN ? = 'failed' THEN MIN(retry_count + 1, 5) WHEN ? = 'ready' THEN 0 ELSE retry_count END WHERE media_id = ?",
     )
     .bind(status)
     .bind(bytes)
     .bind(error)
     .bind(now_ms())
+    .bind(status)
+    .bind(status)
     .bind(media_id)
     .execute(pool)
     .await?;
     Ok(())
 }
 
-pub async fn set_precache_progress(pool: &SqlitePool, media_id: &str, bytes: i64) -> Result<()> {
-    sqlx::query("UPDATE precache_entries SET bytes = ?, updated_ms = ? WHERE media_id = ?")
+pub async fn invalidate_ready_precache(pool: &SqlitePool, media_id: &str) -> Result<bool> {
+    let result = sqlx::query("UPDATE precache_entries SET status = 'failed', bytes = 0, error = 'evicted', updated_ms = ? WHERE media_id = ? AND status = 'ready'")
+        .bind(now_ms()).bind(media_id).execute(pool).await?;
+    Ok(result.rows_affected() == 1)
+}
+
+pub async fn set_precache_progress(
+    pool: &SqlitePool,
+    media_id: &str,
+    generation: &str,
+    bytes: i64,
+) -> Result<()> {
+    let result = sqlx::query("UPDATE precache_entries SET bytes = ?, updated_ms = ? WHERE media_id = ? AND generation = ? AND status = 'running'")
         .bind(bytes)
         .bind(now_ms())
         .bind(media_id)
+        .bind(generation)
         .execute(pool)
         .await?;
-    Ok(())
-}
-
-pub async fn touch_precache(pool: &SqlitePool, media_id: &str) -> Result<()> {
-    sqlx::query("UPDATE precache_entries SET last_used_ms = ? WHERE media_id = ?")
-        .bind(now_ms())
-        .bind(media_id)
-        .execute(pool)
-        .await?;
+    anyhow::ensure!(result.rows_affected() == 1, "precache generation lost");
     Ok(())
 }
 
@@ -1669,43 +2164,128 @@ pub async fn precache_statuses(
         .collect())
 }
 
-pub async fn prune_precache_queue(pool: &SqlitePool, cutoff_ms: i64) -> Result<u64> {
-    let result =
-        sqlx::query("DELETE FROM precache_entries WHERE status = 'queued' AND start_ms < ?")
-            .bind(cutoff_ms)
-            .execute(pool)
-            .await?;
-    Ok(result.rows_affected())
+pub async fn prune_precache_queue(
+    pool: &SqlitePool,
+    cutoff_ms: i64,
+    protected: &std::collections::HashSet<String>,
+) -> Result<u64> {
+    let rows = sqlx::query("SELECT media_id, generation, updated_ms FROM precache_entries WHERE status = 'queued' AND NOT EXISTS (SELECT 1 FROM channel_items ci WHERE ci.media_id = precache_entries.media_id AND ci.end_ms > ?)")
+        .bind(cutoff_ms).fetch_all(pool).await?;
+    let mut removed = 0;
+    for row in rows {
+        let id: String = row.get("media_id");
+        if protected.contains(&id) {
+            continue;
+        }
+        removed += sqlx::query("DELETE FROM precache_entries WHERE media_id = ? AND status = 'queued' AND generation = ? AND updated_ms = ? AND NOT EXISTS (SELECT 1 FROM channel_items ci WHERE ci.media_id = precache_entries.media_id AND ci.end_ms > ?)")
+            .bind(id).bind(row.get::<String, _>("generation")).bind(row.get::<i64, _>("updated_ms")).bind(cutoff_ms).execute(pool).await?.rows_affected();
+    }
+    Ok(removed)
 }
 
-pub async fn trim_precache_queue(pool: &SqlitePool, keep: i64) -> Result<u64> {
-    let result = sqlx::query(
-        "DELETE FROM precache_entries WHERE status = 'queued' AND media_id NOT IN (\
-         SELECT media_id FROM precache_entries WHERE status = 'queued' ORDER BY deadline_ms, start_ms LIMIT ?)",
-    )
-    .bind(keep)
-    .execute(pool)
-    .await?;
-    Ok(result.rows_affected())
+pub async fn trim_precache_queue(
+    pool: &SqlitePool,
+    keep: i64,
+    protected: &std::collections::HashSet<String>,
+) -> Result<u64> {
+    let rows = sqlx::query("SELECT media_id, generation, updated_ms FROM precache_entries WHERE status = 'queued' ORDER BY deadline_ms, start_ms")
+        .fetch_all(pool).await?;
+    let optional_slots = (keep
+        - rows
+            .iter()
+            .filter(|row| protected.contains(&row.get::<String, _>("media_id")))
+            .count() as i64)
+        .max(0) as usize;
+    let mut removed = 0;
+    for row in rows
+        .iter()
+        .filter(|row| !protected.contains(&row.get::<String, _>("media_id")))
+        .skip(optional_slots)
+    {
+        removed += sqlx::query("DELETE FROM precache_entries WHERE media_id = ? AND status = 'queued' AND generation = ? AND updated_ms = ?")
+            .bind(row.get::<String, _>("media_id")).bind(row.get::<String, _>("generation")).bind(row.get::<i64, _>("updated_ms")).execute(pool).await?.rows_affected();
+    }
+    Ok(removed)
 }
 
+/// Hydrate only the exact queued generation observed by the worker.
+pub async fn hydrate_precache_identity(
+    pool: &SqlitePool,
+    entry: &PrecacheEntry,
+    size: i64,
+    mtime: i64,
+) -> Result<bool> {
+    let result = sqlx::query("UPDATE precache_entries SET generation = CASE WHEN source_mtime != 0 AND (source_size != ? OR source_mtime != ?) THEN lower(hex(randomblob(16))) ELSE generation END, source_size = ?, source_mtime = ?, identity_known = 1, error = NULL, updated_ms = ? WHERE media_id = ? AND status = 'queued' AND identity_known = 0 AND source_path = ? AND source_size = ? AND source_mtime = ? AND updated_ms = ? AND cache_path IS ? AND generation = ?")
+        .bind(size).bind(mtime).bind(size).bind(mtime).bind(now_ms()).bind(&entry.media_id).bind(&entry.source_path)
+        .bind(entry.source_size).bind(entry.source_mtime).bind(entry.updated_ms).bind(&entry.cache_path).bind(&entry.generation).execute(pool).await?;
+    Ok(result.rows_affected() == 1)
+}
+
+pub async fn fail_precache_identity(
+    pool: &SqlitePool,
+    entry: &PrecacheEntry,
+    error: &str,
+) -> Result<()> {
+    sqlx::query("UPDATE precache_entries SET status = 'failed', error = ?, updated_ms = ?, retry_count = MIN(retry_count + 1, 5) WHERE media_id = ? AND status = 'queued' AND identity_known = 0 AND source_path = ? AND source_size = ? AND source_mtime = ? AND updated_ms = ? AND cache_path IS ?")
+        .bind(error).bind(now_ms()).bind(&entry.media_id).bind(&entry.source_path).bind(entry.source_size).bind(entry.source_mtime).bind(entry.updated_ms).bind(&entry.cache_path).execute(pool).await?;
+    Ok(())
+}
+
+pub(crate) async fn claim_queued_precache(
+    pool: &SqlitePool,
+    entry: &PrecacheEntry,
+) -> Result<bool> {
+    let result = sqlx::query("UPDATE precache_entries SET status = 'running', error = NULL, updated_ms = ?, last_attempt_order = (SELECT COALESCE(MAX(last_attempt_order), 0) + 1 FROM precache_entries) WHERE media_id = ? AND status = 'queued' AND identity_known = 1 AND source_path = ? AND source_size = ? AND source_mtime = ? AND cache_path IS ? AND mode = ? AND updated_ms = ? AND generation = ?")
+        .bind(now_ms()).bind(&entry.media_id).bind(&entry.source_path).bind(entry.source_size)
+        .bind(entry.source_mtime).bind(&entry.cache_path).bind(&entry.mode).bind(entry.updated_ms).bind(&entry.generation)
+        .execute(pool).await?;
+    Ok(result.rows_affected() == 1)
+}
+
+pub(crate) async fn defer_queued_precache(
+    pool: &SqlitePool,
+    entry: &PrecacheEntry,
+    reason: &str,
+) -> Result<()> {
+    sqlx::query("UPDATE precache_entries SET error = ? WHERE media_id = ? AND status = 'queued' AND identity_known = 1 AND source_path = ? AND source_size = ? AND source_mtime = ? AND cache_path IS ? AND mode = ? AND updated_ms = ?")
+        .bind(reason).bind(&entry.media_id).bind(&entry.source_path).bind(entry.source_size)
+        .bind(entry.source_mtime).bind(&entry.cache_path).bind(&entry.mode).bind(entry.updated_ms)
+        .execute(pool).await?;
+    Ok(())
+}
+
+#[allow(dead_code)]
 pub async fn next_queued_precache(
     pool: &SqlitePool,
     not_before_ms: i64,
     allow_proxy: bool,
 ) -> Result<Option<PrecacheEntry>> {
     let sql = if allow_proxy {
-        "SELECT * FROM precache_entries WHERE status = 'queued' AND deadline_ms >= ? \
-         ORDER BY deadline_ms, start_ms LIMIT 1"
+        "SELECT * FROM precache_entries WHERE status = 'queued' AND ? >= 0 \
+         ORDER BY start_ms, deadline_ms LIMIT 1"
     } else {
-        "SELECT * FROM precache_entries WHERE status = 'queued' AND mode != 'proxy' AND deadline_ms >= ? \
-         ORDER BY deadline_ms, start_ms LIMIT 1"
+        "SELECT * FROM precache_entries WHERE status = 'queued' AND mode != 'proxy' AND ? >= 0 \
+         ORDER BY start_ms, deadline_ms LIMIT 1"
     };
     let row = sqlx::query(sql)
         .bind(not_before_ms)
         .fetch_optional(pool)
         .await?;
     Ok(row.as_ref().map(precache_row))
+}
+
+/// Select a queued entry in a mandatory tier, preserving queue order.
+pub async fn next_queued_precache_in(
+    pool: &SqlitePool,
+    ids: &[String],
+    allow_proxy: bool,
+) -> Result<Option<PrecacheEntry>> {
+    let rows = sqlx::query("SELECT * FROM precache_entries WHERE status = 'queued' ORDER BY last_attempt_order, start_ms, deadline_ms, media_id")
+        .fetch_all(pool).await?;
+    Ok(rows
+        .iter()
+        .map(precache_row)
+        .find(|entry| ids.contains(&entry.media_id) && (allow_proxy || entry.mode != "proxy")))
 }
 
 pub async fn reset_running_precache(pool: &SqlitePool) -> Result<()> {
@@ -1716,25 +2296,6 @@ pub async fn reset_running_precache(pool: &SqlitePool) -> Result<()> {
     .execute(pool)
     .await?;
     Ok(())
-}
-
-pub async fn ready_precache_sizes(pool: &SqlitePool) -> Result<Vec<(String, i64, i64)>> {
-    let rows = sqlx::query(
-        "SELECT media_id, bytes, last_used_ms FROM precache_entries WHERE status = 'ready'",
-    )
-    .fetch_all(pool)
-    .await?;
-    use sqlx::Row;
-    Ok(rows
-        .into_iter()
-        .map(|row| {
-            (
-                row.get::<String, _>("media_id"),
-                row.get::<i64, _>("bytes"),
-                row.get::<i64, _>("last_used_ms"),
-            )
-        })
-        .collect())
 }
 
 pub async fn delete_precache(pool: &SqlitePool, media_id: &str) -> Result<Option<String>> {
@@ -2256,16 +2817,6 @@ pub async fn cloud_source_secret(pool: &SqlitePool, id: &str) -> Result<Option<S
     Ok(row.and_then(|row| row.get::<Option<String>, _>("secret_blob")))
 }
 
-pub async fn record_cloud_sync(pool: &SqlitePool, id: &str, error: Option<&str>) -> Result<()> {
-    sqlx::query("UPDATE cloud_sources SET last_sync_at = ?, last_error = ? WHERE id = ?")
-        .bind(now_ms())
-        .bind(error)
-        .bind(id)
-        .execute(pool)
-        .await?;
-    Ok(())
-}
-
 pub async fn delete_cloud_source(pool: &SqlitePool, id: &str) -> Result<()> {
     let media_ids: Vec<String> =
         sqlx::query("SELECT media_id FROM cloud_media WHERE source_id = ?")
@@ -2306,6 +2857,7 @@ pub async fn delete_cloud_source(pool: &SqlitePool, id: &str) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 pub async fn stale_cloud_media(
     pool: &SqlitePool,
     source_id: &str,
@@ -2321,6 +2873,7 @@ pub async fn stale_cloud_media(
     Ok(rows.into_iter().map(|row| row.get("media_id")).collect())
 }
 
+#[cfg(test)]
 pub async fn delete_cloud_media(pool: &SqlitePool, media_id: &str) -> Result<Option<String>> {
     let cache_path: Option<String> =
         sqlx::query("SELECT cache_path FROM cloud_media WHERE media_id = ? LIMIT 1")
@@ -2459,24 +3012,6 @@ pub async fn delete_cloud_root(pool: &SqlitePool, id: &str) -> Result<()> {
     Ok(())
 }
 
-pub async fn upsert_cloud_media(pool: &SqlitePool, media: &NewCloudMedia) -> Result<()> {
-    sqlx::query(
-        "INSERT INTO cloud_media (media_id, source_id, remote_id, remote_path, size_bytes, mime_type, etag, remote_modified_at, cache_state, last_seen_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'none', ?) ON CONFLICT(media_id) DO UPDATE SET remote_path = excluded.remote_path, size_bytes = excluded.size_bytes, mime_type = excluded.mime_type, etag = excluded.etag, remote_modified_at = excluded.remote_modified_at, last_seen_at = excluded.last_seen_at",
-    )
-    .bind(&media.media_id)
-    .bind(&media.source_id)
-    .bind(&media.remote_id)
-    .bind(&media.remote_path)
-    .bind(media.size_bytes)
-    .bind(&media.mime_type)
-    .bind(&media.etag)
-    .bind(media.remote_modified_at)
-    .bind(now_ms())
-    .execute(pool)
-    .await?;
-    Ok(())
-}
-
 pub async fn cloud_media(pool: &SqlitePool, media_id: &str) -> Result<Option<CloudMediaRow>> {
     let row = sqlx::query(
         "SELECT media_id, source_id, remote_id, remote_path, size_bytes, cache_path FROM cloud_media WHERE media_id = ? LIMIT 1",
@@ -2541,15 +3076,6 @@ pub async fn cached_cloud_media(pool: &SqlitePool) -> Result<Vec<(String, String
         .collect())
 }
 
-pub async fn set_cloud_media_probed(pool: &SqlitePool, media_id: &str) -> Result<()> {
-    sqlx::query("UPDATE cloud_media SET last_probe_at = ? WHERE media_id = ?")
-        .bind(now_ms())
-        .bind(media_id)
-        .execute(pool)
-        .await?;
-    Ok(())
-}
-
 #[derive(Debug, Clone)]
 pub enum ScheduleDefinition {
     Classic(Vec<ClassicItemInput>),
@@ -2603,17 +3129,6 @@ pub async fn app_setting(pool: &SqlitePool, key: &str) -> Result<Option<String>>
         .fetch_optional(pool)
         .await?;
     Ok(row.map(|row| row.get("value")))
-}
-
-pub async fn set_app_setting(pool: &SqlitePool, key: &str, value: &str) -> Result<()> {
-    sqlx::query(
-        "INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-    )
-    .bind(key)
-    .bind(value)
-    .execute(pool)
-    .await?;
-    Ok(())
 }
 
 pub async fn language_settings(pool: &SqlitePool) -> Result<LanguageSettings> {
@@ -3145,11 +3660,19 @@ pub async fn set_channel_stream(
 }
 
 pub async fn channel_by_id(pool: &SqlitePool, id: &str) -> Result<Option<Channel>> {
+    let mut connection = pool.acquire().await?;
+    channel_by_id_on(&mut connection, id).await
+}
+
+async fn channel_by_id_on(
+    connection: &mut sqlx::SqliteConnection,
+    id: &str,
+) -> Result<Option<Channel>> {
     let row = sqlx::query(
         "SELECT id, number, name, start_ms, schedule_mode, graphics_text, graphics_position, graphics_opacity, graphics_size, watermark_media_id, watermark_position, watermark_opacity, watermark_scale, lower_third_text, lower_third_size, lower_third_opacity, stream_width, stream_height, stream_preset, stream_crf, stream_max_kbps, stream_audio_kbps, audio_language, subtitle_mode, subtitle_language, hdr_mode, encoder, segment_seconds, prebuffer_seconds, cache_segments, prewarm FROM channels WHERE id = ? LIMIT 1",
     )
     .bind(id)
-    .fetch_optional(pool)
+    .fetch_optional(connection)
     .await?;
     Ok(row.map(|row| Channel {
         id: row.get("id"),
@@ -3411,10 +3934,13 @@ mod tests {
             out_ms: Some(end - start),
             kind: kind.into(),
         };
+        let mut continuation = item("movie", "program", 32_000, 62_000);
+        continuation.in_ms = 30_000;
+        continuation.out_ms = Some(60_000);
         let merged = merge_guide_blocks(vec![
             item("movie", "program", 0, 30_000),
             item("bumper", "filler", 30_000, 32_000),
-            item("movie", "program", 32_000, 62_000),
+            continuation,
             item("other", "program", 62_000, 80_000),
         ]);
         assert_eq!(merged.len(), 2);
@@ -3422,6 +3948,127 @@ mod tests {
         assert_eq!(merged[0].start_ms, 0);
         assert_eq!(merged[0].end_ms, 62_000);
         assert_eq!(merged[1].media_id, "other");
+    }
+
+    #[test]
+    fn guide_merge_requires_offset_continuity_and_valid_gap() {
+        let item = |start, end, in_ms, out_ms| ChannelItem {
+            media_id: "movie".into(),
+            title: "movie".into(),
+            start_ms: start,
+            end_ms: end,
+            in_ms,
+            out_ms,
+            kind: "program".into(),
+        };
+        for (next_start, next_in, first_out, expected) in [
+            (100, 0, Some(100), 2),       // another broadcast
+            (100, 100, None, 2),          // unknown source endpoint
+            (99, 100, Some(100), 2),      // overlapping timeline
+            (300_100, 100, Some(100), 1), // inclusive gap limit
+            (300_101, 100, Some(100), 2),
+        ] {
+            let blocks = merge_guide_blocks(vec![
+                item(0, 100, 0, first_out),
+                item(next_start, next_start + 100, next_in, Some(next_in + 100)),
+            ]);
+            assert_eq!(
+                blocks.len(),
+                expected,
+                "start={next_start}, in={next_in}, out={first_out:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn precache_claim_rejects_changed_queued_generation() {
+        let dir = std::env::temp_dir().join(format!("awesometv-claim-{}", Uuid::new_v4()));
+        let pool = init(&dir).await.unwrap();
+        upsert_precache(&pool, "m", "/source", 4, 1, "/cache/m", "copy", 1, 1)
+            .await
+            .unwrap();
+        let old = precache_entry(&pool, "m").await.unwrap().unwrap();
+        sqlx::query("UPDATE precache_entries SET source_mtime = 2 WHERE media_id = 'm'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(!claim_queued_precache(&pool, &old).await.unwrap());
+        let current = precache_entry(&pool, "m").await.unwrap().unwrap();
+        assert_eq!(current.status, "queued");
+        assert!(claim_queued_precache(&pool, &current).await.unwrap());
+        assert!(!claim_queued_precache(&pool, &current).await.unwrap());
+        pool.close().await;
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn precache_snapshot_coherent_and_includes_beyond_horizon() {
+        let dir = std::env::temp_dir().join(format!("awesometv-snapshot-{}", Uuid::new_v4()));
+        let pool = init(&dir).await.unwrap();
+        sqlx::query("INSERT INTO media_items (id,path,title,kind,duration_ms,created_at) VALUES ('m','/m','m','movie',100,0)").execute(&pool).await.unwrap();
+        let channel = create_channel_shell(&pool, "99", "test").await.unwrap();
+        let _gap = create_channel_shell(&pool, "98", "gap").await.unwrap();
+        for (position, start, end) in [(0, 0, 100), (1, 100, 200), (2, 200, 300)] {
+            sqlx::query("INSERT INTO channel_items (channel_id,position,media_id,title,start_ms,end_ms,in_ms,out_ms,kind) VALUES (?,?,'m','m',?,?,0,100,'program')").bind(&channel.id).bind(position).bind(start).bind(end).execute(&pool).await.unwrap();
+        }
+        sqlx::query("PRAGMA journal_mode=WAL")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let before: i64 =
+            sqlx::query_scalar("SELECT revision FROM renewal_input_revision WHERE id = 1")
+                .fetch_one(&mut *tx)
+                .await
+                .unwrap();
+        sqlx::query("UPDATE renewal_input_revision SET revision = revision + 1 WHERE id = 1")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM channel_items WHERE channel_id = ?")
+            .bind(&channel.id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let snapshot = precache_snapshot_on(&mut tx, 50, 50).await.unwrap();
+        assert_eq!(snapshot.revisions.0, before);
+        tx.commit().await.unwrap();
+        assert_eq!(snapshot.now_ms, 50);
+        assert_eq!(snapshot.channels.len(), 2);
+        assert_eq!(
+            snapshot
+                .schedule
+                .iter()
+                .map(|r| r.start_ms)
+                .collect::<Vec<_>>(),
+            vec![0, 100, 200]
+        );
+        assert!(snapshot.entries.is_empty());
+        let fresh = precache_snapshot(&pool, 50, 50).await.unwrap();
+        assert!(fresh.schedule.is_empty());
+        assert!(fresh.revisions.0 > snapshot.revisions.0);
+        pool.close().await;
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn upcoming_media_includes_current_but_not_finished_items() {
+        let dir = std::env::temp_dir().join(format!("awesometv-db-test-{}", Uuid::new_v4()));
+        let pool = init(&dir).await.unwrap();
+        sqlx::query("INSERT INTO media_items (id,path,title,kind,duration_ms,created_at) VALUES ('m','/media/test','test','movie',10000,0)")
+            .execute(&pool).await.unwrap();
+        let channel = create_channel_shell(&pool, "99", "test").await.unwrap();
+        for (position, start, end) in [(0, 0, 100), (1, 100, 200), (2, 200, 300)] {
+            sqlx::query("INSERT INTO channel_items (channel_id,position,media_id,title,start_ms,end_ms,in_ms,out_ms,kind) VALUES (?,?, 'm','test',?,?,0,100,'program')")
+                .bind(&channel.id).bind(position).bind(start).bind(end).execute(&pool).await.unwrap();
+        }
+        let rows = upcoming_media(&pool, 100, 200).await.unwrap();
+        assert_eq!(
+            rows.iter().map(|r| r.start_ms).collect::<Vec<_>>(),
+            vec![100, 200]
+        );
+        pool.close().await;
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[tokio::test]

@@ -17,7 +17,13 @@ jobs:
   server:
     name: Rust server
     runs-on: ubuntu-24.04
+    # Test against the ffmpeg the runtime image ships (Dockerfile: ubuntu:26.04).
+    container: ubuntu:26.04
     steps:
+      - name: Install build tools and ffmpeg
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates curl git build-essential pkg-config ffmpeg
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
@@ -29,7 +35,8 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Test
-        run: cargo test --workspace
+        # Engine tests drive real encoders on wall-clock deadlines.
+        run: cargo test --workspace -- --test-threads=1
       - name: Release build
         run: cargo build --release -p awesometv-server
       - name: Upload server binary
@@ -38,6 +45,42 @@ jobs:
           name: awesometv-server-linux-amd64
           path: target/release/awesometv-server
           if-no-files-found: error
+
+  browser-smoke:
+    name: Isolated browser smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.98.1
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - name: Install browser dependencies and fixture tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          pnpm install --frozen-lockfile
+          pnpm exec playwright install --with-deps chromium
+      - name: Build server
+        run: cargo build -p awesometv-server
+      - name: Run isolated fixture smoke
+        run: python3 scripts/run-isolated-e2e.py
+      - name: Upload failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-smoke-failure
+          path: |
+            test-results/
+            playwright-report/
+          if-no-files-found: warn
 
   docker:
     name: Docker image

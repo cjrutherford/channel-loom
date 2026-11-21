@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::process::Stdio;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use axum::body::Body;
 use axum::extract::{ConnectInfo, Path, Query, Request, State};
@@ -311,6 +311,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/tokens/{id}", delete(delete_token))
         .route("/api/v1/metrics", get(metrics))
         .route("/api/v1/precache", get(precache_status))
+        .route("/api/v1/precache/coverage", get(precache_coverage))
         .route("/api/v1/precache/{media_id}", delete(remove_precache))
         .route(
             "/api/v1/settings/language",
@@ -427,6 +428,7 @@ pub fn router(state: AppState) -> Router {
         .route("/cast-receiver", get(cast_receiver))
         .route("/api/v1/public/config", get(public_viewer_config))
         .route("/api/v1/public/channels", get(public_channels))
+        .route("/api/v1/public/channels/{id}/playout", get(public_playout))
         .route("/api/v1/public/guide", get(public_guide))
         .route("/api/v1/public/channels/{number}/cast", post(public_cast))
         .route("/manifest.webmanifest", get(manifest))
@@ -988,6 +990,7 @@ impl From<ChannelItem> for PublicItem {
 
 #[derive(Serialize)]
 struct PublicChannel {
+    id: String,
     number: String,
     name: String,
     now: Option<PublicItem>,
@@ -1001,8 +1004,27 @@ struct PublicGuideChannel {
     items: Vec<PublicItem>,
 }
 
-/// Public projection of the channel lineup. Deliberately omits stream,
-/// graphics, and media identifiers so the viewer cannot read admin config.
+async fn public_playout(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<crate::engine::PlayoutStatus>, ApiError> {
+    if db::channel_by_id(&state.pool, &id).await?.is_none() {
+        return Err(ApiError::not_found("channel not found"));
+    }
+    let mut status = state.engine.playout_status(&id).await;
+    for segment in &mut status.segments {
+        if let Some(id) = &segment.media_id {
+            segment.title =
+                sqlx::query_scalar::<_, String>("SELECT title FROM media_items WHERE id = ?")
+                    .bind(id)
+                    .fetch_optional(&state.pool)
+                    .await?;
+        }
+    }
+    Ok(Json(status))
+}
+
+/// Public projection of the channel lineup, without stream or graphics configuration.
 async fn public_channels(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<PublicChannel>>, ApiError> {
@@ -1011,6 +1033,7 @@ async fn public_channels(
         views
             .into_iter()
             .map(|view| PublicChannel {
+                id: view.id,
                 number: view.number,
                 name: view.name,
                 now: view.now.map(PublicItem::from),
@@ -1034,13 +1057,22 @@ async fn public_guide(
     State(state): State<AppState>,
     Query(query): Query<PublicGuideQuery>,
 ) -> Result<Json<Vec<PublicGuideChannel>>, ApiError> {
-    let now = db::now_ms();
-    let hours = query.hours.clamp(1, 24);
-    let channels = db::list_channels(&state.pool).await?;
+    public_guide_at(&state.pool, query.hours, db::now_ms())
+        .await
+        .map(Json)
+}
+
+async fn public_guide_at(
+    pool: &sqlx::SqlitePool,
+    hours: i64,
+    now: i64,
+) -> Result<Vec<PublicGuideChannel>, ApiError> {
+    let hours = hours.clamp(1, 24);
+    let channels = db::list_channels(pool).await?;
     let mut guide = Vec::with_capacity(channels.len());
     for channel in channels {
         let items = db::guide_blocks(
-            &state.pool,
+            pool,
             &channel.id,
             // The viewer floors its guide window to the previous hour, so look
             // back two hours to avoid a gap at the left edge.
@@ -1057,7 +1089,7 @@ async fn public_guide(
             items,
         });
     }
-    Ok(Json(guide))
+    Ok(guide)
 }
 
 #[derive(Serialize)]
@@ -1119,28 +1151,18 @@ async fn jellyfin_sync(
     let tv_root = state.config.tv_root.clone();
     let music_root = state.config.music_root.clone();
     let limit = request.limit.clamp(1, 50_000);
-    let (mut report, media) = tokio::task::spawn_blocking(move || {
-        jellyfin::sync(
-            &base_url,
-            &api_key,
-            &movies_root,
-            &tv_root,
-            &music_root,
-            limit,
-        )
-    })
+    let report = crate::remote_refresh::sync_library(
+        &state.pool,
+        "jellyfin",
+        base_url,
+        api_key,
+        movies_root,
+        tv_root,
+        music_root,
+        limit,
+    )
     .await
-    .map_err(|error| anyhow::anyhow!("jellyfin task failed: {error}"))??;
-    for item in media {
-        match db::upsert_media(&state.pool, &item).await {
-            Ok(()) => {}
-            Err(error) => {
-                report.imported = report.imported.saturating_sub(1);
-                report.errors += 1;
-                tracing::warn!(%error, path = %item.path, "jellyfin upsert failed");
-            }
-        }
-    }
+    .map_err(|_| ApiError::internal("jellyfin refresh failed"))?;
     Ok(Json(report))
 }
 
@@ -1152,41 +1174,49 @@ async fn language_settings(
 
 async fn update_language_settings(
     State(state): State<AppState>,
-    Json(settings): Json<db::LanguageSettings>,
+    payload: Result<Json<serde_json::Value>, axum::extract::rejection::JsonRejection>,
 ) -> Result<Json<db::LanguageSettings>, ApiError> {
-    if !matches!(settings.subtitle_mode.as_str(), "off" | "burn") {
-        return Err(ApiError::bad_request(
-            "default subtitle mode must be off or burn",
-        ));
-    }
-    for language in [&settings.audio_language, &settings.subtitle_language]
-        .into_iter()
-        .flatten()
-    {
-        if language.chars().count() > 16 {
-            return Err(ApiError::bad_request(
-                "language codes are limited to 16 characters",
-            ));
+    // Do not include serde's input-dependent diagnostics in responses: callers may
+    // accidentally submit credentials in any field.
+    let Json(value) = payload.map_err(|_| ApiError::bad_request("body: expected valid JSON"))?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| ApiError::bad_request("body: expected an object"))?;
+    let language = |field: &str| -> Result<String, ApiError> {
+        let text = match object.get(field) {
+            None | Some(serde_json::Value::Null) => "",
+            Some(serde_json::Value::String(value)) => value.trim(),
+            _ => {
+                return Err(ApiError::bad_request(format!(
+                    "{field}: expected a string or null"
+                )));
+            }
+        };
+        if text.chars().count() > 16 || text.chars().any(char::is_control) {
+            return Err(ApiError::bad_request(format!(
+                "{field}: must be at most 16 characters and contain no control characters"
+            )));
         }
+        Ok(text.to_owned())
+    };
+    let audio = language("audio_language")?;
+    let subtitle = language("subtitle_language")?;
+    let mode = match object.get("subtitle_mode") {
+        None => "off",
+        Some(serde_json::Value::String(value)) if matches!(value.as_str(), "off" | "burn") => value,
+        _ => return Err(ApiError::bad_request("subtitle_mode: expected off or burn")),
+    };
+    // Validate the entire payload before writing; commit the three keys together.
+    let mut tx = state.pool.begin().await?;
+    for (key, value) in [
+        ("default_audio_language", audio.as_str()),
+        ("default_subtitle_mode", mode),
+        ("default_subtitle_language", subtitle.as_str()),
+    ] {
+        sqlx::query("INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+            .bind(key).bind(value).execute(&mut *tx).await?;
     }
-    db::set_app_setting(
-        &state.pool,
-        "default_audio_language",
-        settings.audio_language.as_deref().unwrap_or("").trim(),
-    )
-    .await?;
-    db::set_app_setting(
-        &state.pool,
-        "default_subtitle_mode",
-        &settings.subtitle_mode,
-    )
-    .await?;
-    db::set_app_setting(
-        &state.pool,
-        "default_subtitle_language",
-        settings.subtitle_language.as_deref().unwrap_or("").trim(),
-    )
-    .await?;
+    tx.commit().await?;
     for channel in db::list_channels(&state.pool).await? {
         state.engine.refresh(&channel.id).await;
     }
@@ -1313,6 +1343,12 @@ struct Stats {
     emby_configured: bool,
 }
 
+async fn precache_coverage(
+    State(state): State<AppState>,
+) -> Result<Json<crate::precache::CoverageReport>, ApiError> {
+    Ok(Json(state.precache.coverage(db::now_ms()).await?))
+}
+
 async fn precache_status(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
@@ -1373,24 +1409,18 @@ async fn emby_sync(
     let tv_root = state.config.tv_root.clone();
     let music_root = state.config.music_root.clone();
     let limit = request.limit.clamp(1, 50_000);
-    let (mut report, media) = tokio::task::spawn_blocking(move || {
-        jellyfin::sync(
-            &base_url,
-            &api_key,
-            &movies_root,
-            &tv_root,
-            &music_root,
-            limit,
-        )
-    })
+    let report = crate::remote_refresh::sync_library(
+        &state.pool,
+        "emby",
+        base_url,
+        api_key,
+        movies_root,
+        tv_root,
+        music_root,
+        limit,
+    )
     .await
-    .map_err(|error| anyhow::anyhow!("emby task failed: {error}"))??;
-    report.imported = media.len();
-    for item in &media {
-        if let Err(error) = db::upsert_media(&state.pool, item).await {
-            tracing::warn!(%error, path = %item.path, "emby upsert failed");
-        }
-    }
+    .map_err(|_| ApiError::internal("emby refresh failed"))?;
     Ok(Json(report))
 }
 
@@ -1415,6 +1445,9 @@ struct ScanResponse {
     scanned: usize,
     path: String,
     media: Vec<Media>,
+    complete: bool,
+    files: Vec<scan::ScanFileStatus>,
+    missing: Vec<String>,
 }
 
 async fn scan_handler(
@@ -1444,22 +1477,35 @@ async fn scan_handler(
             other => return Err(ApiError::bad_request(format!("unknown source: {other}"))),
         }
     };
+    let path = std::fs::canonicalize(&path)
+        .map_err(|error| ApiError::bad_request(format!("invalid scan path: {error}")))?;
     let path_for_scan = path.clone();
     let kind_for_scan = kind.clone();
-    let media = tokio::task::spawn_blocking(move || {
+    let report = tokio::task::spawn_blocking(move || {
         scan::scan_path(&path_for_scan, request.limit, &kind_for_scan)
     })
     .await
     .map_err(|error| anyhow::anyhow!("scan task failed: {error}"))??;
-    for item in &media {
+    for item in &report.media {
         db::upsert_media(&state.pool, item).await?;
         db::replace_chapters(&state.pool, &item.id, &item.chapters).await?;
     }
     let path_label = path.display().to_string();
+    let missing = db::reconcile_local_scan(
+        &state.pool,
+        &path_label,
+        &kind,
+        &report.media,
+        report.complete,
+    )
+    .await?;
     Ok(Json(ScanResponse {
-        scanned: media.len(),
+        scanned: report.media.len(),
         path: path_label,
-        media,
+        media: report.media,
+        complete: report.complete,
+        files: report.files,
+        missing,
     }))
 }
 
@@ -1531,6 +1577,10 @@ async fn create_cloud_source(
     if !state.cloud.supports_provider(&input.provider) {
         return Err(ApiError::bad_request("unsupported cloud provider"));
     }
+    state
+        .cloud
+        .validate_source(&input)
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
     Ok(Json(state.cloud.create_source(&input).await?))
 }
 
@@ -1573,6 +1623,11 @@ async fn add_cloud_root(
     Path(id): Path<String>,
     Json(root): Json<db::CloudRootInput>,
 ) -> Result<Json<db::CloudRoot>, ApiError> {
+    let source = db::cloud_source(&state.pool, &id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("cloud source not found"))?;
+    crate::cloud::manager::CloudManager::validate_root(&source.provider, &root)
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
     Ok(Json(state.cloud.add_root(&id, &root).await?))
 }
 
@@ -1581,9 +1636,21 @@ async fn update_cloud_root(
     Path(id): Path<String>,
     Json(update): Json<db::CloudRootUpdate>,
 ) -> Result<Json<db::CloudRoot>, ApiError> {
-    if db::cloud_root(&state.pool, &id).await?.is_none() {
-        return Err(ApiError::not_found("cloud root not found"));
-    }
+    let root = db::cloud_root(&state.pool, &id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("cloud root not found"))?;
+    let source = db::cloud_source(&state.pool, &root.source_id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("cloud source not found"))?;
+    crate::cloud::manager::CloudManager::validate_root(
+        &source.provider,
+        &db::CloudRootInput {
+            remote_id: root.remote_id,
+            remote_path: root.remote_path,
+            display_path: update.display_path.clone().unwrap_or(root.display_path),
+        },
+    )
+    .map_err(|error| ApiError::bad_request(error.to_string()))?;
     Ok(Json(
         db::update_cloud_root(&state.pool, &id, &update).await?,
     ))
@@ -1889,6 +1956,7 @@ async fn auto_channels(
             ));
         }
     };
+    let revision = db::rebuild_revision(&state.pool).await?;
     let existing_channels = db::list_channels(&state.pool).await?;
     let existing_names: HashSet<String> = existing_channels
         .iter()
@@ -1900,6 +1968,19 @@ async fn auto_channels(
             .into_iter()
             .map(|collection| (collection.id.clone(), collection))
             .collect();
+        let mut seen_ids = HashSet::new();
+        for id in &request.collection_ids {
+            if !seen_ids.insert(id) {
+                return Err(ApiError::bad_request(format!(
+                    "duplicate collection ID '{id}'"
+                )));
+            }
+            if !by_id.contains_key(id) {
+                return Err(ApiError::bad_request(format!(
+                    "collection ID '{id}' was not found"
+                )));
+            }
+        }
         collections = request
             .collection_ids
             .iter()
@@ -1918,7 +1999,9 @@ async fn auto_channels(
                 .then_with(|| left.name.cmp(&right.name))
         });
     }
-    collections.truncate(count);
+    if request.collection_ids.is_empty() {
+        collections.truncate(count);
+    }
     if collections.is_empty() {
         return Err(ApiError::bad_request(
             "no eligible collections found for auto-build",
@@ -1934,9 +2017,28 @@ async fn auto_channels(
         .unwrap_or_else(|| used.iter().copied().max().unwrap_or(0).saturating_add(1))
         .max(1);
     let mut plans = Vec::new();
-    for collection in collections {
-        while used.contains(&next) {
-            next = next.saturating_add(1);
+    let mut planned_names = existing_names;
+    let total = collections.len();
+    for (index, collection) in collections.into_iter().enumerate() {
+        if !planned_names.insert(collection.name.to_ascii_lowercase()) {
+            return Err(ApiError::bad_request(format!(
+                "channel name '{}' already exists or is duplicated",
+                collection.name
+            )));
+        }
+        if used.contains(&next) {
+            return Err(ApiError::bad_request(format!(
+                "channel number '{next}' is already in use"
+            )));
+        }
+        if db::collection_media_paths(&state.pool, &collection.id)
+            .await?
+            .is_empty()
+        {
+            return Err(ApiError::bad_request(format!(
+                "collection ID '{}' has no playable media",
+                collection.id
+            )));
         }
         plans.push(AutoChannelPlan {
             number: next.to_string(),
@@ -1946,43 +2048,35 @@ async fn auto_channels(
             media_count: collection.count,
         });
         used.insert(next);
-        next = next.saturating_add(1);
+        if index + 1 < total {
+            next = next.checked_add(1).ok_or_else(|| {
+                ApiError::bad_request("channel number exceeds the supported range")
+            })?;
+        }
     }
 
     let mut created = Vec::new();
     if !request.dry_run {
+        let mut staged = Vec::new();
         for plan in &plans {
-            let media_ids: Vec<String> =
-                db::collection_media_paths(&state.pool, &plan.collection_id)
-                    .await?
-                    .into_iter()
-                    .map(|(id, _)| id)
-                    .collect();
-            if media_ids.is_empty() {
-                continue;
-            }
-            let channel = db::create_channel_shell(&state.pool, &plan.number, &plan.name).await?;
-            db::set_schedule_mode(&state.pool, &channel.id, "classic").await?;
-            db::set_classic_items(
-                &state.pool,
-                &channel.id,
-                &[db::ClassicItemInput {
-                    collection_id: plan.collection_id.clone(),
-                    mode: "multiple".into(),
-                    count: items_per_cycle,
-                    duration_minutes: 60,
-                    filler_collection_id: None,
-                    mid_roll_interval_minutes: 0,
-                    mid_roll_duration_seconds: 0,
-                    chapter_breaks: true,
-                    break_markers: Vec::new(),
-                    order: order.clone(),
-                }],
-            )
-            .await?;
-            programming::rebuild_channel(&state.pool, &channel.id).await?;
+            let input = db::ClassicItemInput {
+                collection_id: plan.collection_id.clone(),
+                mode: "multiple".into(),
+                count: items_per_cycle,
+                duration_minutes: 60,
+                filler_collection_id: None,
+                mid_roll_interval_minutes: 0,
+                mid_roll_duration_seconds: 0,
+                chapter_breaks: true,
+                break_markers: Vec::new(),
+                order: order.clone(),
+            };
+            let timeline = programming::stage_classic(&state.pool, input.clone()).await?;
+            staged.push((plan.number.clone(), plan.name.clone(), input, timeline));
+        }
+        created = db::publish_auto_channels(&state.pool, &staged, revision).await?;
+        for channel in &created {
             state.engine.refresh(&channel.id).await;
-            created.push(channel);
         }
     }
 
@@ -2261,6 +2355,19 @@ async fn validate_graphics(
 }
 
 fn validate_stream(stream: &db::StreamSettings) -> Result<(), ApiError> {
+    for (field, value, min, max) in [
+        ("max_kbps", stream.max_kbps, 0, 20_000),
+        ("segment_seconds", stream.segment_seconds, 2, 10),
+        ("prebuffer_seconds", stream.prebuffer_seconds, 0, 30),
+        ("cache_segments", stream.cache_segments, 4, 60),
+    ] {
+        if !(min..=max).contains(&value) {
+            return Err(ApiError::bad_request(format!(
+                "stream {field} must be {min}-{max}"
+            )));
+        }
+    }
+
     if !(320..=3840).contains(&stream.width) || !(240..=2160).contains(&stream.height) {
         return Err(ApiError::bad_request(
             "stream width must be 320-3840 and height 240-2160",
@@ -2585,8 +2692,12 @@ async fn m3u(State(state): State<AppState>) -> Result<Response, ApiError> {
 }
 
 async fn xmltv(State(state): State<AppState>) -> Result<Response, ApiError> {
-    let channels = db::list_channels(&state.pool).await?;
-    let now = db::now_ms();
+    let body = xmltv_at(&state.pool, db::now_ms()).await?;
+    Ok(([(header::CONTENT_TYPE, "application/xml")], body).into_response())
+}
+
+async fn xmltv_at(pool: &sqlx::SqlitePool, now: i64) -> Result<String, ApiError> {
+    let channels = db::list_channels(pool).await?;
     let mut body = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<tv>\n");
     for channel in &channels {
         body.push_str(&format!(
@@ -2596,13 +2707,8 @@ async fn xmltv(State(state): State<AppState>) -> Result<Response, ApiError> {
         ));
     }
     for channel in &channels {
-        let items = db::guide_blocks(
-            &state.pool,
-            &channel.id,
-            now - 3_600_000,
-            now + 24 * 3_600_000,
-        )
-        .await?;
+        let items =
+            db::guide_blocks(pool, &channel.id, now - 3_600_000, now + 24 * 3_600_000).await?;
         for item in items {
             body.push_str(&format!(
                 "  <programme start=\"{}\" stop=\"{}\" channel=\"awesome.{}\"><title>{}</title></programme>\n",
@@ -2614,7 +2720,7 @@ async fn xmltv(State(state): State<AppState>) -> Result<Response, ApiError> {
         }
     }
     body.push_str("</tv>\n");
-    Ok(([(header::CONTENT_TYPE, "application/xml")], body).into_response())
+    Ok(body)
 }
 
 #[derive(Serialize)]
@@ -2905,54 +3011,19 @@ async fn catchup_segment(
         .into_response())
 }
 
-fn playlist_is_fresh(path: &std::path::Path, max_age: Duration) -> bool {
-    let Ok(metadata) = std::fs::metadata(path) else {
-        return false;
-    };
-    let Ok(modified) = metadata.modified() else {
-        return false;
-    };
-    let Ok(age) = SystemTime::now().duration_since(modified) else {
-        return false;
-    };
-    if age > max_age {
-        return false;
-    }
-    let Ok(body) = std::fs::read_to_string(path) else {
-        return false;
-    };
-    body.lines().any(|line| line.ends_with(".ts"))
-}
-
-/// Return the current playlist immediately when it is live, and warm the next
-/// producer in the background. This keeps a receiver's playlist requests from
-/// blocking on a slow probe at an item boundary.
+// A retained playlist can be fresh on disk while a new runtime is still
+// building its publication watermark. Always consult the active runtime.
 async fn playlist_for_channel(
     state: &AppState,
     channel: &Channel,
 ) -> Result<std::path::PathBuf, ApiError> {
-    let path = state
-        .config
-        .data_dir
-        .join("hls")
-        .join(channel.number.replace('.', "_"))
-        .join("index.m3u8");
-    if playlist_is_fresh(&path, Duration::from_secs(15)) {
-        let engine = state.engine.clone();
-        let channel = channel.clone();
-        let number = channel.number.clone();
-        tokio::spawn(async move {
-            if let Err(error) = engine.ensure(&channel).await {
-                tracing::warn!(%error, channel = %number, "background playlist ensure failed");
-            }
-        });
-        return Ok(path);
+    match tokio::time::timeout(Duration::from_secs(1), state.engine.ensure(channel)).await {
+        Ok(Ok(path)) => Ok(path),
+        Ok(Err(error)) => Err(ApiError::service_unavailable(format!(
+            "Preparing channel: {error:#}"
+        ))),
+        Err(_) => Err(ApiError::service_unavailable("Preparing channel")),
     }
-    state
-        .engine
-        .ensure(channel)
-        .await
-        .map_err(|error| ApiError::service_unavailable(format!("{error:#}")))
 }
 
 async fn hls_playlist(
@@ -3436,7 +3507,8 @@ async fn basic_auth(
 }
 
 fn required_scope(method: &Method, path: &str) -> &'static str {
-    if path.starts_with("/api/v1/tokens")
+    if path == "/api/v1/precache/coverage"
+        || path.starts_with("/api/v1/tokens")
         || path.starts_with("/api/v1/audit")
         || path.starts_with("/api/v1/backups")
         || path == "/api/v1/restore"
@@ -3506,8 +3578,8 @@ fn session_token(headers: &HeaderMap) -> Option<String> {
 }
 
 fn xmltv_time(ms: i64) -> String {
-    let value =
-        OffsetDateTime::from_unix_timestamp(ms / 1000).unwrap_or(OffsetDateTime::UNIX_EPOCH);
+    let value = OffsetDateTime::from_unix_timestamp(ms.div_euclid(1000))
+        .unwrap_or(OffsetDateTime::UNIX_EPOCH);
     format!(
         "{:04}{:02}{:02}{:02}{:02}{:02} +0000",
         value.year(),
@@ -3584,6 +3656,853 @@ where
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        (self.status, self.message).into_response()
+        if self.status == StatusCode::SERVICE_UNAVAILABLE {
+            (self.status, [(header::RETRY_AFTER, "2")], self.message).into_response()
+        } else {
+            (self.status, self.message).into_response()
+        }
     }
 }
+
+#[cfg(test)]
+mod auto_build_api_tests {
+    #[test]
+    fn stream_numeric_bounds_are_enforced() {
+        let mut stream = super::db::StreamSettings::default();
+        for (field, value) in [
+            (0, -1),
+            (0, 20001),
+            (1, 1),
+            (1, 11),
+            (2, -1),
+            (2, 31),
+            (3, 3),
+            (3, 61),
+        ] {
+            match field {
+                0 => stream.max_kbps = value,
+                1 => stream.segment_seconds = value,
+                2 => stream.prebuffer_seconds = value,
+                _ => stream.cache_segments = value,
+            }
+            assert!(
+                super::validate_stream(&stream).is_err(),
+                "field {field} value {value}"
+            );
+            stream = super::db::StreamSettings::default();
+        }
+    }
+    use super::*;
+    use crate::limits::RateLimits;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    async fn setup() -> (
+        SqlitePool,
+        std::path::PathBuf,
+        std::net::SocketAddr,
+        tokio::task::JoinHandle<()>,
+    ) {
+        setup_mode(false).await
+    }
+
+    async fn setup_mode(
+        protected: bool,
+    ) -> (
+        SqlitePool,
+        std::path::PathBuf,
+        std::net::SocketAddr,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let (pool, dir, addr, server, _) = setup_mode_with_precache(protected, false).await;
+        (pool, dir, addr, server)
+    }
+
+    async fn setup_mode_with_precache(
+        protected: bool,
+        rolling: bool,
+    ) -> (
+        SqlitePool,
+        std::path::PathBuf,
+        std::net::SocketAddr,
+        tokio::task::JoinHandle<()>,
+        Arc<crate::precache::Precache>,
+    ) {
+        let dir = std::env::temp_dir().join(format!("awesometv-auto-{}", uuid::Uuid::new_v4()));
+        let pool = db::init(&dir).await.unwrap();
+        sqlx::query("INSERT INTO media_items (id,path,title,duration_ms,created_at) VALUES ('m','/m.mp4','Media',3600000,0), ('iso','/disc.iso','Disc',3600000,0)").execute(&pool).await.unwrap();
+        for (id, name, media) in [
+            ("a", "Alpha", "m"),
+            ("b", "Beta", "m"),
+            ("c", "Gamma", "m"),
+            ("d", "Delta", "m"),
+            ("dup", "alpha", "m"),
+            ("empty", "Empty", "iso"),
+        ] {
+            sqlx::query("INSERT INTO collections (id,name,created_at) VALUES (?,?,0)")
+                .bind(id)
+                .bind(name)
+                .execute(&pool)
+                .await
+                .unwrap();
+            sqlx::query(
+                "INSERT INTO collection_items (collection_id,media_id,position) VALUES (?,?,0)",
+            )
+            .bind(id)
+            .bind(media)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        let mut config = Config::from_env();
+        config.data_dir = dir.clone();
+        config.precache_dir = dir.join("cache");
+        config.precache_rolling_chunks = rolling;
+        config.admin_user = "fixture".into();
+        config.admin_password = "fixture-password".into();
+        let cloud = Arc::new(
+            CloudManager::new(pool.clone(), dir.clone(), &config.bind, config.port).unwrap(),
+        );
+        let engine = Arc::new(Engine::new(
+            pool.clone(),
+            dir.clone(),
+            cloud.clone(),
+            config.stream_max_kbps,
+        ));
+        engine.install_playout_fixture("playout-fixture").await;
+        let precache = Arc::new(crate::precache::Precache::new(&config, pool.clone()));
+        let state = AppState {
+            config: config.clone(),
+            admin_nets: vec![],
+            oidc: None,
+            oidc_pending: Arc::new(Mutex::new(HashMap::new())),
+            pool: pool.clone(),
+            engine,
+            cloud,
+            sessions: Arc::new(Mutex::new(HashMap::new())),
+            login_throttle: Arc::new(Mutex::new(LoginThrottle::default())),
+            media_limits: Arc::new(Mutex::new(MediaRateLimiter::new(RateLimits {
+                enabled: false,
+                api_per_min: 1,
+                cast_per_min: 1,
+                playlist_per_min: 1,
+                segment_per_min: 1,
+                stream_per_min: 1,
+            }))),
+            token_limits: Arc::new(Mutex::new(TokenRateLimiter::new(1))),
+            streams: Arc::new(StreamLimiter::new(10, 10)),
+            precache: precache.clone(),
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = if protected {
+            router(state)
+        } else {
+            Router::new()
+                .route("/api/v1/public/channels", get(public_channels))
+                .route("/api/v1/public/channels/{id}/playout", get(public_playout))
+                .route("/channel/{file}", get(hls_playlist))
+                .route("/channel/{number}/{file}", get(hls_segment))
+                .route("/api/v1/channels/auto", post(auto_channels))
+                .route(
+                    "/api/v1/channels/{id}/stream",
+                    get(channel_stream).put(update_channel_stream),
+                )
+                .route(
+                    "/api/v1/settings/language",
+                    get(language_settings).put(update_language_settings),
+                )
+                .route(
+                    "/api/v1/cloud/sources",
+                    get(cloud_sources).post(create_cloud_source),
+                )
+                .route(
+                    "/api/v1/cloud/sources/{id}/roots",
+                    get(cloud_roots).post(add_cloud_root),
+                )
+                .route(
+                    "/api/v1/cloud/roots/{id}",
+                    axum::routing::patch(update_cloud_root),
+                )
+                .with_state(state)
+        };
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .await
+            .unwrap()
+        });
+        (pool, dir, addr, server, precache)
+    }
+
+    #[tokio::test]
+    async fn coverage_route_requires_admin_and_returns_snapshot() {
+        let (pool, dir, addr, server) = setup_mode(true).await;
+        for (auth, expected) in [
+            ("", "401"),
+            (
+                "Authorization: Basic Zml4dHVyZTpmaXh0dXJlLXBhc3N3b3Jk\r\n",
+                "200",
+            ),
+        ] {
+            let mut socket = tokio::net::TcpStream::connect(addr).await.unwrap();
+            socket.write_all(format!("GET /api/v1/precache/coverage HTTP/1.1\r\nHost: localhost\r\n{auth}Connection: close\r\n\r\n").as_bytes()).await.unwrap();
+            let mut response = Vec::new();
+            socket.read_to_end(&mut response).await.unwrap();
+            let response = String::from_utf8(response).unwrap();
+            assert!(
+                response.starts_with(&format!("HTTP/1.1 {expected}")),
+                "{response}"
+            );
+            if expected == "200" {
+                assert!(response.contains("snapshot_ms"));
+            }
+        }
+        assert_eq!(
+            required_scope(&Method::GET, "/api/v1/precache/coverage"),
+            "admin"
+        );
+        server.abort();
+        pool.close().await;
+        let _ = tokio::fs::remove_dir_all(dir).await;
+    }
+
+    #[tokio::test]
+    async fn authenticated_rolling_coverage_survives_missing_origin() {
+        use crate::precache::chunks::Manifest;
+        let (pool, dir, addr, server, precache) = setup_mode_with_precache(true, true).await;
+        let source = dir.join("origin.mkv");
+        std::fs::write(&source, b"origin").unwrap();
+        sqlx::query("UPDATE media_items SET path = ?, video_codec = 'h264' WHERE id = 'm'")
+            .bind(source.to_str().unwrap())
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO channels (id, number, name, start_ms, created_at) VALUES ('rolling', '91', 'Rolling', 0, 0)").execute(&pool).await.unwrap();
+        let now = db::now_ms();
+        sqlx::query("INSERT INTO channel_items (channel_id, position, media_id, title, start_ms, end_ms, in_ms, out_ms, kind) VALUES ('rolling', 0, 'm', 'Media', ?, ?, 600000, 4200000, 'program')")
+            .bind(now - 1000).bind(now + 3_599_000).execute(&pool).await.unwrap();
+        let snapshot = precache.test_publish_rolling_snapshot(now).await.unwrap();
+        let identity = &snapshot[0].source;
+        let chunks = dir.join("cache/chunks");
+        std::fs::create_dir_all(&chunks).unwrap();
+        std::fs::write(chunks.join("part.mkv"), b"payload").unwrap();
+        let manifest = Manifest {
+            version: 2,
+            payload_bytes: 7,
+            source_path: identity.path.clone(),
+            source_size: identity.size,
+            source_mtime: identity.mtime,
+            chunk_file: "part.mkv".into(),
+            source_start_ms: 600_000,
+            source_end_ms: 1_000_000,
+            local_start_ms: 0,
+        };
+        std::fs::write(
+            chunks.join("part.json"),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+        std::fs::remove_file(source).unwrap();
+        // Cached chunks keep a missing origin's current airing (aired to slot end).
+        assert_eq!(
+            precache
+                .test_publish_rolling_snapshot(now)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        let mut socket = tokio::net::TcpStream::connect(addr).await.unwrap();
+        socket.write_all(b"GET /api/v1/precache/coverage HTTP/1.1\r\nHost: localhost\r\nAuthorization: Basic Zml4dHVyZTpmaXh0dXJlLXBhc3N3b3Jk\r\nConnection: close\r\n\r\n").await.unwrap();
+        let mut response = Vec::new();
+        socket.read_to_end(&mut response).await.unwrap();
+        let response = String::from_utf8(response).unwrap();
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        let json: serde_json::Value =
+            serde_json::from_str(response.split_once("\r\n\r\n").unwrap().1).unwrap();
+        let target = &json["channels"][0]["targets"][0];
+        assert_eq!(target["mode"], "rolling_chunks");
+        assert!(target["required_source_interval"][0].as_i64().unwrap() >= 601_000);
+        assert_eq!(target["startup_buffer_ready"], true);
+        assert_eq!(target["window_ready"], false);
+        assert_eq!(json["startup_ready_count"], 1);
+        assert_eq!(json["window_ready_count"], 0);
+        server.abort();
+        pool.close().await;
+        let _ = tokio::fs::remove_dir_all(dir).await;
+    }
+
+    #[tokio::test]
+    async fn public_playout_serializes_actual_sources_and_catalog_titles() {
+        let (pool, dir, addr, server) = setup().await;
+        sqlx::query("INSERT INTO channels (id, number, name, start_ms, created_at) VALUES ('playout-fixture', '80', 'Test', 0, 0)").execute(&pool).await.unwrap();
+        let mut socket = tokio::net::TcpStream::connect(addr).await.unwrap();
+        socket.write_all(b"GET /api/v1/public/channels/playout-fixture/playout HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n").await.unwrap();
+        let mut response = Vec::new();
+        socket.read_to_end(&mut response).await.unwrap();
+        let response = String::from_utf8(response).unwrap();
+        assert!(response.starts_with("HTTP/1.1 200"));
+        let body = response.split_once("\r\n\r\n").unwrap().1;
+        let json: serde_json::Value = serde_json::from_str(body).unwrap();
+        assert_eq!(json["generation"], "fixture-generation");
+        assert_eq!(json["state"], "ready");
+        assert_eq!(json["segments"].as_array().unwrap().len(), 4);
+        assert_eq!(json["segments"][0]["source"], "unknown");
+        assert_eq!(json["segments"][1]["media_id"], "m");
+        assert_eq!(json["segments"][1]["title"], "Media");
+        assert_eq!(json["segments"][2]["source"], "slate");
+        assert_eq!(json["segments"][3]["title"], "Disc");
+        assert!(!body.contains("/m.mp4") && !body.contains("secret-token"));
+        server.abort();
+        let _ = tokio::fs::remove_dir_all(dir).await;
+    }
+
+    #[tokio::test]
+    async fn public_playout_no_active_runtime_and_missing_channel() {
+        let (pool, dir, addr, server) = setup().await;
+        sqlx::query("INSERT INTO channels (id, number, name, start_ms, created_at) VALUES ('idle', '79', 'Test', 0, 0)").execute(&pool).await.unwrap();
+        let mut lineup = tokio::net::TcpStream::connect(addr).await.unwrap();
+        lineup.write_all(b"GET /api/v1/public/channels HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n").await.unwrap();
+        let mut lineup_response = Vec::new();
+        lineup.read_to_end(&mut lineup_response).await.unwrap();
+        let lineup_response = String::from_utf8(lineup_response).unwrap();
+        let lineup_json: serde_json::Value =
+            serde_json::from_str(lineup_response.split_once("\r\n\r\n").unwrap().1).unwrap();
+        assert_eq!(lineup_json[0]["id"], "idle");
+        for (id, expected) in [("idle", "200"), ("missing", "404")] {
+            let mut socket = tokio::net::TcpStream::connect(addr).await.unwrap();
+            socket.write_all(format!("GET /api/v1/public/channels/{id}/playout HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
+            let mut response = Vec::new();
+            socket.read_to_end(&mut response).await.unwrap();
+            let response = String::from_utf8(response).unwrap();
+            assert!(response.starts_with(&format!("HTTP/1.1 {expected}")));
+            if id == "idle" {
+                let body = response.split_once("\r\n\r\n").unwrap().1;
+                let json: serde_json::Value = serde_json::from_str(body).unwrap();
+                assert_eq!(
+                    json,
+                    serde_json::json!({"channel_id":"idle", "generation":null, "state":"preparing", "new_published_seconds":0.0, "segments":[]})
+                );
+            }
+        }
+        server.abort();
+        let _ = tokio::fs::remove_dir_all(dir).await;
+    }
+
+    #[tokio::test]
+    async fn fresh_retained_playlist_does_not_bypass_runtime_readiness() {
+        let (pool, dir, addr, server) = setup().await;
+        sqlx::query("INSERT INTO channels (id, number, name, start_ms, created_at) VALUES ('gate', '78', 'Test', 0, 0)").execute(&pool).await.unwrap();
+        let output = dir.join("hls/78");
+        tokio::fs::create_dir_all(&output).await.unwrap();
+        tokio::fs::write(output.join("seg_old.ts"), b"retained")
+            .await
+            .unwrap();
+        tokio::fs::write(output.join("index.m3u8"), "#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:42\n#EXT-X-PROGRAM-DATE-TIME:2020-01-01T00:00:00Z\n#EXTINF:2.0,\nseg_old.ts\n").await.unwrap();
+        let mut socket = tokio::net::TcpStream::connect(addr).await.unwrap();
+        socket
+            .write_all(
+                b"GET /channel/78.m3u8 HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+            )
+            .await
+            .unwrap();
+        let mut response = Vec::new();
+        tokio::time::timeout(Duration::from_secs(4), socket.read_to_end(&mut response))
+            .await
+            .unwrap()
+            .unwrap();
+        let response = String::from_utf8(response).unwrap().to_lowercase();
+        assert!(response.starts_with("http/1.1 503"), "{response}");
+        assert!(response.contains("retry-after: 2"));
+        assert!(!response.contains("seg_old.ts"));
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn retained_advertised_segment_survives_refresh_over_http() {
+        let (pool, dir, addr, server) = setup().await;
+        sqlx::query("INSERT INTO channels (id, number, name, start_ms, created_at) VALUES ('retained', '77', 'Test', 0, 0)").execute(&pool).await.unwrap();
+        let output = dir.join("hls/77");
+        tokio::fs::create_dir_all(&output).await.unwrap();
+        let bytes = b"retained transport segment\x00\xff";
+        tokio::fs::write(output.join("segment_0.ts"), bytes)
+            .await
+            .unwrap();
+        tokio::fs::write(
+            output.join("index.m3u8"),
+            "#EXTM3U\n#EXTINF:2.0,\nsegment_0.ts\n",
+        )
+        .await
+        .unwrap();
+        let body = serde_json::to_string(&db::StreamSettings::default()).unwrap();
+        let mut socket = tokio::net::TcpStream::connect(addr).await.unwrap();
+        socket.write_all(format!("PUT /api/v1/channels/retained/stream HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).as_bytes()).await.unwrap();
+        let mut response = Vec::new();
+        socket.read_to_end(&mut response).await.unwrap();
+        assert!(response.starts_with(b"HTTP/1.1 200"));
+        let playlist = tokio::fs::read_to_string(output.join("index.m3u8"))
+            .await
+            .unwrap();
+        let advertised = playlist
+            .lines()
+            .find(|line| line.starts_with("segment_"))
+            .unwrap();
+        let mut socket = tokio::net::TcpStream::connect(addr).await.unwrap();
+        socket.write_all(format!("GET /channel/77/{advertised} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
+        let mut response = Vec::new();
+        socket.read_to_end(&mut response).await.unwrap();
+        assert!(response.starts_with(b"HTTP/1.1 200"));
+        let body_start = response.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4;
+        assert_eq!(&response[body_start..], bytes);
+        server.abort();
+        let _ = tokio::fs::remove_dir_all(dir).await;
+    }
+
+    #[tokio::test]
+    async fn stream_numeric_http_rejections_preserve_persisted_settings() {
+        let (pool, dir, addr, server) = setup().await;
+        sqlx::query("INSERT INTO channels (id, number, name, start_ms, created_at) VALUES ('stream-test', '77', 'Test', 0, 0)").execute(&pool).await.unwrap();
+        let send = |body: String| async move {
+            let mut socket = tokio::net::TcpStream::connect(addr).await.unwrap();
+            socket.write_all(format!("PUT /api/v1/channels/stream-test/stream HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).as_bytes()).await.unwrap();
+            let mut response = String::new();
+            socket.read_to_string(&mut response).await.unwrap();
+            response
+        };
+        let mut valid = serde_json::to_value(db::StreamSettings::default()).unwrap();
+        valid["max_kbps"] = 20000.into();
+        valid["segment_seconds"] = 2.into();
+        valid["prebuffer_seconds"] = 30.into();
+        valid["cache_segments"] = 60.into();
+        assert!(send(valid.to_string()).await.starts_with("HTTP/1.1 200"));
+        for (field, value) in [
+            ("max_kbps", -1),
+            ("segment_seconds", 11),
+            ("prebuffer_seconds", 31),
+            ("cache_segments", 3),
+        ] {
+            let mut invalid = valid.clone();
+            invalid[field] = value.into();
+            let response = send(invalid.to_string()).await;
+            assert!(response.starts_with("HTTP/1.1 400"), "{response}");
+            assert!(response.contains(field));
+            assert_eq!(
+                serde_json::to_value(db::channel_stream(&pool, "stream-test").await.unwrap())
+                    .unwrap(),
+                valid
+            );
+        }
+        server.abort();
+        pool.close().await;
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    async fn request(addr: std::net::SocketAddr, value: serde_json::Value) -> (u16, String) {
+        let body = value.to_string();
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        stream.write_all(format!("POST /api/v1/channels/auto HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).as_bytes()).await.unwrap();
+        let mut response = String::new();
+        stream.read_to_string(&mut response).await.unwrap();
+        let (headers, body) = response.split_once("\r\n\r\n").unwrap();
+        (
+            headers.split_whitespace().nth(1).unwrap().parse().unwrap(),
+            body.to_string(),
+        )
+    }
+
+    async fn settings_request(
+        addr: std::net::SocketAddr,
+        method: &str,
+        body: &str,
+    ) -> (u16, String) {
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        stream.write_all(format!("{method} /api/v1/settings/language HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+        let mut response = String::new();
+        stream.read_to_string(&mut response).await.unwrap();
+        let (headers, body) = response.split_once("\r\n\r\n").unwrap();
+        (
+            headers.split_whitespace().nth(1).unwrap().parse().unwrap(),
+            body.to_string(),
+        )
+    }
+
+    #[tokio::test]
+    async fn cloud_validation_http_persistence() {
+        let (pool, dir, addr, server) = setup().await;
+        async fn send(
+            addr: std::net::SocketAddr,
+            method: &str,
+            path: &str,
+            body: &str,
+        ) -> (u16, String) {
+            let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+            stream.write_all(format!("{method} {path} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+            let mut response = String::new();
+            stream.read_to_string(&mut response).await.unwrap();
+            let (headers, body) = response.split_once("\r\n\r\n").unwrap();
+            (
+                headers.split_whitespace().nth(1).unwrap().parse().unwrap(),
+                body.to_string(),
+            )
+        }
+        let base = "/api/v1/cloud/sources";
+        let mut input = serde_json::json!({"provider":"google","name":"Drive","auth_type":"oauth","config":{},"secret":serde_json::json!({"refresh_token":"sentinel-secret","client_id":"id","client_secret":"secret","token_uri":"https://oauth.example.com/token"}).to_string(),"roots":[{"remote_id":"root","remote_path":"/","display_path":"/"}]});
+        for bad in [
+            "http://example.com/token",
+            "https://user:pass@example.com/token",
+            "https://127.0.0.1/token",
+            "not a url",
+        ] {
+            let mut credential: serde_json::Value =
+                serde_json::from_str(input["secret"].as_str().unwrap()).unwrap();
+            credential["token_uri"] = bad.into();
+            input["secret"] = credential.to_string().into();
+            let (status, response) = send(addr, "POST", base, &input.to_string()).await;
+            assert_eq!(status, 400);
+            assert!(response.contains("secret"));
+            assert!(!response.contains("sentinel-secret"));
+            assert!(!response.contains(bad));
+            assert_eq!(
+                sqlx::query_scalar::<_, i64>("SELECT count(*) FROM cloud_sources")
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap(),
+                0
+            );
+        }
+        input["secret"] = serde_json::json!({"refresh_token":"sentinel-secret","client_id":"id","client_secret":"secret","token_uri":"https://oauth.example.com/token"}).to_string().into();
+        for uri in [
+            serde_json::json!(null),
+            serde_json::json!(42),
+            serde_json::json!("http://example.com/token"),
+        ] {
+            let mut invalid = input.clone();
+            invalid["auth_type"] = "service_account".into();
+            invalid["secret"] = serde_json::json!({"client_email":"a@example.com","private_key":"sentinel-key","token_uri":uri}).to_string().into();
+            let (status, error) = send(addr, "POST", base, &invalid.to_string()).await;
+            assert_eq!(status, 400);
+            assert!(error.contains("secret"));
+            assert!(!error.contains("sentinel-key"));
+            assert_eq!(
+                sqlx::query_scalar::<_, i64>("SELECT count(*) FROM cloud_sources")
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap(),
+                0
+            );
+        }
+        let mut leaked = input.clone();
+        leaked["config"] = serde_json::json!({"client_secret":"sentinel-config-secret"});
+        let (status, error) = send(addr, "POST", base, &leaked.to_string()).await;
+        assert_eq!(status, 400);
+        assert!(error.contains("config"));
+        assert!(!error.contains("sentinel"));
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM cloud_sources")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            0
+        );
+        let mut bad = input.clone();
+        bad["config"] = "wrong".into();
+        assert_eq!(send(addr, "POST", base, &bad.to_string()).await.0, 400);
+        bad = input.clone();
+        bad["roots"][0]["remote_id"] = "../escape".into();
+        assert_eq!(send(addr, "POST", base, &bad.to_string()).await.0, 400);
+        bad = input.clone();
+        bad["secret"] = r#"{"refresh_token":"sentinel-secret"}"#.into();
+        assert_eq!(send(addr, "POST", base, &bad.to_string()).await.0, 400);
+        let (status, body) = send(addr, "POST", base, &input.to_string()).await;
+        assert_eq!(status, 200, "{body}");
+        assert!(!body.contains("sentinel-secret"));
+        let source: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let roots = format!("{base}/{}/roots", source["id"].as_str().unwrap());
+        let (status, before) = send(addr, "GET", &roots, "").await;
+        assert_eq!(status, 200);
+        let (status, error) = send(
+            addr,
+            "POST",
+            &roots,
+            r#"{"remote_id":"folder","remote_path":"/../x","display_path":"/x"}"#,
+        )
+        .await;
+        assert_eq!(status, 400);
+        assert!(error.contains("remote_path"));
+        assert_eq!(send(addr, "GET", &roots, "").await.1, before);
+        let root_id = serde_json::from_str::<serde_json::Value>(&before).unwrap()[0]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let root_url = format!("/api/v1/cloud/roots/{root_id}");
+        assert_eq!(
+            send(
+                addr,
+                "PATCH",
+                &root_url,
+                r#"{"display_path":"/../bad","enabled":false}"#
+            )
+            .await
+            .0,
+            400
+        );
+        assert_eq!(send(addr, "GET", &roots, "").await.1, before);
+        for (auth, secret) in [("access_token", "sentinel-token".to_string()), ("service_account", serde_json::json!({"client_email":"account@example.com","private_key":"sentinel-key"}).to_string())] {
+            let mut valid = input.clone(); valid["auth_type"] = auth.into(); valid["secret"] = secret.into(); valid["roots"] = serde_json::json!([]);
+            assert_eq!(send(addr, "POST", base, &valid.to_string()).await.0, 200);
+        }
+        let readback = send(addr, "GET", base, "").await.1;
+        assert!(!readback.contains("sentinel"));
+        server.abort();
+        pool.close().await;
+        let reopened = db::init(&dir).await.unwrap();
+        assert_eq!(db::list_cloud_sources(&reopened).await.unwrap().len(), 3);
+        reopened.close().await;
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn settings_validation_preserves_sqlite_and_hides_input() {
+        let (pool, dir, addr, server) = setup().await;
+        let valid = r#"{"audio_language":"abcdefghijklmnop","subtitle_mode":"burn","subtitle_language":"fra"}"#;
+        assert_eq!(settings_request(addr, "PUT", valid).await.0, 200);
+        let before = settings_request(addr, "GET", "").await;
+        assert_eq!(before.0, 200);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&before.1).unwrap(),
+            serde_json::from_str::<serde_json::Value>(valid).unwrap()
+        );
+        for (body, field) in [
+            (
+                r#"{"audio_language":"abcdefghijklmnopq"}"#,
+                "audio_language",
+            ),
+            (
+                r#"{"subtitle_language":"abcdefghijklmnopq"}"#,
+                "subtitle_language",
+            ),
+            (r#"{"audio_language":42}"#, "audio_language"),
+            (r#"{"subtitle_language":[]}"#, "subtitle_language"),
+            (r#"{"subtitle_mode":"secret-token"}"#, "subtitle_mode"),
+            (r#"{"subtitle_mode":false}"#, "subtitle_mode"),
+            (r#"{"audio_language":"secret-token\nX"}"#, "audio_language"),
+            (
+                r#"{"audio_language":"secret-token", "subtitle_mode": "bad"}"#,
+                "subtitle_mode",
+            ),
+        ] {
+            let (status, error) = settings_request(addr, "PUT", body).await;
+            assert_eq!(status, 400, "{field}");
+            assert!(error.contains(field));
+            assert!(!error.contains("secret-token"));
+            assert_eq!(settings_request(addr, "GET", "").await, before);
+        }
+        server.abort();
+        pool.close().await;
+        let reopened = db::init(&dir).await.unwrap();
+        assert_eq!(
+            serde_json::to_value(db::language_settings(&reopened).await.unwrap()).unwrap(),
+            serde_json::from_str::<serde_json::Value>(valid).unwrap()
+        );
+        reopened.close().await;
+        tokio::fs::remove_dir_all(dir).await.unwrap();
+    }
+
+    async fn snapshot(pool: &SqlitePool) -> Vec<String> {
+        let mut result = Vec::new();
+        for table in [
+            "channels",
+            "channel_items",
+            "channel_classic_items",
+            "media_items",
+            "collections",
+            "collection_items",
+            "generated_timeline_state",
+            "renewal_input_revision",
+            "rebuild_timeline_revision",
+        ] {
+            let columns: Vec<String> = sqlx::query_scalar(&format!(
+                "SELECT name FROM pragma_table_info('{table}') ORDER BY cid"
+            ))
+            .fetch_all(pool)
+            .await
+            .unwrap();
+            let fields = columns
+                .iter()
+                .map(|c| format!("'{c}', \"{c}\""))
+                .collect::<Vec<_>>()
+                .join(",");
+            let rows: Vec<String> = sqlx::query_scalar(&format!(
+                "SELECT json_object({fields}) FROM {table} ORDER BY rowid"
+            ))
+            .fetch_all(pool)
+            .await
+            .unwrap();
+            result.push(format!("{table}:{rows:?}"));
+        }
+        result
+    }
+
+    #[tokio::test]
+    async fn auto_build_atomic_failure_retry_and_concurrency() {
+        let (pool, dir, addr, server) = setup().await;
+        let before = snapshot(&pool).await;
+        let body =
+            serde_json::json!({"collection_ids":["a","b"], "start_number":20, "dry_run":false});
+        for (trigger, sql) in [
+            (
+                "fail_second",
+                "CREATE TRIGGER fail_second BEFORE INSERT ON channels WHEN NEW.name = 'Beta' BEGIN SELECT RAISE(ABORT, 'second channel failure'); END",
+            ),
+            (
+                "fail_timeline",
+                "CREATE TRIGGER fail_timeline BEFORE INSERT ON channel_items WHEN (SELECT name FROM channels WHERE id = NEW.channel_id) = 'Beta' BEGIN SELECT RAISE(ABORT, 'timeline failure'); END",
+            ),
+        ] {
+            sqlx::query(sql).execute(&pool).await.unwrap();
+            let (status, _) = request(addr, body.clone()).await;
+            assert_eq!(status, 500);
+            assert_eq!(snapshot(&pool).await, before);
+            sqlx::query(&format!("DROP TRIGGER {trigger}"))
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        let (status, response) = request(addr, body).await;
+        assert_eq!(status, 200, "{response}");
+        let value: serde_json::Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(value["created"].as_array().unwrap().len(), 2);
+        let (a, b) = tokio::join!(
+            request(
+                addr,
+                serde_json::json!({"collection_ids":["c"],"start_number":50,"dry_run":false})
+            ),
+            request(
+                addr,
+                serde_json::json!({"collection_ids":["d"],"start_number":50,"dry_run":false})
+            )
+        );
+        assert!(a.0 == 200 || b.0 == 200);
+        assert_ne!((a.0, b.0), (200, 200));
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM channels WHERE number = '50'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 1);
+        let retry_id = if a.0 == 200 { "d" } else { "c" };
+        let (status, response) = request(
+            addr,
+            serde_json::json!({"collection_ids":[retry_id],"start_number":51,"dry_run":false}),
+        )
+        .await;
+        assert_eq!(status, 200, "{response}");
+        for table in [
+            "channels",
+            "channel_classic_items",
+            "generated_timeline_state",
+        ] {
+            let count: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table}"))
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            assert_eq!(count, 4, "{table}");
+        }
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(DISTINCT channel_id) FROM channel_items")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 4);
+        server.abort();
+        pool.close().await;
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn auto_build_preview_create_validation_and_persistence() {
+        let (pool, dir, addr, server) = setup().await;
+        db::create_channel_shell(&pool, "11", "Taken")
+            .await
+            .unwrap();
+        let before = snapshot(&pool).await;
+        for (ids, start, expected) in [
+            (vec!["a", "missing"], 20, "missing"),
+            (vec!["a", "a"], 20, "duplicate collection ID 'a'"),
+            (vec!["a", "dup"], 20, "alpha"),
+            (vec!["a", "b"], 10, "11"),
+            (vec!["a"], 11, "11"),
+            (vec!["a", "b"], i64::MAX, "range"),
+            (vec!["a", "empty"], 20, "empty"),
+        ] {
+            let mut responses = Vec::new();
+            for dry in [true, false] {
+                let (status, body) = request(addr, serde_json::json!({"collection_ids": ids, "start_number": start, "dry_run": dry})).await;
+                assert_eq!(status, 400, "{body}");
+                assert!(
+                    body.to_ascii_lowercase()
+                        .contains(&expected.to_ascii_lowercase()),
+                    "{body}"
+                );
+                assert_eq!(snapshot(&pool).await, before);
+                responses.push(body);
+            }
+            assert_eq!(responses[0], responses[1]);
+        }
+        db::create_channel_shell(&pool, "30", "ALPHA")
+            .await
+            .unwrap();
+        let before = snapshot(&pool).await;
+        let mut existing_name_responses = Vec::new();
+        for dry in [true, false] {
+            let (status, body) = request(
+                addr,
+                serde_json::json!({"collection_ids":["a"], "dry_run":dry}),
+            )
+            .await;
+            assert_eq!(status, 400, "{body}");
+            assert!(body.contains("Alpha"));
+            assert_eq!(snapshot(&pool).await, before);
+            existing_name_responses.push(body);
+        }
+        assert_eq!(existing_name_responses[0], existing_name_responses[1]);
+        let (status, preview) = request(addr, serde_json::json!({"collection_ids":["b", "c"], "count":1, "start_number":40, "dry_run":true})).await;
+        assert_eq!(status, 200, "{preview}");
+        let preview: serde_json::Value = serde_json::from_str(&preview).unwrap();
+        assert_eq!(preview["channels"][0]["number"], "40");
+        assert_eq!(preview["channels"].as_array().unwrap().len(), 2);
+        assert_eq!(preview["channels"][1]["number"], "41");
+        assert_eq!(preview["created"].as_array().unwrap().len(), 0);
+        assert_eq!(snapshot(&pool).await, before);
+        let (status, created) = request(addr, serde_json::json!({"collection_ids":["b", "c"], "count":1, "start_number":40, "dry_run":false})).await;
+        assert_eq!(status, 200, "{created}");
+        let created: serde_json::Value = serde_json::from_str(&created).unwrap();
+        assert_eq!(preview["channels"], created["channels"]);
+        assert_eq!(created["created"].as_array().unwrap().len(), 2);
+        let channels = db::list_channels(&pool).await.unwrap();
+        assert!(
+            channels
+                .iter()
+                .any(|c| c.number == "40" && c.name == "Beta")
+        );
+        assert!(
+            channels
+                .iter()
+                .any(|c| c.number == "41" && c.name == "Gamma")
+        );
+        assert!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM channel_items")
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+                > 0
+        );
+        server.abort();
+        pool.close().await;
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[cfg(test)]
+#[path = "guide_tests.rs"]
+mod guide_tests;
