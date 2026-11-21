@@ -28,8 +28,13 @@ jobs:
         run: cargo fmt --all --check
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Install ffmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
       - name: Test
-        run: cargo test --workspace
+        # Engine tests drive real encoders on wall-clock deadlines.
+        run: cargo test --workspace -- --test-threads=2
       - name: Release build
         run: cargo build --release -p awesometv-server
       - name: Upload server binary
