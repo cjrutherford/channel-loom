@@ -917,12 +917,30 @@ async fn resolve_scheduled_input(
 
 #[cfg(test)]
 static TEST_RESOLVER_STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+#[cfg(test)]
+static TEST_ENCODER_STALLED_ONCE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+#[cfg(test)]
+static TEST_RESOLVER_STALLED_ONCE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 const WARM_BYTES: u64 = 4 * 1024 * 1024;
 const WARM_LOOKAHEAD_MS: i64 = 120_000;
 const WARM_RECENT_MS: i64 = 10 * 60_000;
 const WARM_MAX_INFLIGHT: usize = 2;
 const SLATE_COMMIT_MARGIN_MS: i64 = 6_000;
+/// Slate published for an unresolved source before resolution is retried.
+const UNAVAILABLE_RETRY_MS: i64 = 15_000;
+
+/// A source needed now gets 2 s before slate; one prepared ahead of air time
+/// may use the slack, keeping a margin to start its encoder.
+fn resolution_deadline(cursor_ms: i64, now_ms: i64) -> std::time::Duration {
+    std::time::Duration::from_millis(cursor_ms.saturating_sub(now_ms).saturating_sub(5_000).clamp(2_000, 20_000) as u64)
+}
+
+/// Bounds a source-unavailable slate to the retry interval, unless the
+/// remainder after it would be too short to be worth a retry.
+fn unavailable_slate_ms(remaining_ms: i64) -> i64 {
+    if remaining_ms > UNAVAILABLE_RETRY_MS + 5_000 { UNAVAILABLE_RETRY_MS } else { remaining_ms }
+}
 
 /// Reads the first and last `WARM_BYTES` of a file, discarding the data, to
 /// prime directory entries, disks and container headers on slow storage.
@@ -1122,11 +1140,16 @@ async fn run_channel_with_chunks(
                         let (pool, cloud, precache, stop, id, chunks) = (pool.clone(), cloud.clone(), precache.clone(), stop.clone(), item.media_id.clone(), chunks.clone());
                         let source_offset = item.in_ms + (cursor - item.start_ms).max(0);
                         tracing::info!(channel = %channel.number, media_id = %id, cursor_ms = cursor, wall_ms = crate::db::now_ms(), "resolver started");
+                        let deadline = resolution_deadline(cursor, crate::db::now_ms());
                         let future = async move {
-                            resolve_with_deadline(&stop, Duration::from_secs(2), |ticket| async {
+                            resolve_with_deadline(&stop, deadline, |ticket| async {
                                 #[cfg(test)]
                                 if id.starts_with("test-resolver-stall-") {
                                     if id == "test-resolver-stall-progress" { TEST_RESOLVER_STARTED.store(true, Ordering::SeqCst); }
+                                    return std::future::pending().await;
+                                }
+                                #[cfg(test)]
+                                if id.starts_with("test-resolver-once-") && !TEST_RESOLVER_STALLED_ONCE.swap(true, Ordering::SeqCst) {
                                     return std::future::pending().await;
                                 }
                                 if let Some(resolved) = ScheduledChunkResolver(chunks.clone()).resolve(&pool, precache.as_ref(), &id, source_offset).await? { return Ok(resolved); }
@@ -1176,14 +1199,18 @@ async fn run_channel_with_chunks(
                             &item.media_id, Path::new(&input.location), offset, 0, &out_dir, &data_dir,
                             false, &input.kind, watermark.as_deref().map(Path::new), max_kbps, true, true, lease.as_ref())?;
                         #[cfg(test)]
-                        let command = if item.media_id.starts_with("test-encoder-stall-") {
+                        let command = if item.media_id.starts_with("test-encoder-stall-")
+                            || (item.media_id.starts_with("test-encoder-once-") && !TEST_ENCODER_STALLED_ONCE.swap(true, Ordering::SeqCst)) {
                             let mut stalled = std::process::Command::new("sh");
                             stalled.args(["-c", "exec sleep 60"]); stalled
                         } else { command };
                         (duration, command, SegmentSource::ScheduledMedia { id: item.media_id.clone(), scheduled_programme: programme.clone() }, lease)
                     }
                     _ => {
-                        tracing::warn!(media_id = %item.media_id, "source unavailable; publishing scheduled slate");
+                        // Cover only a short interval, then resolve the same airing
+                        // again: a cold source must not cost the rest of the programme.
+                        let duration = unavailable_slate_ms(duration);
+                        tracing::warn!(media_id = %item.media_id, slate_ms = duration, "source unavailable; publishing scheduled slate before retry");
                         if let Some(cache) = &precache { cache.note_playback_pressure(); }
                         (duration, slate_command(&channel), SegmentSource::fallback("source_unavailable", Some(programme)), None)
                     }
@@ -1236,14 +1263,25 @@ async fn run_channel_with_chunks(
                     if identity.is_slate() { anyhow::bail!("private fallback encoder failed"); }
                     spool.items.remove(0);
                     let recovery_start = start_ms + (publisher.cursor + 89) / 90;
-                    let remaining = frames_to_end(publisher.cursor, frame_grid_end(start_ms, end));
-                    tracing::warn!(channel = %channel.number, remaining_frames = remaining,
-                        "source encoder failed; replacing remaining interval with slate");
+                    // Cover a short interval, then reopen the same airing: a slow
+                    // read must not cost the rest of the programme.
+                    let bounded = unavailable_slate_ms(end - recovery_start) < end - recovery_start;
+                    let slate_end = if bounded { recovery_start + UNAVAILABLE_RETRY_MS } else { end };
+                    let remaining = frames_to_end(publisher.cursor, frame_grid_end(start_ms, slate_end));
+                    tracing::warn!(channel = %channel.number, remaining_frames = remaining, retry = bounded,
+                        "source encoder failed; publishing slate before retry");
                     if remaining > 0 {
                         spool.start_frames_leased(slate_command(&channel), remaining, None)?;
                         let replacement = spool.items.pop().expect("replacement encoder");
                         spool.items.insert(0, replacement);
-                        *queue.front_mut().unwrap() = (Some(recovery_start), end, SegmentSource::fallback("encoder_stall", identity.programme()));
+                        *queue.front_mut().unwrap() = (Some(recovery_start), slate_end, SegmentSource::fallback("encoder_stall", identity.programme()));
+                        if bounded {
+                            // Later generations were prepared after the failed interval.
+                            spool.items.truncate(1);
+                            queue.truncate(1);
+                            cursor = slate_end;
+                            pending_resolution = None;
+                        }
                     } else {
                         queue.pop_front();
                         cursor = preparation_cursor(start_ms, publisher.cursor);
@@ -2398,6 +2436,68 @@ seg_bd145537-78ac-5c2c-a645-dd4e34164bd0_1795093393190_e9d2735be5884cc79e8b88aed
         tokio::time::timeout(Duration::from_secs(5), task).await.unwrap().unwrap().unwrap();
         pool.close().await;
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn resolution_deadline_uses_slack() {
+        use std::time::Duration;
+        assert_eq!(super::resolution_deadline(1_000, 1_000), Duration::from_secs(2));
+        assert_eq!(super::resolution_deadline(12_000, 1_000), Duration::from_secs(6));
+        assert_eq!(super::resolution_deadline(100_000, 0), Duration::from_secs(20));
+    }
+
+    #[test]
+    fn unavailable_slate_is_bounded() {
+        assert_eq!(super::unavailable_slate_ms(30 * 60_000), super::UNAVAILABLE_RETRY_MS);
+        assert_eq!(super::unavailable_slate_ms(super::UNAVAILABLE_RETRY_MS + 5_000), super::UNAVAILABLE_RETRY_MS + 5_000);
+        assert_eq!(super::unavailable_slate_ms(4_000), 4_000);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn missed_resolution_recovers_within_programme() {
+        super::TEST_RESOLVER_STALLED_ONCE.store(false, std::sync::atomic::Ordering::SeqCst);
+        recovers_within_programme("test-resolver-once-", "source_unavailable").await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn encoder_stall_recovers_within_programme() {
+        super::TEST_ENCODER_STALLED_ONCE.store(false, std::sync::atomic::Ordering::SeqCst);
+        recovers_within_programme("test-encoder-once-", "encoder_stall").await;
+    }
+
+    async fn recovers_within_programme(prefix: &str, reason: &str) {
+        use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+        use std::time::Duration;
+        let root = std::env::temp_dir().join(format!("resolver-recover-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let pool = crate::db::init(&root).await.unwrap();
+        let path = root.join("source.mp4");
+        assert!(std::process::Command::new("ffmpeg").args(["-v", "error", "-f", "lavfi", "-i", "color=c=white:s=160x90:r=30:d=40", "-f", "lavfi", "-i", "sine=duration=40", "-c:v", "libx264", "-threads", "1", "-c:a", "aac", "-shortest", "-y"]).arg(&path).status().unwrap().success());
+        let id = format!("{prefix}{}", uuid::Uuid::new_v4());
+        sqlx::query("INSERT INTO media_items (id,path,title,kind,duration_ms,created_at) VALUES (?,?,'recover','movie',40000,0)")
+            .bind(&id).bind(path.to_str().unwrap()).execute(&pool).await.unwrap();
+        let mut channel = crate::db::create_channel_shell(&pool, "995", "recover").await.unwrap();
+        channel.stream.segment_seconds = 2; channel.stream.prebuffer_seconds = 0; channel.stream.cache_segments = 30;
+        channel.stream.width = 160; channel.stream.height = 90; channel.stream.preset = "ultrafast".into();
+        let start = crate::db::now_ms();
+        sqlx::query("INSERT INTO channel_items (channel_id,position,media_id,title,start_ms,end_ms,in_ms,out_ms,kind) VALUES (?,0,?,'recover',?,?,0,40000,'program')")
+            .bind(&channel.id).bind(&id).bind(start).bind(start + 40000).execute(&pool).await.unwrap();
+        let cloud = Arc::new(crate::cloud::CloudManager::new(pool.clone(), root.clone(), "127.0.0.1", 0).unwrap());
+        let stop = Arc::new(AtomicBool::new(false)); let shared: super::super::SnapshotHandle = Default::default();
+        let out = root.join("out"); std::fs::create_dir_all(&out).unwrap();
+        let task = tokio::spawn(super::run_channel(pool.clone(), cloud, None, channel, root.clone(), out, 0, stop.clone(), Arc::new(AtomicBool::new(false)), start, shared.clone()));
+        let recovered = tokio::time::timeout(Duration::from_secs(30), async { loop {
+            if shared.lock().unwrap().segments.iter().any(|s| matches!(&s.source, super::SegmentSource::ScheduledMedia { id: m, .. } if *m == id)) { break; }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }}).await;
+        let segments = shared.lock().unwrap().segments.clone();
+        stop.store(true, Ordering::Relaxed);
+        let _ = tokio::time::timeout(Duration::from_secs(5), task).await;
+        pool.close().await; std::fs::remove_dir_all(root).unwrap();
+        assert!(recovered.is_ok(), "programme never left slate after a missed resolution");
+        assert!(matches!(&segments[0].source, super::SegmentSource::Fallback { fallback_reason: Some(r), .. } if r == reason));
+        let slate_ms: i128 = segments.iter().take_while(|s| s.source.is_slate()).map(|s| (s.end_pdt_ns - s.start_pdt_ns) / 1_000_000).sum();
+        assert!(slate_ms <= (super::UNAVAILABLE_RETRY_MS + 2_000) as i128, "slate lasted {slate_ms} ms");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
