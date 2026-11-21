@@ -4487,7 +4487,9 @@ seg_bd145537-78ac-5c2c-a645-dd4e34164bd0_1795093393190_e9d2735be5884cc79e8b88aed
         .await
         .unwrap();
         let before = shared.lock().unwrap().segments.last().map(|s| s.sequence);
-        tokio::time::timeout(Duration::from_millis(1900), async { loop {
+        // Publication is paced at one 2 s segment per 2 s, so allow two segment
+        // periods; a blocked publisher waits out the stalled resolver's deadline (~7 s).
+        tokio::time::timeout(Duration::from_millis(4500), async { loop {
             if shared.lock().unwrap().segments.last().is_some_and(|s| before.is_none_or(|n| s.sequence > n) && matches!(&s.source, super::SegmentSource::ScheduledMedia { id, .. } if id == "progress")) { break; }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }}).await.expect("active publication stalled during successor resolution");
