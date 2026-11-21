@@ -17,7 +17,13 @@ jobs:
   server:
     name: Rust server
     runs-on: ubuntu-24.04
+    # Test against the ffmpeg the runtime image ships (Dockerfile: ubuntu:26.04).
+    container: ubuntu:26.04
     steps:
+      - name: Install build tools and ffmpeg
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates curl git build-essential pkg-config ffmpeg
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
@@ -28,10 +34,6 @@ jobs:
         run: cargo fmt --all --check
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
-      - name: Install ffmpeg
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg
       - name: Test
         # Engine tests drive real encoders on wall-clock deadlines.
         run: cargo test --workspace -- --test-threads=2
