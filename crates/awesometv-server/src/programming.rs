@@ -373,6 +373,56 @@ pub enum RenewalOutcome {
     UnsupportedMode,
 }
 
+/// Give a classic or blocks channel that predates generator ownership a state
+/// row so renewal can keep it ahead. A live, contiguous schedule is kept and
+/// extended from its end; an expired or broken one is rebuilt from today.
+pub async fn adopt_unowned_channel(
+    pool: &SqlitePool,
+    channel_id: &str,
+    now_ms: i64,
+) -> Result<bool> {
+    let channel = db::channel_by_id(pool, channel_id)
+        .await?
+        .context("channel not found")?;
+    let continuation = match channel.schedule_mode.as_str() {
+        "classic" if !db::list_classic_items(pool, channel_id).await?.is_empty() => {
+            serde_json::to_string(&ClassicCursor::default())?
+        }
+        "blocks" if !db::list_channel_blocks(pool, channel_id).await?.is_empty() => {
+            serde_json::to_string(&SchedulerState::default())?
+        }
+        _ => return Ok(false),
+    };
+    if db::generated_timeline_state(pool, channel_id)
+        .await?
+        .is_some()
+    {
+        return Ok(false);
+    }
+    let mut items = db::all_channel_items(pool, channel_id).await?;
+    items.sort_by_key(|i| i.start_ms);
+    let contiguous = items
+        .windows(2)
+        .all(|w| w[0].end_ms == w[1].start_ms && w[0].end_ms > w[0].start_ms);
+    match items.last() {
+        Some(last) if contiguous && last.end_ms > now_ms => {
+            // A version no generator produces forces a cursor reset on first renewal.
+            let state = db::GeneratedTimelineState {
+                definition_version: "adopted".into(),
+                boundary_ms: last.end_ms,
+                continuation_json: continuation,
+            };
+            db::insert_generated_timeline_state_if_absent(pool, channel_id, &state).await
+        }
+        _ => {
+            rebuild_channel(pool, channel_id).await?;
+            Ok(db::generated_timeline_state(pool, channel_id)
+                .await?
+                .is_some())
+        }
+    }
+}
+
 pub async fn renew_channel_at(
     pool: &SqlitePool,
     channel_id: &str,

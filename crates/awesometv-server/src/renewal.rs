@@ -1,4 +1,5 @@
-//! Background renewal of timelines that have persisted generator ownership.
+//! Background renewal of generated timelines. Classic and blocks channels
+//! without persisted generator ownership are adopted first.
 use crate::{
     db,
     programming::{self, RenewalOutcome},
@@ -50,8 +51,27 @@ impl Worker {
             if !matches!(channel.schedule_mode.as_str(), "classic" | "blocks") {
                 continue;
             }
-            let Some(state) = db::generated_timeline_state(&self.pool, &channel.id).await? else {
-                continue;
+            let state = match db::generated_timeline_state(&self.pool, &channel.id).await? {
+                Some(state) => state,
+                None => {
+                    match programming::adopt_unowned_channel(&self.pool, &channel.id, now_ms).await
+                    {
+                        Ok(true) => {
+                            tracing::info!(channel_id = %channel.id, "renewal adopted channel without generator state");
+                        }
+                        Ok(false) => continue,
+                        Err(e) => {
+                            failed = true;
+                            tracing::warn!(channel_id = %channel.id, error = %format!("{e:#}"), "renewal could not adopt channel");
+                            continue;
+                        }
+                    }
+                    let Some(state) = db::generated_timeline_state(&self.pool, &channel.id).await?
+                    else {
+                        continue;
+                    };
+                    state
+                }
             };
             seen.insert(channel.id.clone());
             if state.boundary_ms >= now_ms.saturating_add(5 * DAY_MS) {
@@ -303,6 +323,106 @@ mod tests {
                 if id == "legacy" { None } else { Some(0) }
             );
         }
+        pool.close().await;
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    async fn unowned_channel(dir: &std::path::Path) -> (SqlitePool, String) {
+        let pool = db::init(dir).await.unwrap();
+        sqlx::query("INSERT INTO media_items (id,path,title,duration_ms,created_at) VALUES ('m','/m','media',3600000,0)").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO collections (id,name,created_at) VALUES ('col','Collection',0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO collection_items (collection_id,media_id,position) VALUES ('col','m',0)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let channel = db::create_channel(&pool, "1", "Test", &["m".into()])
+            .await
+            .unwrap();
+        db::set_classic_items(
+            &pool,
+            &channel.id,
+            &[db::ClassicItemInput {
+                collection_id: "col".into(),
+                mode: "multiple".into(),
+                count: 5,
+                duration_minutes: 60,
+                filler_collection_id: None,
+                mid_roll_interval_minutes: 0,
+                mid_roll_duration_seconds: 0,
+                chapter_breaks: false,
+                break_markers: vec![],
+                order: "sequential".into(),
+            }],
+        )
+        .await
+        .unwrap();
+        programming::rebuild_channel(&pool, &channel.id)
+            .await
+            .unwrap();
+        // Simulate a channel built before generator ownership was persisted.
+        sqlx::query("DELETE FROM generated_timeline_state WHERE channel_id = ?")
+            .bind(&channel.id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        (pool, channel.id)
+    }
+
+    #[tokio::test]
+    async fn adopts_live_unowned_channel_without_rewriting_it() {
+        let dir = std::env::temp_dir().join(format!("renewal-adopt-{}", uuid::Uuid::new_v4()));
+        let (pool, id) = unowned_channel(&dir).await;
+        let before = db::all_channel_items(&pool, &id).await.unwrap();
+        let boundary = before.last().unwrap().end_ms;
+        let now = OffsetDateTime::from_unix_timestamp(boundary / 1000 - 2 * 86400).unwrap();
+        let worker = Worker::new(pool.clone());
+        assert!(!worker.tick(now).await.unwrap());
+        let after = db::all_channel_items(&pool, &id).await.unwrap();
+        let key = |i: &db::ChannelItem| (i.media_id.clone(), i.start_ms, i.end_ms);
+        assert_eq!(
+            before.iter().map(key).collect::<Vec<_>>(),
+            after[..before.len()].iter().map(key).collect::<Vec<_>>()
+        );
+        assert!(after.last().unwrap().end_ms >= now.unix_timestamp() * 1000 + 7 * DAY_MS);
+        assert!(after.windows(2).all(|w| w[0].end_ms == w[1].start_ms));
+        assert!(!worker.statuses.lock().await[&id].at_risk);
+        pool.close().await;
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn rebuilds_expired_unowned_channel() {
+        let dir = std::env::temp_dir().join(format!("renewal-expired-{}", uuid::Uuid::new_v4()));
+        let (pool, id) = unowned_channel(&dir).await;
+        let first = db::all_channel_items(&pool, &id).await.unwrap()[0].start_ms;
+        sqlx::query("DELETE FROM channel_items WHERE channel_id = ? AND start_ms > ?")
+            .bind(&id)
+            .bind(first)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let now = OffsetDateTime::now_utc();
+        let now_ms = now.unix_timestamp() * 1000;
+        let worker = Worker::new(pool.clone());
+        assert!(!worker.tick(now).await.unwrap());
+        let after = db::all_channel_items(&pool, &id).await.unwrap();
+        assert!(
+            after
+                .iter()
+                .any(|i| i.start_ms <= now_ms && i.end_ms > now_ms)
+        );
+        assert!(after.last().unwrap().end_ms >= now_ms + 6 * DAY_MS);
+        assert!(
+            db::generated_timeline_state(&pool, &id)
+                .await
+                .unwrap()
+                .is_some()
+        );
         pool.close().await;
         std::fs::remove_dir_all(dir).unwrap();
     }
