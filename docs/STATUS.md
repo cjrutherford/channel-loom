@@ -3,8 +3,10 @@
 Date: 2026-11-17
 Running: `https://atv.christopherrutherford.net` (public), `http://192.168.1.153:8409` (LAN), `http://100.120.253.100:8409` (Tailscale), `https://nirvana.tail5a4a0.ts.net:8447` (Tailscale HTTPS). Public TLS terminates in SWAG on the VPS; config lives in `deploy/nginx/swag/`.
 
-Release: **v0.1.2**. Production runs the published `channelloom-server-linux-amd64`
-asset (`awesome-tv-awesometv:release-v0.1.2`) rather than a working-tree build.
+Release: **v0.1.3**. Releases now publish a multi-arch image to
+`ghcr.io/cjrutherford/channel-loom` (see [`RELEASE.md`](RELEASE.md)). This deployment
+moves to that image, with its host-specific settings in an untracked
+`docker-compose.override.yml`.
 
 ## Plan coverage
 

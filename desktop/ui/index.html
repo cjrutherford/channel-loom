@@ -8,21 +8,60 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700&family=Nunito+Sans:wght@400;600&display=swap" rel="stylesheet">
   <style>
-    :root { --ink: #10162b; --paper: #f5f7ff; --muted: #a8b3d4; --signal: #22d3cf; }
-    body { margin: 0; background: radial-gradient(900px 520px at 50% 0%, rgba(34,211,207,.12), transparent 65%), var(--ink); color: var(--paper); font-family: "Nunito Sans", system-ui, sans-serif; display: grid; place-items: center; min-height: 100vh; }
-    .lockup { display: grid; justify-items: center; gap: 16px; text-align: center; }
+    :root { --ink: #10162b; --panel: #182040; --paper: #f5f7ff; --muted: #a8b3d4; --signal: #22d3cf; --error: #ff8a80; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: radial-gradient(900px 520px at 50% 0%, rgba(34,211,207,.12), transparent 65%), var(--ink); color: var(--paper); font-family: "Nunito Sans", system-ui, sans-serif; display: grid; place-items: center; min-height: 100vh; padding: 16px; }
+    .lockup { display: grid; justify-items: center; gap: 16px; text-align: center; width: min(460px, 100%); }
     .wordmark { width: min(340px, 72vw); height: auto; display: block; filter: drop-shadow(0 14px 40px rgba(0,0,0,.45)); }
-    h1 { margin: 0; font-family: "Baloo 2", ui-rounded, sans-serif; font-size: 42px; font-weight: 700; letter-spacing: -.02em; }
     p { margin: 0; color: var(--muted); font-size: 14px; }
-    .dot { display: inline-block; width: 6px; height: 6px; border-radius: 99px; background: var(--signal); margin-right: 8px; animation: pulse 1.8s infinite; }
-    @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(34,211,207,.5); } 70% { box-shadow: 0 0 0 7px rgba(34,211,207,0); } 100% { box-shadow: 0 0 0 0 rgba(34,211,207,0); } }
+    form { display: grid; gap: 10px; width: 100%; margin-top: 8px; text-align: left; }
+    label { font-weight: 600; font-size: 14px; }
+    input { width: 100%; padding: 12px 14px; border-radius: 10px; border: 1px solid #2e3a66; background: var(--panel); color: var(--paper); font: inherit; font-size: 16px; }
+    input:focus { outline: 2px solid var(--signal); outline-offset: 1px; }
+    button { padding: 12px 14px; border: 0; border-radius: 10px; background: var(--signal); color: var(--ink); font: inherit; font-weight: 700; font-size: 16px; cursor: pointer; }
+    button:disabled { opacity: .6; cursor: progress; }
+    .error { color: var(--error); min-height: 1.4em; }
+    .hint { font-size: 13px; }
   </style>
 </head>
 <body>
-  <div class="lockup">
+  <main class="lockup">
     <img class="wordmark" src="channelloom-wordmark.png" alt="ChannelLoom">
-    <p><span class="dot"></span>Your favorites are always on.</p>
-    <p>Connecting to your channels…</p>
-  </div>
+    <p>Your favorites are always on.</p>
+    <form id="setup">
+      <label for="server">Server address</label>
+      <input id="server" name="server" type="text" inputmode="url" autocomplete="url" spellcheck="false"
+             placeholder="http://192.168.1.20:8409" required autofocus>
+      <p class="hint">Use the address the server prints when it starts. You can change it later from File → Change Server.</p>
+      <p id="error" class="error" role="alert"></p>
+      <button id="connect" type="submit">Connect</button>
+    </form>
+  </main>
+  <script>
+    const invoke = window.__TAURI__ && window.__TAURI__.core.invoke;
+    const form = document.getElementById('setup');
+    const input = document.getElementById('server');
+    const error = document.getElementById('error');
+    const button = document.getElementById('connect');
+
+    if (invoke) {
+      invoke('current_server').then((url) => { if (url && !input.value) input.value = url; }).catch(() => {});
+    } else {
+      error.textContent = 'This page only works inside the ChannelLoom desktop app.';
+      button.disabled = true;
+    }
+
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      error.textContent = '';
+      button.disabled = true;
+      try {
+        await invoke('connect', { url: input.value });
+      } catch (message) {
+        error.textContent = String(message);
+        button.disabled = false;
+      }
+    });
+  </script>
 </body>
 </html>
