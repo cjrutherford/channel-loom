@@ -1,16 +1,22 @@
+# ChannelLoom. Copy .env.example to .env, set a password and your media path,
+# then run `docker compose up -d`. Machine-specific settings (host networking,
+# GPU devices, extra mounts) belong in docker-compose.override.yml, which
+# Compose loads automatically and git ignores.
 services:
   awesometv:
+    image: ghcr.io/cjrutherford/channel-loom:${CHANNELLOOM_VERSION:-latest}
     build: .
     container_name: awesometv
-    network_mode: host
+    # Run as the owner of your data and media directories.
     user: "${AWESOMETV_UID:-1000}:${AWESOMETV_GID:-1000}"
+    # Published on every host interface. Use "127.0.0.1:8409:8409" to keep it
+    # local behind a reverse proxy.
+    ports:
+      - "${AWESOMETV_HOST_PORT:-8409}:8409"
     environment:
-      # Bind every interface so LAN, Tailscale, and the reverse proxy all work.
-      AWESOMETV_BIND: ${AWESOMETV_BIND:-100.120.253.100}
-      AWESOMETV_PORT: ${AWESOMETV_PORT:-8409}
-      AWESOMETV_PUBLIC_URL: ${AWESOMETV_PUBLIC_URL:-http://100.120.253.100:8409}
-      AWESOMETV_DATA_DIR: /data
-      AWESOMETV_MEDIA_ROOT: /media
+      # Leave empty to build links from the address each client used; set it
+      # only to force one origin (for example a public HTTPS name).
+      AWESOMETV_PUBLIC_URL: ${AWESOMETV_PUBLIC_URL:-}
       AWESOMETV_ADMIN_USER: ${AWESOMETV_ADMIN_USER:-admin}
       AWESOMETV_ADMIN_PASSWORD: ${AWESOMETV_ADMIN_PASSWORD:?set AWESOMETV_ADMIN_PASSWORD in .env}
       AWESOMETV_ADMIN_ALLOW_CIDRS: ${AWESOMETV_ADMIN_ALLOW_CIDRS:-}
@@ -25,9 +31,9 @@ services:
       AWESOMETV_OIDC_OPERATOR_ROLE: ${AWESOMETV_OIDC_OPERATOR_ROLE:-operator}
       AWESOMETV_OIDC_VIEWER_ROLE: ${AWESOMETV_OIDC_VIEWER_ROLE:-viewer}
       AWESOMETV_OIDC_DEFAULT_ROLE: ${AWESOMETV_OIDC_DEFAULT_ROLE:-viewer}
-      JELLYFIN_URL: ${JELLYFIN_URL:-https://jelly.christopherrutherford.net}
+      JELLYFIN_URL: ${JELLYFIN_URL:-}
       JELLYFIN_API_KEY: ${JELLYFIN_API_KEY:-}
-      EMBY_URL: ${EMBY_URL:-http://localhost:8096}
+      EMBY_URL: ${EMBY_URL:-}
       EMBY_API_KEY: ${EMBY_API_KEY:-}
       GOOGLE_DRIVE_API_BASE: ${GOOGLE_DRIVE_API_BASE:-}
       GOOGLE_OAUTH_TOKEN_URL: ${GOOGLE_OAUTH_TOKEN_URL:-}
@@ -62,9 +68,12 @@ services:
       AWESOMETV_SUBTITLE_LANGUAGE: ${AWESOMETV_SUBTITLE_LANGUAGE:-}
       RUST_LOG: ${RUST_LOG:-awesometv_server=info}
     volumes:
-      - ./data:/data
-      - /mnt/valhalla/media:/media:ro
-    # Expose the render node for the optional VAAPI stream profile.
-    devices:
-      - /dev/dri:/dev/dri
+      - ${AWESOMETV_DATA_PATH:-./data}:/data
+      - ${AWESOMETV_MEDIA_PATH:?set AWESOMETV_MEDIA_PATH in .env}:/media:ro
+    # Optional VAAPI hardware encoding. Uncomment, and add the host's `render`
+    # group id so the container user can open the device:
+    # devices:
+    #   - /dev/dri:/dev/dri
+    # group_add:
+    #   - "${AWESOMETV_RENDER_GID:-109}"
     restart: unless-stopped

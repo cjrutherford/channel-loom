@@ -150,6 +150,80 @@ impl LoginThrottle {
 }
 
 #[cfg(test)]
+mod external_base_tests {
+    use super::*;
+
+    fn config(public: Option<&str>) -> Config {
+        let mut config = Config::from_env();
+        config.local_url = "http://127.0.0.1:8409".into();
+        config.public_url = public.unwrap_or("http://127.0.0.1:8409").into();
+        config.public_url_explicit = public.is_some();
+        config.cast_base_url = String::new();
+        config
+    }
+
+    fn headers(pairs: &[(&'static str, &str)]) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        for (name, value) in pairs {
+            headers.insert(*name, HeaderValue::from_str(value).unwrap());
+        }
+        headers
+    }
+
+    #[test]
+    fn follows_the_host_the_client_used() {
+        let config = config(None);
+        assert_eq!(
+            external_base(&config, &headers(&[("host", "192.168.1.20:8409")])),
+            "http://192.168.1.20:8409"
+        );
+        assert_eq!(
+            external_base(&config, &headers(&[("host", "[fd00::5]:8409")])),
+            "http://[fd00::5]:8409"
+        );
+    }
+
+    #[test]
+    fn honours_proxy_forwarding_headers() {
+        let config = config(None);
+        let proxied = headers(&[
+            ("host", "127.0.0.1:8409"),
+            ("x-forwarded-host", "tv.example.com, inner"),
+            ("x-forwarded-proto", "https"),
+        ]);
+        assert_eq!(external_base(&config, &proxied), "https://tv.example.com");
+    }
+
+    #[test]
+    fn configured_public_url_wins_and_bad_hosts_fall_back() {
+        let explicit = config(Some("https://tv.example.com/"));
+        assert_eq!(
+            external_base(&explicit, &headers(&[("host", "10.0.0.2")])),
+            "https://tv.example.com"
+        );
+        let derived = config(None);
+        assert_eq!(
+            external_base(&derived, &headers(&[("host", "evil\"><script>")])),
+            "http://127.0.0.1:8409"
+        );
+        assert_eq!(
+            external_base(&derived, &HeaderMap::new()),
+            "http://127.0.0.1:8409"
+        );
+    }
+
+    #[test]
+    fn cast_base_prefers_its_own_setting() {
+        let mut config = config(None);
+        config.cast_base_url = "https://cast.example.com/".into();
+        assert_eq!(
+            cast_base(&config, &headers(&[("host", "10.0.0.2")])),
+            "https://cast.example.com"
+        );
+    }
+}
+
+#[cfg(test)]
 mod throttle_tests {
     use super::*;
 
@@ -439,6 +513,7 @@ pub fn router(state: AppState) -> Router {
         .route("/auth/oidc/start", get(oidc_start))
         .route("/auth/oidc/callback", get(oidc_callback))
         .route("/healthz", get(health))
+        .route("/api/v1/public/version", get(version))
         .route("/discover.json", get(discover))
         .route("/lineup.json", get(hdhr_lineup))
         .route("/lineup_status.json", get(lineup_status))
@@ -927,6 +1002,15 @@ async fn health() -> &'static str {
     "ok\n"
 }
 
+/// Build identity, so deploy tooling can confirm what is running.
+async fn version() -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "name": "channelloom",
+        "version": env!("CARGO_PKG_VERSION"),
+        "revision": option_env!("CHANNELLOOM_REVISION").unwrap_or("unknown"),
+    }))
+}
+
 async fn media(State(state): State<AppState>) -> Result<Json<Vec<Media>>, ApiError> {
     Ok(Json(db::list_media(&state.pool).await?))
 }
@@ -942,13 +1026,13 @@ struct PublicConfig {
     oidc_enabled: bool,
 }
 
-async fn public_config(State(state): State<AppState>) -> Json<PublicConfig> {
+async fn public_config(State(state): State<AppState>, headers: HeaderMap) -> Json<PublicConfig> {
     Json(PublicConfig {
-        public_url: state.config.public_url.clone(),
+        public_url: external_base(&state.config, &headers),
         jellyfin_url: state.config.jellyfin_url.clone(),
         emby_url: state.config.emby_url.clone(),
         emby_configured: !state.config.emby_api_key.trim().is_empty(),
-        cast_base_url: cast_base(&state.config),
+        cast_base_url: cast_base(&state.config, &headers),
         cast_receiver_id: state.config.cast_receiver_id.clone(),
         oidc_enabled: state.oidc.is_some(),
     })
@@ -961,10 +1045,13 @@ struct ViewerConfig {
     oidc_enabled: bool,
 }
 
-async fn public_viewer_config(State(state): State<AppState>) -> Json<ViewerConfig> {
+async fn public_viewer_config(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Json<ViewerConfig> {
     Json(ViewerConfig {
         cast_receiver_id: state.config.cast_receiver_id.clone(),
-        cast_base_url: cast_base(&state.config),
+        cast_base_url: cast_base(&state.config, &headers),
         oidc_enabled: state.oidc.is_some(),
     })
 }
@@ -1147,6 +1234,9 @@ async fn jellyfin_sync(
         return Err(ApiError::bad_request("JELLYFIN_API_KEY is not set"));
     }
     let base_url = state.config.jellyfin_url.clone();
+    if base_url.is_empty() {
+        return Err(ApiError::bad_request("JELLYFIN_URL is not set"));
+    }
     let movies_root = state.config.movies_root.clone();
     let tv_root = state.config.tv_root.clone();
     let music_root = state.config.music_root.clone();
@@ -1404,6 +1494,9 @@ async fn emby_sync(
         return Err(ApiError::bad_request("EMBY_API_KEY is not set"));
     }
     let base_url = state.config.emby_url.clone();
+    if base_url.trim().is_empty() {
+        return Err(ApiError::bad_request("EMBY_URL is not set"));
+    }
     let api_key = state.config.emby_api_key.clone();
     let movies_root = state.config.movies_root.clone();
     let tv_root = state.config.tv_root.clone();
@@ -2674,18 +2767,15 @@ async fn guide(
     ))
 }
 
-async fn m3u(State(state): State<AppState>) -> Result<Response, ApiError> {
+async fn m3u(State(state): State<AppState>, headers: HeaderMap) -> Result<Response, ApiError> {
     let channels = db::list_channels(&state.pool).await?;
-    let mut body = format!(
-        "#EXTM3U x-tvg-url=\"{}/iptv/xmltv.xml\"\n",
-        state.config.public_url.trim_end_matches('/')
-    );
+    let base = external_base(&state.config, &headers);
+    let mut body = format!("#EXTM3U x-tvg-url=\"{base}/iptv/xmltv.xml\"\n");
     for channel in channels {
         body.push_str(&format!(
             "#EXTINF:-1 tvg-id=\"awesome.{number}\" tvg-chno=\"{number}\" tvg-name=\"{name}\",{name}\n{base}/channel/{number}.m3u8\n",
             number = channel.number,
             name = channel.name,
-            base = state.config.public_url.trim_end_matches('/')
         ));
     }
     Ok(([(header::CONTENT_TYPE, "application/x-mpegURL")], body).into_response())
@@ -2731,15 +2821,14 @@ struct CastResponse {
     channel: String,
 }
 
-fn cast_response(state: &AppState, channel: &Channel) -> CastResponse {
+fn cast_response(state: &AppState, channel: &Channel, base: &str) -> CastResponse {
     let now = db::now_ms() / 1000;
     let expires = now + 4 * 60 * 60;
     let token = state
         .cloud
         .sign(format!("cast:{}:{expires}", channel.number).as_bytes());
     let media_url = format!(
-        "{}/cast/{}.m3u8?expires={expires}&token={token}",
-        cast_base(&state.config),
+        "{base}/cast/{}.m3u8?expires={expires}&token={token}",
         channel.number
     );
     CastResponse {
@@ -2752,6 +2841,7 @@ fn cast_response(state: &AppState, channel: &Channel) -> CastResponse {
 
 async fn start_cast(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Json<CastResponse>, ApiError> {
     let channel = db::channel_by_id(&state.pool, &id)
@@ -2760,22 +2850,25 @@ async fn start_cast(
     // Warm the producer before handing the URL to the receiver; a cold start
     // can otherwise exceed the Cast media load timeout.
     state.engine.ensure(&channel).await?;
-    tracing::info!(channel = %channel.number, base = %cast_base(&state.config), "admin cast requested");
-    Ok(Json(cast_response(&state, &channel)))
+    let base = cast_base(&state.config, &headers);
+    tracing::info!(channel = %channel.number, base = %base, "admin cast requested");
+    Ok(Json(cast_response(&state, &channel, &base)))
 }
 
 /// Public cast discovery. The returned URL is signed and short-lived, so this
 /// is equivalent to handing out the public HLS stream for one channel.
 async fn public_cast(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(number): Path<String>,
 ) -> Result<Json<CastResponse>, ApiError> {
     let channel = db::channel_by_number(&state.pool, &number)
         .await?
         .ok_or_else(|| ApiError::not_found("channel not found"))?;
     state.engine.ensure(&channel).await?;
-    tracing::info!(channel = %channel.number, base = %cast_base(&state.config), "public cast requested");
-    Ok(Json(cast_response(&state, &channel)))
+    let base = cast_base(&state.config, &headers);
+    tracing::info!(channel = %channel.number, base = %base, "public cast requested");
+    Ok(Json(cast_response(&state, &channel, &base)))
 }
 
 #[derive(Deserialize)]
@@ -2784,13 +2877,47 @@ struct CastQuery {
     token: String,
 }
 
-fn cast_base(config: &Config) -> String {
-    let value = if config.cast_base_url.trim().is_empty() {
-        config.public_url.trim()
+fn cast_base(config: &Config, headers: &HeaderMap) -> String {
+    let configured = config.cast_base_url.trim();
+    if configured.is_empty() {
+        external_base(config, headers)
     } else {
-        config.cast_base_url.trim()
+        configured.trim_end_matches('/').to_string()
+    }
+}
+
+/// The origin clients should use in absolute links. A configured
+/// `AWESOMETV_PUBLIC_URL` wins. Otherwise links follow the address the client
+/// actually used (`X-Forwarded-Host`/`-Proto` behind a proxy, else `Host`), so
+/// the server works unconfigured on every interface the machine has.
+fn external_base(config: &Config, headers: &HeaderMap) -> String {
+    fn first<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
+        headers
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.split(',').next())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    }
+    if config.public_url_explicit {
+        return config.public_url.trim_end_matches('/').to_string();
+    }
+    let host = first(headers, "x-forwarded-host")
+        .or_else(|| first(headers, "host"))
+        .filter(|host| {
+            host.len() <= 255
+                && host
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"-._:[]".contains(&b))
+        });
+    let Some(host) = host else {
+        return config.public_url.trim_end_matches('/').to_string();
     };
-    value.trim_end_matches('/').to_string()
+    let scheme = match first(headers, "x-forwarded-proto") {
+        Some(proto) if proto.eq_ignore_ascii_case("https") => "https",
+        _ => "http",
+    };
+    format!("{scheme}://{host}")
 }
 
 fn cast_token_valid(state: &AppState, number: &str, expires: i64, token: &str) -> bool {
@@ -2802,6 +2929,7 @@ fn cast_token_valid(state: &AppState, number: &str, expires: i64, token: &str) -
 
 async fn cast_playlist(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(file): Path<String>,
     Query(query): Query<CastQuery>,
 ) -> Result<Response, ApiError> {
@@ -2816,7 +2944,7 @@ async fn cast_playlist(
         .ok_or_else(|| ApiError::not_found("channel not found"))?;
     let playlist = playlist_for_channel(&state, &channel).await?;
     let body = tokio::fs::read_to_string(&playlist).await?;
-    let base = cast_base(&state.config);
+    let base = cast_base(&state.config, &headers);
     let body = body
         .lines()
         .map(|line| {
@@ -3091,8 +3219,8 @@ async fn hls_segment(
         .into_response())
 }
 
-async fn discover(State(state): State<AppState>) -> Response {
-    let base = state.config.public_url.trim_end_matches('/');
+async fn discover(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let base = external_base(&state.config, &headers);
     Json(serde_json::json!({
         "FriendlyName": "ChannelLoom",
         "ModelNumber": "HDHR-AWESOME",
@@ -3117,9 +3245,12 @@ async fn lineup_status() -> Response {
     .into_response()
 }
 
-async fn hdhr_lineup(State(state): State<AppState>) -> Result<Response, ApiError> {
+async fn hdhr_lineup(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
     let channels = db::list_channels(&state.pool).await?;
-    let base = state.config.public_url.trim_end_matches('/');
+    let base = external_base(&state.config, &headers);
     let items: Vec<_> = channels
         .into_iter()
         .map(|channel| {
@@ -3133,8 +3264,8 @@ async fn hdhr_lineup(State(state): State<AppState>) -> Result<Response, ApiError
     Ok(Json(items).into_response())
 }
 
-async fn device_xml(State(state): State<AppState>) -> Response {
-    let base = state.config.public_url.trim_end_matches('/');
+async fn device_xml(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let base = external_base(&state.config, &headers);
     let body = format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <root xmlns="urn:schemas-upnp-org:device-1-0">
@@ -3179,11 +3310,9 @@ async fn ts_stream(
         .ensure(&channel)
         .await
         .map_err(|error| ApiError::service_unavailable(format!("{error:#}")))?;
-    let hls_url = format!(
-        "{}/channel/{}.m3u8",
-        state.config.public_url.trim_end_matches('/'),
-        channel.number
-    );
+    // FFmpeg reads our own playlist, so dial the listener directly rather
+    // than whatever public origin clients use.
+    let hls_url = format!("{}/channel/{}.m3u8", state.config.local_url, channel.number);
     let mut child = tokio::process::Command::new("ffmpeg")
         .arg("-hide_banner")
         .arg("-loglevel")

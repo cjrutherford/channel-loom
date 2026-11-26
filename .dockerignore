@@ -9,3 +9,11 @@ desktop
 assets
 *.log
 .env
+.agent
+node_modules
+test-results
+playwright-report
+tests
+scripts
+deploy
+docker-compose*.yml

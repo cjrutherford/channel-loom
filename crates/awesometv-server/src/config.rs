@@ -8,7 +8,12 @@ pub struct Config {
     pub bind: String,
     pub port: u16,
     pub data_dir: PathBuf,
+    /// Origin used for absolute links. When `public_url_explicit` is false it
+    /// is only a fallback; handlers derive links from the request instead.
     pub public_url: String,
+    pub public_url_explicit: bool,
+    /// Loopback-reachable origin for the server talking to itself.
+    pub local_url: String,
     pub movies_root: PathBuf,
     pub tv_root: PathBuf,
     pub music_root: PathBuf,
@@ -49,7 +54,11 @@ pub struct Config {
 
 impl Config {
     pub fn from_env() -> Self {
-        let bind = env::var("AWESOMETV_BIND").unwrap_or_else(|_| "100.120.253.100".into());
+        let bind = env::var("AWESOMETV_BIND")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "0.0.0.0".into());
         let port = env::var("AWESOMETV_PORT")
             .ok()
             .and_then(|value| value.parse().ok())
@@ -57,11 +66,16 @@ impl Config {
         let data_dir = env::var("AWESOMETV_DATA_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|_| PathBuf::from("data"));
-        let public_url =
-            env::var("AWESOMETV_PUBLIC_URL").unwrap_or_else(|_| format!("http://{bind}:{port}"));
+        let local_url = format!("http://{}:{port}", url_host(&connect_host(&bind)));
+        let explicit_public_url = env::var("AWESOMETV_PUBLIC_URL")
+            .ok()
+            .map(|value| value.trim().trim_end_matches('/').to_string())
+            .filter(|value| !value.is_empty());
+        let public_url_explicit = explicit_public_url.is_some();
+        let public_url = explicit_public_url.unwrap_or_else(|| local_url.clone());
         let media_root = env::var("AWESOMETV_MEDIA_ROOT")
             .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("/mnt/valhalla/media"));
+            .unwrap_or_else(|_| PathBuf::from("/media"));
         let movies_root = env::var("AWESOMETV_MOVIES_ROOT")
             .map(PathBuf::from)
             .unwrap_or_else(|_| media_root.join("Movies"));
@@ -83,7 +97,8 @@ impl Config {
             _ => (Uuid::new_v4().simple().to_string()[..16].to_string(), true),
         };
         let jellyfin_url = env::var("JELLYFIN_URL")
-            .unwrap_or_else(|_| "https://jelly.christopherrutherford.net".into());
+            .map(|value| value.trim().to_string())
+            .unwrap_or_default();
         let emby_url = env::var("EMBY_URL").unwrap_or_else(|_| "http://localhost:8096".into());
         let emby_api_key = env::var("EMBY_API_KEY").unwrap_or_default();
         let default_audio_language =
@@ -158,6 +173,8 @@ impl Config {
             port,
             data_dir,
             public_url,
+            public_url_explicit,
+            local_url,
             movies_root,
             tv_root,
             music_root,
@@ -203,4 +220,38 @@ fn env_u32(name: &str, fallback: u32) -> u32 {
         .ok()
         .and_then(|value| value.trim().parse().ok())
         .unwrap_or(fallback)
+}
+
+/// The address a local client should dial to reach a listener bound to `bind`.
+/// Wildcard binds are reachable on loopback.
+pub fn connect_host(bind: &str) -> String {
+    match bind.trim_start_matches('[').trim_end_matches(']') {
+        "" | "0.0.0.0" => "127.0.0.1".into(),
+        "::" => "::1".into(),
+        host => host.into(),
+    }
+}
+
+/// Bracket IPv6 literals for use in a URL authority.
+pub fn url_host(host: &str) -> String {
+    if host.contains(':') {
+        format!("[{host}]")
+    } else {
+        host.into()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{connect_host, url_host};
+
+    #[test]
+    fn wildcard_binds_dial_loopback() {
+        assert_eq!(connect_host("0.0.0.0"), "127.0.0.1");
+        assert_eq!(connect_host("::"), "::1");
+        assert_eq!(connect_host("[::]"), "::1");
+        assert_eq!(connect_host("192.168.1.5"), "192.168.1.5");
+        assert_eq!(url_host("::1"), "[::1]");
+        assert_eq!(url_host("127.0.0.1"), "127.0.0.1");
+    }
 }

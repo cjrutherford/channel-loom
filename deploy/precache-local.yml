@@ -1,7 +1,7 @@
-# Local-only release override; use alongside ../docker-compose.yml.
+# Larger precache budget for slow source mounts. Use alongside
+# ../docker-compose.yml: docker compose -f docker-compose.yml -f deploy/precache-local.yml up -d
 services:
   awesometv:
-    image: awesometv:metadata-coverage-20261120
     environment:
       AWESOMETV_PRECACHE_ENABLED: "true"
       AWESOMETV_PRECACHE_DIR: /data/precache

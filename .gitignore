@@ -4,6 +4,10 @@
 /.spike/
 *.log
 .env
+# Machine-specific compose settings, loaded automatically by docker compose
+/docker-compose.override.yml
+/.agent/
+__pycache__/
 /data/
 
 # Android TV build output

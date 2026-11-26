@@ -720,7 +720,7 @@
         <div class="source-grid" id="sourceGrid"></div>
         <div class="panel panel-pad" style="margin-top:14px;">
           <div class="source-top"><div><h3>Jellyfin</h3><div class="muted small">Mapped to the same media share.</div></div><div class="row"><span class="badge" id="jellyfinBadge">checking</span><button class="btn small" id="jellyfinSyncBtn">Sync</button></div></div>
-          <div class="source-path" id="jellyfinPath">https://jelly.christopherrutherford.net</div>
+          <div class="source-path" id="jellyfinPath">Not configured</div>
           <div class="muted small" id="jellyfinHint">Set JELLYFIN_API_KEY to enable API metadata sync.</div>
         </div>
         <div class="panel panel-pad" style="margin-top:14px;">
@@ -1708,7 +1708,7 @@ function renderSources() {
   $('jellyfinBadge').className = `badge ${state.stats?.jellyfin_configured ? 'ok' : 'warn'}`;
   $('jellyfinSyncBtn').disabled = !state.stats?.jellyfin_configured;
   $('jellyfinHint').textContent = state.stats?.jellyfin_configured ? 'Metadata sync is configured. Full library import lands in the next pass.' : 'Set JELLYFIN_API_KEY to enable API metadata sync.';
-  $('jellyfinPath').textContent = state.config?.jellyfin_url || 'https://jelly.christopherrutherford.net';
+  $('jellyfinPath').textContent = state.config?.jellyfin_url || 'Not configured (set JELLYFIN_URL)';
   $('embyBadge').textContent = state.stats?.emby_configured ? 'CONNECTED' : 'API KEY NEEDED';
   $('embyBadge').className = `badge ${state.stats?.emby_configured ? 'ok' : 'warn'}`;
   $('embySyncBtn').disabled = !state.stats?.emby_configured;
