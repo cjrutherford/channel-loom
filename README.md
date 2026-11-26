@@ -62,3 +62,7 @@ without configuration. Set `AWESOMETV_PUBLIC_URL` only to force a single origin.
 - `/iptv/channels.m3u`, `/iptv/xmltv.xml`, `/discover.json` — IPTV and HDHomeRun endpoints.
 
 Created in [T3 Code](https://t3.codes).
+
+## License
+
+MIT. See [LICENSE](LICENSE).

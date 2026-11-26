@@ -10,7 +10,7 @@ GitHub release with binaries.
 |---|---|
 | Container image, `linux/amd64` + `linux/arm64` | `ghcr.io/cjrutherford/channel-loom:X.Y.Z`, `:X.Y`, `:latest` |
 | Server binary tarballs | `channelloom-server-X.Y.Z-linux-{amd64,arm64}.tar.gz` |
-| Android TV APK (debug-signed) | `channelloom-android-tv-X.Y.Z-debug.apk` |
+| Android TV APK, release-signed | `channelloom-android-tv-X.Y.Z.apk` |
 | Linux desktop bundle | Tauri `.deb` |
 | Checksums | `SHA256SUMS` |
 
@@ -42,7 +42,8 @@ The workflow then:
 2. Runs the full CI suite: fmt, clippy, tests, browser smoke, multi-arch image build and smoke test, APK, and `.deb`.
 3. Pushes the multi-arch image to GHCR, attests it, and smoke-tests the pushed tag.
 4. Builds the server tarballs from the image's build stage (Debian bookworm, glibc 2.36).
-5. Publishes the GitHub release with generated notes, the assets, and `SHA256SUMS`.
+5. Builds the release-signed APK and verifies its signature.
+6. Publishes the GitHub release with generated notes, the assets, and `SHA256SUMS`.
 
 ## Verify
 
@@ -69,3 +70,29 @@ Set `CHANNELLOOM_VERSION` in `.env` to pin a release instead of following
 The first push creates the GHCR package as private. Make it public so anonymous
 pulls work: GitHub → Packages → `channel-loom` → Package settings → Change
 visibility.
+
+### Android signing key
+
+The release APK is signed with a key held in four repository secrets:
+
+| Secret | Contents |
+|---|---|
+| `ANDROID_KEYSTORE_BASE64` | `base64 -w0` of the PKCS12 keystore |
+| `ANDROID_KEYSTORE_PASSWORD` | keystore password |
+| `ANDROID_KEY_ALIAS` | key alias (`channelloom`) |
+| `ANDROID_KEY_PASSWORD` | key password (same as the keystore password for PKCS12) |
+
+The release fails if they are missing. Keep an offline backup of the keystore
+and its passwords. Android only installs an update signed with the same key, so
+losing it means users must uninstall the app to move to a new one.
+
+To build a signed APK locally, export the same values (with `CHANNELLOOM_` names)
+and point `CHANNELLOOM_KEYSTORE` at the keystore file:
+
+```bash
+export CHANNELLOOM_KEYSTORE=/path/to/android-release.jks
+export CHANNELLOOM_KEYSTORE_PASSWORD=... CHANNELLOOM_KEY_ALIAS=channelloom CHANNELLOOM_KEY_PASSWORD=...
+cd android-tv && ./gradlew assembleRelease
+```
+
+Without `CHANNELLOOM_KEYSTORE`, `assembleRelease` produces an unsigned APK.

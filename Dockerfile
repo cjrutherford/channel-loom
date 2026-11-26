@@ -46,7 +46,7 @@ ARG REVISION=unknown
 LABEL org.opencontainers.image.title="ChannelLoom" \
       org.opencontainers.image.description="Turn a personal media library into live TV channels for Plex, Jellyfin, Emby and IPTV clients." \
       org.opencontainers.image.source="https://github.com/cjrutherford/channel-loom" \
-      org.opencontainers.image.licenses="MIT OR Apache-2.0" \
+      org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.version="$VERSION" \
       org.opencontainers.image.revision="$REVISION"
 RUN apt-get update \
