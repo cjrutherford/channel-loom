@@ -176,7 +176,7 @@ async fn refresh(
         ),
         ("emby", config.emby_url.clone(), config.emby_api_key.clone()),
     ] {
-        if key.trim().is_empty() {
+        if key.trim().is_empty() || url.trim().is_empty() {
             continue;
         }
         if *stop.borrow() {

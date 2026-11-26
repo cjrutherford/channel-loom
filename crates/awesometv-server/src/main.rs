@@ -37,9 +37,12 @@ async fn main() -> anyhow::Result<()> {
 
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     anyhow::ensure!(
-        args.is_empty() || args == ["--migrate-only"],
-        "usage: awesometv-server [--migrate-only]"
+        args.is_empty() || args == ["--migrate-only"] || args == ["--healthcheck"],
+        "usage: awesometv-server [--migrate-only | --healthcheck]"
     );
+    if args == ["--healthcheck"] {
+        return healthcheck();
+    }
     let migrate_only = !args.is_empty();
     let config = Config::from_env();
     let pool = db::init(&config.data_dir).await?;
@@ -145,10 +148,21 @@ async fn main() -> anyhow::Result<()> {
 
     println!();
     println!("ChannelLoom");
-    println!("  UI:       {}", config.public_url);
-    println!("  M3U:      {}/iptv/channels.m3u", config.public_url);
-    println!("  XMLTV:    {}/iptv/xmltv.xml", config.public_url);
-    println!("  Jellyfin: {}", config.jellyfin_url);
+    println!("  Listen:   {}:{}", config.bind, config.port);
+    if config.public_url_explicit {
+        println!("  UI:       {}", config.public_url);
+        println!("  M3U:      {}/iptv/channels.m3u", config.public_url);
+        println!("  XMLTV:    {}/iptv/xmltv.xml", config.public_url);
+    } else {
+        println!(
+            "  UI:       {}  (links follow each client's address)",
+            config.local_url
+        );
+        println!("  M3U:      /iptv/channels.m3u   XMLTV: /iptv/xmltv.xml");
+    }
+    if !config.jellyfin_url.is_empty() {
+        println!("  Jellyfin: {}", config.jellyfin_url);
+    }
     println!("  Studio:   {}", config.admin_user);
     if config.generated_password {
         println!(
@@ -192,4 +206,31 @@ async fn shutdown_signal() {
     {
         let _ = tokio::signal::ctrl_c().await;
     }
+}
+
+/// Container health probe: GET /healthz on the local listener. Needs no curl
+/// in the image and opens no database.
+fn healthcheck() -> anyhow::Result<()> {
+    use std::io::{Read, Write};
+    use std::time::Duration;
+    let bind = std::env::var("AWESOMETV_BIND").unwrap_or_default();
+    let port: u16 = std::env::var("AWESOMETV_PORT")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(8409);
+    let host = config::connect_host(bind.trim());
+    let addr = std::net::ToSocketAddrs::to_socket_addrs(&(host.as_str(), port))?
+        .next()
+        .context("no address to probe")?;
+    let mut stream = std::net::TcpStream::connect_timeout(&addr, Duration::from_secs(3))?;
+    stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+    stream.write_all(b"GET /healthz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")?;
+    let mut response = String::new();
+    stream.take(4096).read_to_string(&mut response)?;
+    anyhow::ensure!(
+        response.starts_with("HTTP/1.1 200"),
+        "unhealthy: {}",
+        response.lines().next().unwrap_or("no response")
+    );
+    Ok(())
 }

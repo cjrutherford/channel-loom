@@ -1,5 +1,0 @@
-services:
-  awesometv:
-    image: awesometv:rolling-handoff-20261120
-    environment:
-      AWESOMETV_PRECACHE_ROLLING_CHUNKS: "false"
