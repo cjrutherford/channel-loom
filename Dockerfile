@@ -35,7 +35,12 @@ RUN set -eu; \
     CHANNELLOOM_REVISION="$REVISION" cargo build --release --locked -p awesometv-server --target "$triple"; \
     cp "target/$triple/release/awesometv-server" /awesometv-server
 
-FROM ubuntu:26.04
+# `docker buildx build --target binary --output type=local,dest=out` exports
+# just the server binary. Release tarballs are built this way.
+FROM scratch AS binary
+COPY --from=build /awesometv-server /awesometv-server
+
+FROM ubuntu:26.04 AS runtime
 ARG VERSION=dev
 ARG REVISION=unknown
 LABEL org.opencontainers.image.title="ChannelLoom" \
