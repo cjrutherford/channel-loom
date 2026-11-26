@@ -1613,6 +1613,19 @@ pub(crate) async fn generated_timeline_state(
     }))
 }
 
+/// Claim generator ownership for a channel that has none. Returns false when a
+/// state row already exists, so concurrent adopters cannot clobber each other.
+pub(crate) async fn insert_generated_timeline_state_if_absent(
+    pool: &SqlitePool,
+    channel_id: &str,
+    state: &GeneratedTimelineState,
+) -> Result<bool> {
+    let done = sqlx::query("INSERT OR IGNORE INTO generated_timeline_state (channel_id, definition_version, boundary_ms, continuation_json) VALUES (?, ?, ?, ?)")
+        .bind(channel_id).bind(&state.definition_version).bind(state.boundary_ms).bind(&state.continuation_json)
+        .execute(pool).await?;
+    Ok(done.rows_affected() == 1)
+}
+
 pub(crate) async fn renewal_input_revision(pool: &SqlitePool) -> Result<i64> {
     Ok(
         sqlx::query_scalar("SELECT revision FROM renewal_input_revision WHERE id = 1")
