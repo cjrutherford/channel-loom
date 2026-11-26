@@ -2,7 +2,9 @@ plugins {
     id 'com.android.application'
 }
 
-def appUrl = project.findProperty('awesometv.url') ?: 'https://nirvana.tail5a4a0.ts.net:8447/'
+// Optional preset server, e.g. -Pawesometv.url=http://192.168.1.20:8409/.
+// Without it the app asks for a server on first launch.
+def appUrl = project.findProperty('awesometv.url') ?: ''
 
 android {
     namespace 'net.christopherrutherford.awesometv'

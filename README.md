@@ -8,6 +8,29 @@ A clean-room, modern replacement for [ErsatzTV](https://ersatztv.org/): turn a p
 
 **Direction:** all-in-one, deep ErsatzTV parity in v1, Rust backend, our own streaming engine, local/Jellyfin/Plex/remote sources, Plex/Jellyfin/Emby/Channels/Kodi/TiviMate clients, multi-arch x86 + ARM, MIT or Apache-2.0. The current UI is a single-file vanilla JS app; the plan's React/TypeScript stack is an open decision.
 
+## Quick start
+
+ChannelLoom runs as a container on any Linux host with Docker, on amd64 or arm64.
+
+```sh
+curl -fsSLO https://raw.githubusercontent.com/cjrutherford/channel-loom/main/docker-compose.yml
+curl -fsSL -o .env https://raw.githubusercontent.com/cjrutherford/channel-loom/main/.env.example
+# Edit .env: set AWESOMETV_ADMIN_PASSWORD and AWESOMETV_MEDIA_PATH (your library).
+docker compose up -d
+```
+
+Open `http://<this-machine>:8409/` to watch, or `/admin` for Studio. The server
+listens on every interface. Its M3U, HDHomeRun and Cast links follow whatever address
+each client used, so LAN, VPN and reverse-proxy clients all get working links
+without configuration. Set `AWESOMETV_PUBLIC_URL` only to force a single origin.
+
+- The container runs as uid/gid 1000. Set `AWESOMETV_UID`/`AWESOMETV_GID` to the owner of your data and media directories.
+- Put machine-specific settings (host networking, `/dev/dri` for VAAPI, extra mounts) in `docker-compose.override.yml`, which Compose loads automatically.
+- Pin a release with `CHANNELLOOM_VERSION=0.1.4`. The default is `latest`; `edge` follows `main`.
+- Server tarballs, the Android TV APK, and the Linux desktop `.deb` are on the [releases page](https://github.com/cjrutherford/channel-loom/releases). The apps ask for your server's address on first launch.
+
+## Documentation
+
 - [Status and remaining work](docs/STATUS.md)
 - [Plan review: current state vs the original plan](docs/PLAN-REVIEW.md)
 - [Phase 1 vertical slice](docs/PHASE-1.md)

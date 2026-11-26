@@ -10,27 +10,9 @@ ChannelLoom ships an installable app shell:
 - shortcuts: Live TV, TV Mode, Guide
 
 Installation requires a secure context: HTTPS or `localhost`. Plain HTTP on a
-tailnet IP will serve the app but browsers will not offer installation.
-
-### Tailscale HTTPS
-
-The current host exposes the app over Tailscale Serve with a valid certificate:
-
-```text
-https://nirvana.tail5a4a0.ts.net:8447/
-```
-
-This is tailnet-only. To recreate the proxy:
-
-```sh
-tailscale serve --bg --https=8447 http://100.120.253.100:8409
-```
-
-To remove it:
-
-```sh
-tailscale serve --https=8447 off
-```
+LAN address will serve the app but browsers will not offer installation. Put the
+server behind a TLS reverse proxy (see [`deploy/nginx/README.md`](../deploy/nginx/README.md))
+to make it installable.
 
 ### Install steps
 
@@ -58,10 +40,10 @@ Open **TV Mode** in the sidebar or go to `#tv`.
 Any compatible player can use:
 
 ```text
-HDHomeRun: http://100.120.253.100:8409/discover.json
-M3U:       http://100.120.253.100:8409/iptv/channels.m3u
-XMLTV:     http://100.120.253.100:8409/iptv/xmltv.xml
-MPEG-TS:   http://100.120.253.100:8409/auto/v<channel>.ts
+HDHomeRun: http://<server>:8409/discover.json
+M3U:       http://<server>:8409/iptv/channels.m3u
+XMLTV:     http://<server>:8409/iptv/xmltv.xml
+MPEG-TS:   http://<server>:8409/auto/v<channel>.ts
 ```
 
 ## Future wrappers
@@ -93,27 +75,27 @@ Output:
 android-tv/app/build/outputs/apk/debug/app-debug.apk
 ```
 
-Override the server URL:
+On first launch the app asks for the server address (for example
+`http://192.168.1.20:8409`) and remembers it. Press **Menu** on the remote to change
+it; the "cannot reach" screen also offers **Change server**.
+
+To preset a server for a fleet of devices, build with:
 
 ```sh
-./gradlew assembleDebug -Pawesometv.url=http://100.120.253.100:8409/
+./gradlew assembleDebug -Pawesometv.url=http://192.168.1.20:8409/
 ```
 
-The default is the Tailscale HTTPS URL. The TV needs tailnet access or a LAN URL.
+For testing, `adb shell am start -n net.christopherrutherford.awesometv/.MainActivity --es url http://...`
+opens a specific server without saving it.
 
 ## Tauri desktop wrapper
 
 Source: `desktop/`
 
-A Tauri v2 window that loads the remote app and accepts `AWESOMETV_URL`.
-
-```sh
-AWESOMETV_URL=https://nirvana.tail5a4a0.ts.net:8447/ cargo tauri dev
-```
-
-The wrapper is scaffolded but not compiled on this host because the WebKitGTK
-development package is not installed. See `desktop/README.md` for the required
-system packages and build steps.
+A Tauri v2 window that loads the server's web app. On first launch it asks for
+the server address and remembers it; **File → Change Server…**
+(Ctrl/Cmd+Shift+L) changes it. `AWESOMETV_URL` overrides the saved address. See
+`desktop/README.md` for build steps.
 
 
 ## Google Cast
@@ -144,5 +126,6 @@ The Cast device must be able to reach the media base URL. Set:
 AWESOMETV_CAST_BASE_URL=http://192.168.1.50:8409
 ```
 
-to a LAN-reachable address. Tailscale addresses are often not reachable by a
-Chromecast. Settings shows the effective Cast base URL.
+to a LAN-reachable address when clients reach the server through an address
+the Cast device can't use, such as a VPN or a proxy hostname that only resolves
+off-LAN. Settings shows the effective Cast base URL.
