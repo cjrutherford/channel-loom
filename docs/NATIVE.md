@@ -85,7 +85,7 @@ To preset a server for a fleet of devices, build with:
 ./gradlew assembleDebug -Pawesometv.url=http://192.168.1.20:8409/
 ```
 
-For testing, `adb shell am start -n net.christopherrutherford.awesometv/.MainActivity --es url http://...`
+For testing, `adb shell am start -n net.christopherrutherford.channelloom/.MainActivity --es url http://...`
 opens a specific server without saving it.
 
 ## Tauri desktop wrapper

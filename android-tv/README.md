@@ -33,27 +33,25 @@ server.
 
 ## Server URL
 
-The default URL is the Tailscale HTTPS address:
+On first launch the app asks for the server address and remembers it. Press
+**Menu** on the remote, or choose **Change server** on the error screen, to
+change it.
 
-```text
-https://nirvana.tail5a4a0.ts.net:8447/
-```
-
-Build with a different URL:
+Preset an address at build time:
 
 ```sh
-./gradlew assembleDebug -Pawesometv.url=http://100.120.253.100:8409/
+./gradlew assembleDebug -Pawesometv.url=http://192.168.1.20:8409/
 ```
 
 Or launch with an explicit URL:
 
 ```sh
-adb shell am start -n net.christopherrutherford.awesometv/.MainActivity \
-  --es url http://100.120.253.100:8409/
+adb shell am start -n net.christopherrutherford.channelloom/.MainActivity \
+  --es url http://192.168.1.20:8409/
 ```
 
-On a TV, either join the tailnet with Tailscale or use a LAN HTTP URL. Cleartext
-HTTP is permitted by the app's network security config for local playback.
+Cleartext HTTP is permitted by the app's network security config for local
+playback.
 
 ## Controls
 
@@ -64,5 +62,7 @@ HTTP is permitted by the app's network security config for local playback.
 
 ## Release signing
 
-The debug APK is signed with the debug key. Create a release keystore and add a
-signing config before distributing outside the local network.
+`./gradlew assembleRelease` signs the APK when `CHANNELLOOM_KEYSTORE`,
+`CHANNELLOOM_KEYSTORE_PASSWORD`, `CHANNELLOOM_KEY_ALIAS` and
+`CHANNELLOOM_KEY_PASSWORD` are set, and builds an unsigned APK otherwise. Tagged
+releases are signed in CI; see [docs/RELEASE.md](../docs/RELEASE.md).

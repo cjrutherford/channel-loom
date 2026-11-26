@@ -2,6 +2,7 @@
 name = "awesometv-desktop"
 version = "0.1.3"
 description = "ChannelLoom desktop wrapper"
+license = "MIT"
 edition = "2021"
 rust-version = "1.80"
 

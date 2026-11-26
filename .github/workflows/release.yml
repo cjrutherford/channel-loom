@@ -147,9 +147,57 @@ jobs:
           path: dist/*.tar.gz
           if-no-files-found: error
 
+  android:
+    name: Signed Android TV APK
+    needs: version
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v6
+      - name: Install Android SDK 36
+        env:
+          ANDROID_HOME: /usr/local/lib/android/sdk
+        run: |
+          SDKMANAGER=$(find "$ANDROID_HOME" -type f -path '*/bin/sdkmanager' | sort -V | tail -1)
+          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+          "$SDKMANAGER" "platforms;android-36" "build-tools;36.0.0"
+      - name: Build signed release APK
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          CHANNELLOOM_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          CHANNELLOOM_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          CHANNELLOOM_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "::error::ANDROID_KEYSTORE_BASE64 is not set; see docs/RELEASE.md"
+            exit 1
+          fi
+          export CHANNELLOOM_KEYSTORE="$RUNNER_TEMP/release.jks"
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$CHANNELLOOM_KEYSTORE"
+          chmod +x android-tv/gradlew
+          (cd android-tv && ./gradlew assembleRelease --no-daemon --stacktrace)
+          rm -f "$CHANNELLOOM_KEYSTORE"
+      - name: Verify signature
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          apk=android-tv/app/build/outputs/apk/release/app-release.apk
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs "$apk"
+          mkdir -p dist
+          cp "$apk" "dist/channelloom-android-tv-${VERSION}.apk"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-android
+          path: dist/*.apk
+          if-no-files-found: error
+
   publish:
     name: Publish GitHub release
-    needs: [version, ci, image, server]
+    needs: [version, ci, image, server, android]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -163,7 +211,7 @@ jobs:
         run: |
           mkdir -p release
           cp artifacts/release-server/*.tar.gz release/
-          cp artifacts/awesometv-android-tv-debug/app-debug.apk "release/channelloom-android-tv-${VERSION}-debug.apk"
+          cp artifacts/release-android/*.apk release/
           find artifacts/awesometv-desktop-linux-amd64 -name '*.deb' -exec cp {} release/ \;
           ls release/*.deb >/dev/null
           (cd release && sha256sum * > SHA256SUMS)
@@ -186,12 +234,8 @@ jobs:
             ## Assets
 
             - `channelloom-server-*-linux-{amd64,arm64}.tar.gz`: the server binary. FFmpeg must be installed on the host.
-            - `channelloom-android-tv-*-debug.apk`: the Android TV client.
+            - `channelloom-android-tv-*.apk`: the Android TV client. Sideload it on the TV.
             - `*.deb`: the Linux desktop client.
             - `SHA256SUMS`: checksums for the files above.
-
-            ## Known limits
-
-            - The Android TV APK is debug-signed.
           files: |
             release/*

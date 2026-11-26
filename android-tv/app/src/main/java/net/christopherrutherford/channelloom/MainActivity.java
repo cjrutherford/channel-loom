@@ -1,4 +1,4 @@
-package net.christopherrutherford.awesometv;
+package net.christopherrutherford.channelloom;
 
 import android.annotation.SuppressLint;
 import android.app.Activity;
